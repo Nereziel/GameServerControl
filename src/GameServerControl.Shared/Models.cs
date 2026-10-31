@@ -120,14 +120,24 @@ public record InstallServerRequest(
     string InstallPath,       // Where the server should land on the agent host
     ServerDef ServerDef);     // The ServerDef to register on success (GuestWorkingDir = InstallPath)
 
-/// <summary>Single line of progress for an in-flight install. Streamed via SignalR.</summary>
+/// <summary>
+/// Snapshot of an asynchronous install job. LogLines is intentionally bounded by the agent so
+/// browser clients can close the install drawer, refresh, and later re-attach to the same job.
+/// Optional trailing fields preserve wire/source compatibility with older clients.
+/// </summary>
 public record InstallProgress(
     string JobId,
-    string Phase,             // "queued" | "steamcmd" | "register" | "done" | "failed"
+    string Phase,             // queued | steamcmd | download | verify | register | done | failed
     string Line,              // Latest stdout/log line, or a human-readable status message
-    int? PercentHint,         // Best-effort 0-100 from SteamCMD's "Update state (0x[…]) downloading, progress: 42.51" lines
+    int? PercentHint,
     bool Finished,
-    bool Success);
+    bool Success,
+    string[]? LogLines = null,
+    DateTimeOffset? StartedAt = null,
+    DateTimeOffset? UpdatedAt = null,
+    string? ServerName = null,
+    string? GameKey = null,
+    string? InstallPath = null);
 
 /// <summary>Synchronous response from POST /api/servers/install — the job is now running async.</summary>
 public record InstallJobAck(string JobId, string Message);

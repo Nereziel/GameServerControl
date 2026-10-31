@@ -81,6 +81,19 @@ jobs:
           bash -n deploy/linux/install-from-release.sh
           bash -n deploy/linux/install.sh
 
+      - name: Validate Web UI JavaScript
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          html = Path('src/GameServerControl.Agent/WebUi/index.html').read_text(encoding='utf-8')
+          scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, flags=re.S | re.I)
+          if not scripts:
+              raise SystemExit('No inline Web UI script found')
+          Path('/tmp/gsc-webui.js').write_text('\n'.join(scripts), encoding='utf-8')
+          PY
+          node --check /tmp/gsc-webui.js
+
       # We only build Shared + Agent on Linux — the WPF client targets net8.0-windows.
       - name: Restore Shared
         run: dotnet restore src/GameServerControl.Shared
