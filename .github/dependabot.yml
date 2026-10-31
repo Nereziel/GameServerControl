@@ -1,12 +1,10 @@
 version: 2
 
 updates:
-  # Keep the .NET 8 application on its current major line. Major framework/package
-  # upgrades are deliberate migrations, not routine dependency maintenance.
+  # Keep the .NET 8 Agent/API/Web application on its current major line.
   - package-ecosystem: "nuget"
     directories:
       - "/src/GameServerControl.Agent"
-      - "/src/GameServerControl.Client"
       - "/src/GameServerControl.Shared"
     schedule:
       interval: "weekly"
@@ -23,8 +21,7 @@ updates:
           - "version-update:semver-major"
     open-pull-requests-limit: 5
 
-  # Cloudflare Worker tooling. Wrangler stays pinned to a tested major; routine
-  # minor/patch updates are grouped into one PR and must still pass Worker CI.
+  # Cloudflare Worker tooling. Wrangler stays pinned to a tested major.
   - package-ecosystem: "npm"
     directory: "/worker"
     schedule:
@@ -42,7 +39,6 @@ updates:
           - "version-update:semver-major"
     open-pull-requests-limit: 3
 
-  # GitHub Actions are validated by CI before merge.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

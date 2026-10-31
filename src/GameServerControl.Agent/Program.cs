@@ -3,6 +3,7 @@ using GameServerControl.Agent.Config;
 using GameServerControl.Agent.Hubs;
 using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Logs;
+using GameServerControl.Agent.Notifications;
 using GameServerControl.Agent.Rcon;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
@@ -28,10 +29,17 @@ if (!string.IsNullOrWhiteSpace(bindHttps))
     {
         var pfxPath = Path.Combine(AppContext.BaseDirectory, "agent.pfx");
         var pfxPassword = builder.Configuration["Agent:CertPassword"] ?? "gscagent";
-        var sanHosts = new[] { Environment.MachineName.ToLowerInvariant(), "gamingserver" };
+        var sanHosts = new List<string> { Environment.MachineName.ToLowerInvariant() };
+        foreach (var host in (builder.Configuration["Agent:CertSanHosts"] ?? "")
+                     .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (!sanHosts.Contains(host, StringComparer.OrdinalIgnoreCase)) sanHosts.Add(host);
+
         var sanIps = new List<System.Net.IPAddress>();
-        try { sanIps.Add(System.Net.IPAddress.Parse("100.90.15.50")); } catch { /* not on tailnet */ }
-        var cert = CertHelper.LoadOrCreate(pfxPath, pfxPassword, sanHosts, sanIps.ToArray());
+        foreach (var text in (builder.Configuration["Agent:CertSanIps"] ?? "")
+                     .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            if (System.Net.IPAddress.TryParse(text, out var ip)) sanIps.Add(ip);
+
+        var cert = CertHelper.LoadOrCreate(pfxPath, pfxPassword, sanHosts.ToArray(), sanIps.ToArray());
         opts.ConfigureHttpsDefaults(o => o.ServerCertificate = cert);
     });
 }
@@ -47,9 +55,10 @@ builder.Services.AddSingleton<ServerOrchestrator>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
 builder.Services.AddSingleton<SteamCmdManager>();
 builder.Services.AddSingleton<ServerInstaller>();
-builder.Services.AddSingleton<GameServerControl.Agent.Notifications.DiscordNotifier>();
-builder.Services.AddSingleton<GameServerControl.Agent.Notifications.UpdateChecker>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<GameServerControl.Agent.Notifications.UpdateChecker>());
+builder.Services.AddSingleton<DiscordNotifier>();
+builder.Services.AddSingleton<UpdateChecker>();
+builder.Services.AddSingleton<AgentUpdateService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<UpdateChecker>());
 builder.Services.AddSingleton<ValheimConfig>();
 builder.Services.AddSingleton<PalworldConfig>();
 builder.Services.AddSingleton<WindroseConfig>();
@@ -113,8 +122,6 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 var app = builder.Build();
 
-// Web UI shell and its local static assets. Only explicitly listed assets are served;
-// all API endpoints remain authentication-gated below.
 app.MapGet("/", () =>
 {
     var htmlPath = Path.Combine(AppContext.BaseDirectory, "WebUi", "index.html");
@@ -146,44 +153,18 @@ app.UseMiddleware<AuditMiddleware>();
 var api = app.MapGroup("/api").RequireAuthorization();
 
 api.MapGet("/health", () => Results.Ok(new { ok = true, ts = DateTimeOffset.UtcNow }));
-api.MapGet("/version", (GameServerControl.Agent.Notifications.UpdateChecker checker) => Results.Ok(checker.Latest));
-api.MapPost("/version/check", async (GameServerControl.Agent.Notifications.UpdateChecker checker, CancellationToken ct) =>
+api.MapGet("/version", (UpdateChecker checker) => Results.Ok(checker.Latest));
+api.MapPost("/version/check", async (UpdateChecker checker, CancellationToken ct) =>
     Results.Ok(await checker.CheckAsync(ct)));
+api.MapGet("/game-profiles", () => Results.Ok(GameProfiles.All));
+api.MapPost("/update", (AgentUpdateService updater) =>
+{
+    var result = updater.StartLatestUpdate();
+    return result.Started ? Results.Accepted(value: result) : Results.BadRequest(result);
+}).RequireAuthorization("admin");
 
 api.MapGet("/discover", (GameServerControl.Agent.Discovery.ServerDiscoveryService disco) =>
     Results.Ok(disco.Discover()));
-
-api.MapGet("/download/client", (HttpContext http) =>
-{
-    if (!OperatingSystem.IsWindows())
-    {
-        return Results.NotFound(
-            "No native client bundle available on this Linux agent. " +
-            "Use the web UI at /, or download a Windows client from " +
-            "https://github.com/Nereziel/GameServerControl/releases / Actions.");
-    }
-    var zipPath = @"C:\GameServerControl\Client.zip";
-    var clientDir = @"C:\GameServerControl\Client";
-    var clientExe = Path.Combine(clientDir, "GameServerControl.exe");
-    var needs = !File.Exists(zipPath) || (File.Exists(clientExe) && File.GetLastWriteTimeUtc(clientExe) > File.GetLastWriteTimeUtc(zipPath));
-    if (needs && Directory.Exists(clientDir))
-    {
-        var tmp = Path.Combine(Path.GetTempPath(), "GSCBundle-" + Guid.NewGuid().ToString("n")[..8]);
-        Directory.CreateDirectory(tmp);
-        foreach (var f in Directory.EnumerateFiles(clientDir, "*", SearchOption.AllDirectories))
-        {
-            var rel = Path.GetRelativePath(clientDir, f);
-            var dst = Path.Combine(tmp, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-            File.Copy(f, dst, true);
-        }
-        if (File.Exists(zipPath)) File.Delete(zipPath);
-        System.IO.Compression.ZipFile.CreateFromDirectory(tmp, zipPath, System.IO.Compression.CompressionLevel.Optimal, false);
-        Directory.Delete(tmp, true);
-    }
-    if (!File.Exists(zipPath)) return Results.NotFound("Client.zip not available.");
-    return Results.File(zipPath, "application/zip", "GameServerController.zip");
-}).RequireAuthorization();
 
 api.MapGet("/servers", (ServerRegistry reg) => Results.Ok(reg.All));
 api.MapPost("/servers/reload", (ServerRegistry reg) =>
@@ -433,7 +414,7 @@ api.MapDelete("/servers/{id}/schedule", async (string id, ServerRegistry reg, Ma
     return Results.NoContent();
 });
 
-api.MapPost("/discord/test", async (DiscordWebhookTestRequest req, GameServerControl.Agent.Notifications.DiscordNotifier notifier, CancellationToken ct) =>
+api.MapPost("/discord/test", async (DiscordWebhookTestRequest req, DiscordNotifier notifier, CancellationToken ct) =>
 {
     if (string.IsNullOrWhiteSpace(req.WebhookUrl)) return Results.BadRequest("WebhookUrl required");
     try

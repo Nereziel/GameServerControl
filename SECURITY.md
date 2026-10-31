@@ -1,117 +1,98 @@
 # Security
 
-This document describes the threat model GameServerControl is designed for,
-what protections are built in, and what an operator should do to deploy it
-safely. If you're shipping this to public users (e.g. installing it for friends,
-or hosting it on a server reachable from the internet), please read all of it.
+GameServerControl is administrative software for game-server hosts. Anyone with an **Admin** API token can start/stop servers, change configuration, install mods, restore backups and trigger a GameServerControl update. Treat Admin tokens like SSH credentials.
 
-## Threat model
+## Recommended deployment
 
-GameServerControl is **administrative software** for game-server hosts. Anyone
-with a valid API token can start, stop, reconfigure, or destroy your servers —
-including the host's underlying VMs. Treat the API token like an SSH key.
+The Agent serves the API and Web UI from the same process. The default listener is intentionally loopback-only:
 
-The default deployment model assumed by this project:
-
-| Surface              | Assumption                                                       |
-|----------------------|------------------------------------------------------------------|
-| Agent network access | Reachable only over a private overlay (Tailscale) or LAN.       |
-| Agent host           | Trusted; you own and patch it.                                  |
-| Client network       | Untrusted (laptop on hotel Wi-Fi is fine — Tailscale handles it).|
-| Game-server clients  | Untrusted (game players); they only talk to the GAME, not the agent. |
-
-**The agent should not be exposed to the public internet without HTTPS,
-mTLS, or a reverse proxy with WAF rules.** It is not battle-hardened web
-infrastructure.
-
-## Built-in protections
-
-| What                                  | Where                                              |
-|---------------------------------------|----------------------------------------------------|
-| Bearer-token auth on all `/api/*`     | `Auth/TokenAuthHandler.cs`                         |
-| **First-run token auto-generation**   | `Auth/FirstRunTokenGenerator.cs` — placeholder/empty tokens are replaced on boot with 32-byte cryptographic random, persisted to `appsettings.json`, printed to console once. **No GitHub clone ships with a default credential.** |
-| Optional HTTPS with self-signed cert  | `Auth/CertHelper.cs` — enable by setting `Agent:BindHttps` and `Agent:CertPassword`. |
-| Tailscale-only binding by default     | `appsettings.json` `Agent:Bind` defaults to a Tailscale IP. |
-| Audit log of authenticated mutations  | `Auth/AuditLogger.cs` — every POST/PUT/DELETE/PATCH on `/api/*` is appended JSON-lines to `Logs/audit/audit-YYYY-MM-DD.jsonl` (timestamp, IP, method, path, status, user). |
-| Atomic writes for config & state      | `*.tmp` + `File.Replace` so a crash never corrupts `servers.json`. |
-| ID validation for new servers         | `Servers/ServerStore.cs` — lowercase alphanumerics + hyphens only; prevents path-traversal via server ID. |
-| AGS API token cache invalidation on 401 | `Admin/SatisfactoryAdminClient.cs` — handles password rotation gracefully. |
-
-## What you should do before deploying
-
-### 1. Replace the placeholder token (or let the agent do it)
-
-`appsettings.json` ships with `ApiToken` set to a placeholder. On first boot
-the agent replaces it with a random 32-byte token and prints it to console:
-
-```
-====================================================================
-  GENERATED NEW AGENT API TOKEN — copy this into your client now:
-
-     T7c2k8m_xyz...
-
-  Saved to: C:\GameServerControl\Agent\appsettings.json
-====================================================================
+```text
+http://127.0.0.1:5099
 ```
 
-Copy that into the client's Settings dialog. If you miss it, the token is
-in `appsettings.json` — readable by anyone with file-system access to the
-agent's directory (so protect that with NTFS ACLs).
+For remote administration, prefer one of these patterns:
 
-### 2. Don't expose the agent to the public internet
+1. **Tailscale/private LAN** — bind the Agent only to the required private interface.
+2. **Cloudflare Tunnel/Access or another authenticated reverse proxy** — keep the Agent on loopback/private networking and terminate public HTTPS/authentication at the proxy.
 
-Bind the agent to a Tailscale IP (`100.x.y.z`) or your LAN, never to `0.0.0.0`
-on a public-facing interface without HTTPS and a reverse proxy. The provided
-default is loopback.
+Do not directly expose port 5099 to the public Internet.
 
-### 3. Add a Windows Firewall rule limiting inbound
+## Authentication and roles
 
-The auto-installed rule allows `100.64.0.0/10` (Tailscale CGNAT range). If
-your agent isn't on Tailscale, narrow this further. **Do not allow `Any`.**
+All `/api/*` endpoints and the SignalR status hub require bearer-token authentication.
 
-### 4. Protect `servers.json` and `appsettings.json`
+GameServerControl supports:
 
-Game-server passwords (RCON / admin / client passwords) are stored in plain
-text in `servers.json`. Restrict NTFS permissions on the agent directory to
-`SYSTEM` + the account running the service.
+- **Admin** tokens — read/write administration.
+- **ReadOnly** tokens — read access; mutation middleware rejects write methods.
 
-### 5. Keep `audit-*.jsonl` reviewable
+The first boot replaces the placeholder `Agent:ApiToken` with a cryptographically random token and persists it in `appsettings.json`. Additional tokens can be created and revoked from the Web UI.
 
-The audit log shows everyone who modified anything. Read it occasionally;
-if someone starts/stops servers you didn't tell them to, your token leaked.
+The Web UI itself is a static shell; API calls remain authenticated. The current local UI stores its selected Agent URL/token in browser `localStorage`. Do not use an untrusted/shared browser profile. For the future Cloudflare deployment, prefer Cloudflare Access/session authentication and Worker-side secrets so long-lived Agent credentials do not need to reach the public browser.
 
-## Known limitations (planned hardening)
+## Sensitive files
 
-These are NOT yet implemented. PRs welcome.
+Protect the Agent directory. In particular:
 
-| Gap | Mitigation today | Future fix |
-|-----|------------------|------------|
-| Passwords stored plaintext in `servers.json` | NTFS ACLs | DPAPI encryption (Windows-only, per-machine key) |
-| Single shared API token | Lock down network access | Per-user tokens with roles (read-only vs. admin) |
-| No rate limiting on auth failures | Tailscale gating | Throttle middleware: N failures / 5 min → block IP 15 min |
-| No HSTS / CSP / X-Content-Type-Options headers | Use reverse proxy if exposed | Add `app.UseSecurityHeaders()` |
-| Hardcoded default cert password (`gscagent`) | Set `Agent:CertPassword` explicitly | Refuse to start if password is the default |
-| Service runs as LocalSystem | Trade-off accepted (needed for Hyper-V + Task Scheduler) | Document minimum-privilege custom service account |
-| No CSRF token on SignalR | Same-origin in practice | Add CSRF token to status hub |
-| Web UI is anonymous (loads HTML), API calls inside it still auth-gated | Keep WebUi short or remove if not needed | Optionally require token for `/` too |
+```text
+appsettings.json
+servers.json
+tokens.json
+Logs/audit/
+```
+
+`appsettings.json` contains the bootstrap API token and optional provider credentials. `servers.json` may contain RCON/admin passwords and Discord webhooks. These values are currently persisted as plaintext JSON, so filesystem permissions matter.
+
+On Windows the default service runs as LocalSystem because Hyper-V/Task Scheduler integration may require elevated host access. Restrict write access to the installation directory accordingly.
+
+## Audit logging
+
+Authenticated mutations are written to JSON-lines audit logs under `Logs/audit/` unless overridden by `Agent:AuditLogPath`. Review these logs if an unexpected server action occurs.
+
+## HTTPS
+
+For direct private HTTPS, configure:
+
+```json
+"BindHttps": "https://<private-address>:5443",
+"CertPassword": "use-a-strong-password",
+"CertSanHosts": "hostname.example",
+"CertSanIps": "100.x.y.z"
+```
+
+The Agent can generate a self-signed certificate. For a Cloudflare/Tailscale design it is often simpler to keep Agent HTTP private and terminate TLS at the tunnel/proxy.
+
+## Self-update
+
+On Windows, `/api/update` requires an **Admin** token. The Agent starts an updater helper outside its own installation directory, then the helper stops/replaces/restarts the Agent service. Game-server processes are not intentionally stopped by a GameServerControl application update.
+
+The updater downloads release artifacts and the installer from the configured GitHub repository (`Agent:Repo`). Keep this setting pointed at a repository you trust.
+
+Linux web-triggered self-update is intentionally disabled for now; use the release installer with root privileges.
+
+## External provider credentials
+
+Optional marketplace/provider keys such as the CurseForge API key are stored server-side in `appsettings.json` and are not returned by the normal Web UI API. Do not commit populated configuration files.
+
+## Known limitations
+
+- Server/RCON/password values are not encrypted at rest yet.
+- Browser-local Agent tokens are stored in `localStorage` in the built-in direct UI.
+- There is no built-in authentication-failure rate limiter yet; rely on private networking / Cloudflare Access and firewall policy.
+- The self-signed HTTPS certificate path is intended for private deployments, not as a substitute for a properly managed public TLS endpoint.
+- Hyper-V mode necessarily expands the Agent's host privileges; do not enable/use it when unnecessary.
+
+## Deployment checklist
+
+- [ ] `Agent:ApiToken` is no longer the placeholder.
+- [ ] Agent listens only on loopback/private interfaces.
+- [ ] Port 5099 is not publicly forwarded.
+- [ ] `appsettings.json`, `servers.json` and `tokens.json` have restricted filesystem permissions.
+- [ ] Admin and ReadOnly tokens are assigned appropriately.
+- [ ] Public browser access, if used, is protected by Cloudflare Access or an equivalent authentication layer.
+- [ ] HTTPS is terminated at a trusted proxy/tunnel or configured appropriately for direct private access.
+- [ ] Audit logs are writable and periodically reviewed.
 
 ## Reporting security issues
 
-Don't open a public GitHub issue for an exploitable vuln. Instead:
-- Open a [private security advisory](https://github.com/...) on the repo, or
-- Email the maintainer.
-
-If you don't get a response in 7 days, you may publicly disclose.
-
-## Sensible deployment checklist
-
-Before exposing this to a friend or putting it on the internet:
-
-- [ ] Default placeholder token has been replaced (verified by checking `appsettings.json`)
-- [ ] Agent binds to private interface only (Tailscale / LAN, not `0.0.0.0` public)
-- [ ] Windows Firewall rule limits inbound to expected source CIDRs
-- [ ] `appsettings.json` and `servers.json` have restricted NTFS ACLs
-- [ ] Audit log directory is writable by the service account
-- [ ] HTTPS is enabled if the agent is reachable from outside Tailscale/LAN
-- [ ] Cert password is non-default
-- [ ] You've read the audit log at least once and recognize all entries
+Do not open a public issue for an exploitable vulnerability. Use GitHub's private security-advisory mechanism for the repository or contact the maintainer privately.

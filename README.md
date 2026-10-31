@@ -1,81 +1,69 @@
 # GameServerControl
 
-Self-hosted game-server control plane with an ASP.NET Core agent, a Windows WPF client, and a Cloudflare Worker web dashboard.
-
-This fork's supported release targets are **Windows and Linux**. The agent can install Steam dedicated servers with SteamCMD, discover existing installations, start/stop/restart processes, create backups, schedule maintenance, edit supported game configuration, manage selected mod ecosystems, use RCON where implemented, and send Discord lifecycle notifications.
-
-The upstream macOS deployment files remain in the source tree for reference, but this fork does not build, test, or publish macOS release artifacts.
-
-This fork is maintained at `Nereziel/GameServerControl` and carries additional deployment hardening plus RuneScape: Dragonwilds support.
-
-## Supported games
-
-Current presets include:
-
-- Valheim
-- RuneScape: Dragonwilds
-- Satisfactory
-- Palworld
-- ARK: Survival Ascended
-- ARK: Survival Evolved
-- Rust
-- V Rising
-- Conan Exiles
-- Squad
-- Soulmask
-- 7 Days to Die
-- Terraria
-- Don't Starve Together
-- Project Zomboid
-- Minecraft Java
-- Windrose
-
-Not every game has every integration. Install/start/stop/update/backup support is broader than config editing, RCON, or mod-marketplace support.
+GameServerControl is a self-hosted game-server control panel built around a single **Agent + HTTP API + Web UI**. There is no desktop client requirement: install the Agent on the game-server host and manage it from a browser.
 
 ## Architecture
 
-For a private LAN/Tailscale deployment the desktop client can connect directly to an agent.
-
-For Internet-facing web administration, this fork uses a Cloudflare Worker as the public frontend and API boundary:
-
 ```text
 Browser
-  -> Cloudflare Worker (static dashboard + /api proxy)
-  -> HTTPS VPS gateway
-  -> Tailscale
-  -> GameServerControl Agent
-  -> dedicated game server
+   │
+   ▼
+GameServerControl Web UI
+   │  same-origin HTTP / SignalR
+   ▼
+GameServerControl Agent
+   ├─ server lifecycle
+   ├─ SteamCMD installs / updates
+   ├─ backups
+   ├─ schedules
+   ├─ game configuration
+   ├─ live logs / supported consoles
+   ├─ mod management
+   └─ authenticated API
 ```
 
-The GameServerControl bearer token is stored as a Cloudflare Worker secret and is not exposed to browser JavaScript. The VPS gateway is expected to validate a second gateway secret before forwarding requests over Tailscale. The GSC agent port itself should not be publicly forwarded.
+The built-in web dashboard is served by the Agent itself. For remote/public access, keep the Agent private and place Cloudflare Access / Worker / Tunnel or another authenticated reverse proxy in front of it.
 
-See [`worker/README.md`](worker/README.md) for the Worker/gateway contract.
+## Supported hosts
+
+- Windows Server / Windows 10/11: full Agent feature set, including Hyper-V integration where configured.
+- Linux: Agent, API and Web UI; Hyper-V-specific features are unavailable.
+- Release artifacts are self-contained and do not require a preinstalled .NET runtime.
 
 ## Windows install
 
-A release must exist before using the one-line installer, because the installer downloads the release artifacts rather than building from source.
-
-Run from an elevated PowerShell:
+Run PowerShell as Administrator:
 
 ```powershell
 iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1 | iex
 ```
 
+Default locations:
+
+```text
+C:\GameServerControl\Agent
+C:\GameServers\<game>
+```
+
 The installer:
 
-- installs the .NET 8 Desktop Runtime when required,
-- downloads the Windows agent and client from the latest `Nereziel/GameServerControl` release,
-- preserves `appsettings.json`, `servers.json`, and `tokens.json` during upgrades,
-- creates `appsettings.json` from the shipped template on first install,
-- installs a private SteamCMD copy for reliable game updates,
-- registers and starts the Windows service,
-- creates the desktop-client shortcut,
-- prints the persisted first-run API token.
+- downloads the self-contained Agent release,
+- installs/configures private SteamCMD,
+- registers `GameServerControlAgent` as a Windows service,
+- preserves `appsettings.json`, `servers.json` and `tokens.json` during updates,
+- creates a desktop shortcut to `http://localhost:5099/`,
+- creates an external updater helper so the Agent can safely update itself.
 
-Client only:
+After installation open:
 
-```powershell
-iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install-client.ps1 | iex
+```text
+http://localhost:5099/
+```
+
+The first successful start generates and persists an API token in:
+
+```text
+C:\GameServerControl\Agent\appsettings.json
 ```
 
 ## Linux install
@@ -84,175 +72,107 @@ iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/win
 curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/linux/install-from-release.sh | sudo bash
 ```
 
-The Linux installer uses a dedicated `gsc` service account by default and installs a private SteamCMD copy.
+Then open the Agent's configured HTTP address in a browser.
 
-Linux CI and release jobs are pinned to **Ubuntu 24.04** instead of `ubuntu-latest`, so GitHub runner-image migrations do not silently change the build environment.
+## Web UI
 
-## macOS
+The Web UI is the primary control surface. It supports:
 
-macOS CI/release builds are intentionally disabled in this fork. Existing `deploy/macos/` files are retained as upstream reference only and are not part of supported releases.
+- Create Server with curated per-game defaults
+- background install jobs with persistent browser-side job history
+- Discover / Add Existing
+- Start / Stop / Restart
+- SteamCMD server updates
+- backups and restore
+- schedules
+- game-aware configuration
+- game-aware capability filtering (for example, RCON is hidden when unsupported)
+- live log console where the game exposes a usable log
+- RCON/player management where GameServerControl has a supported handler
+- mods, marketplace search and mod updates where supported
+- API token management
+- Agent update checks and Windows self-update
 
-## Agent defaults and security
+## Game profiles
 
-The default listener is intentionally loopback-only:
-
-```text
-http://127.0.0.1:5099
-```
-
-Change `Agent:Bind` only when the agent must be reachable directly on a LAN or Tailnet. Do not bind it to a public-facing interface without an appropriate private network/reverse-proxy design.
-
-On first boot the placeholder API token is replaced with a cryptographically random token and persisted to `appsettings.json`. Additional Admin/ReadOnly tokens can be managed through the token API/client. Write operations require an Admin token.
-
-Optional HTTPS uses a generated self-signed certificate whose SANs are derived from the current host rather than a fixed Tailscale address.
-
-## Cloudflare Worker dashboard
-
-The Worker project lives in `worker/` and uses Node.js 24 + Wrangler.
-
-```bash
-cd worker
-npm install
-npm run dev
-```
-
-Deployment requires these Worker secrets:
+Per-game defaults and capabilities live in:
 
 ```text
-GATEWAY_BASE_URL
-GATEWAY_SECRET
-WINDOWS_AGENT_TOKEN
+src/GameServerControl.Shared/GameProfiles.cs
 ```
 
-The initial Worker dashboard supports status polling and the common Start, Stop, Restart, Backup, and Update actions for the Windows node. The backend route format is `/api/windows/...`; adding an Ubuntu node later follows the same model with a separate agent token and VPS route.
+The Agent exposes these profiles through `/api/game-profiles`, and the Web UI consumes that API. This keeps install defaults, supported controls, paths and capabilities in one place instead of duplicating them in frontend code.
 
-Cloudflare Access should protect the Worker/custom domain before it is used as a public administration panel.
+Examples of profile-controlled capabilities:
 
-## RuneScape: Dragonwilds
+- managed configuration
+- mods
+- RCON
+- player management
+- live logs
+- console type
+- Hyper-V availability
+- scheduled-task support
+- default install/save/log paths
+- whether the game is offered in the automatic installer
 
-Dragonwilds dedicated-server support uses SteamCMD App ID `4019830`.
+## API authentication
 
-Windows preset:
+All `/api/*` endpoints require a bearer token. Tokens can have Admin or ReadOnly roles. Write operations require Admin.
 
-```text
-Executable: RSDragonwilds.exe
-Arguments:  -log -NewConsole
-Saves:      RSDragonwilds\Saved\Savegames
-Config:     RSDragonwilds\Saved\Config\WindowsServer\DedicatedServer.ini
-Log:        RSDragonwilds\Saved\Logs\RSDragonwilds.log
+Example:
+
+```http
+Authorization: Bearer <token>
 ```
 
-The config editor handles these values while preserving unknown keys in the INI file:
+Do not expose the Agent API directly to the public Internet. For remote administration use Tailscale or an authenticated reverse proxy such as Cloudflare Access.
 
-```text
-OwnerId
-ServerName
-DefaultWorldName
-AdminPassword
-WorldPassword
-```
+## Updates
 
-Stop Dragonwilds before changing its dedicated-server configuration because the game can rewrite the file while running.
+The Agent checks GitHub Releases for a newer version. On Windows, an Admin user can start an update directly from the Web UI. The Agent launches an updater process outside its own install directory, returns the HTTP response, then the external updater stops and replaces the Agent and starts the service again. Running game-server processes are not intentionally stopped by a GameServerControl self-update.
 
-## SteamCMD installation and update
-
-Create Server uses `SteamCmdManager`, which can locate or download SteamCMD automatically. Release installers also establish a stable SteamCMD path so an existing/discovered server can use the Update action immediately.
-
-After a new Steam installation completes, the agent verifies that the expected server executable actually exists before registering the server. This prevents a stale game preset from being reported as a successful install.
-
-## Discovery
-
-The agent scans Steam libraries and common server roots. On Windows these include locations such as:
-
-```text
-C:\GameServers
-D:\GameServers
-C:\Servers
-D:\Servers
-```
-
-Linux has corresponding common server paths. Already configured installations are marked so they are not accidentally registered twice.
-
-## Backups
-
-Bare-metal backups are ZIP archives of each server's configured save directories. Backup retention is configurable and defaults to keeping the newest ten archives. Restore creates a pre-restore safety backup before replacing save files.
-
-Hyper-V-hosted servers use VM checkpoints instead of ZIP backups.
-
-## Mods
-
-Mod support is game-specific rather than pretending every ecosystem behaves the same way. Current code contains managers/integrations for Valheim/BepInEx/Thunderstore, Satisfactory, Palworld curated sources, and ARK Workshop scenarios. Games without a registered manager return an explicit unsupported reason instead of silently pretending installation succeeded.
-
-Dragonwilds currently has no dedicated mod-manager integration in this fork.
-
-## RCON
-
-RCON is implemented behind a pluggable interface. Palworld/Source-style RCON is currently integrated; other games can add their own dialect without changing the dashboard contract.
-
-## Multiple instances
-
-Bare-metal process detection prefers an exact executable path. If multiple same-name server processes exist and an exact path cannot be established, the agent refuses to guess rather than targeting an arbitrary instance.
-
-## CI and releases
-
-GitHub Actions builds/publishes only the supported **Windows and Linux** targets. Linux and Worker jobs are pinned to `ubuntu-24.04`; macOS CI and release jobs are disabled.
-
-GitHub Actions use Node 24-compatible action versions. Cloudflare Worker validation uses Node.js 24 and performs a Wrangler dry-run build.
-
-Dependabot is intentionally conservative:
-
-- NuGet minor/patch updates are grouped.
-- NuGet major updates are ignored until an explicit framework migration is planned.
-- Worker npm minor/patch updates are grouped; npm major updates are ignored.
-- GitHub Actions updates are grouped and still have to pass CI.
+A manual fallback updater shortcut is also created by the Windows installer.
 
 ## Development
 
-Requires .NET 8 SDK.
+Requirements:
+
+- .NET 8 SDK
+- Node.js only for Web UI JavaScript syntax validation in CI
+
+Build:
 
 ```bash
 dotnet restore
 dotnet build -c Release
 ```
 
-The desktop client targets `net8.0-windows` and is Windows-only. The supported agent release targets in this fork are Windows and Linux.
+Run Agent locally:
 
-## Adding a game
-
-For a basic Windows preset, add it to:
-
-```text
-src/GameServerControl.Client/ViewModels/GamePresets.cs
+```bash
+dotnet run --project src/GameServerControl.Agent
 ```
 
-For discovery, add the platform executable names to:
+Default bind:
 
 ```text
-src/GameServerControl.Agent/Discovery/ServerDiscoveryService.cs
+http://127.0.0.1:5099
 ```
 
-If the game has an editable settings file, implement `IGameConfig` and register it through the config factory/schema extension model. If it has a unique mod ecosystem, implement `IModManager`. If it uses a non-standard RCON protocol, implement `IGameRcon`.
+## Release layout
 
-The built-in agent Web UI is retained as a private/local fallback. The public web direction for this fork is the Worker dashboard under `worker/`.
-
-## Repository layout
+Current releases contain only the Agent/Web application:
 
 ```text
-src/
-  GameServerControl.Shared/   shared models and schemas
-  GameServerControl.Agent/    ASP.NET Core agent/service
-  GameServerControl.Client/   Windows WPF dashboard
-deploy/
-  windows/                    Windows release installers
-  linux/                      systemd installers/service
-  macos/                      upstream reference; not built/released by this fork
-  docker/                     container deployment files
-worker/                       Cloudflare Worker + static public dashboard
-.github/workflows/            CI and release workflows
+GameServerControl-Agent-windows.zip
+GameServerControl-Agent-linux.tar.gz
+GameServerControl-Install-Windows.ps1
+GameServerControl-Install-Linux.sh
 ```
+
+The former WPF desktop client has been retired; browser control is the supported UI.
 
 ## License
 
 MIT. See `LICENSE`.
-
-Original project and branding credit remain with TK-ECLIPSE. This repository is a fork maintained by Nereziel for its deployment-specific changes.
