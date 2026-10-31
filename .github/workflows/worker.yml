@@ -19,7 +19,7 @@ permissions:
 jobs:
   validate:
     name: Cloudflare Worker (Node 24)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: worker
