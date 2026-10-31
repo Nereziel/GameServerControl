@@ -18,7 +18,12 @@
 <div id="app" class="hidden">
   <div class="top">
     <div class="brand">GameServer<span>Control</span></div><div id="agentLabel" class="tiny muted hide-sm"></div><div class="spacer"></div>
-    <button class="btn primary" onclick="openCreate()">＋ Create server</button><button class="btn" onclick="refreshAll()">Refresh</button><button class="btn hide-sm" onclick="logout()">Sign out</button>
+    <button class="btn primary" onclick="openCreate()">＋ Create server</button>
+    <button class="btn" onclick="openDiscover()">Discover</button>
+    <button class="btn" onclick="openAddExisting()">Add existing</button>
+    <button class="btn hide-sm" onclick="openTokens()">Tokens</button>
+    <button class="btn" onclick="refreshAll()">Refresh</button>
+    <button class="btn hide-sm" onclick="logout()">Sign out</button>
   </div>
   <div class="shell">
     <div class="tabs"><button id="tabServers" class="tab active" onclick="showView('servers')">Servers</button><button id="tabInstalls" class="tab" onclick="showView('installs')">Installations <span id="installBadge" class="badge hidden">0</span></button></div>
@@ -34,5 +39,6 @@
 <script src="/webui/server-admin.js" defer></script>
 <script src="/webui/jobs-mods.js" defer></script>
 <script src="/webui/config-backups.js" defer></script>
+<script src="/webui/tools.js" defer></script>
 </body>
 </html>
