@@ -25,6 +25,10 @@ public static class GamePresets
             new[]{ "-nographics", "-batchmode", "-name", "MyServer", "-port", "2456", "-world", "MyWorld", "-password", "secret" },
             new[]{ @"C:\Users\Administrator\AppData\LocalLow\IronGate\Valheim" }),
 
+        new("dragonwilds", "RuneScape: Dragonwilds", GameType.SteamGeneric, "4019830", "RSDragonwildsServer.exe", @"C:\DragonwildsServer",
+            new[]{ "-log", "-NewConsole" },
+            new[]{ @"C:\DragonwildsServer\RSDragonwilds\Saved\Savegames" }),
+
         new("ark-asa",  "ARK: Survival Ascended",GameType.SteamGeneric,  "2430930",  @"ShooterGame\Binaries\Win64\ArkAscendedServer.exe", @"C:\ArkAscendedServer",
             new[]{ "TheIsland_WP?listen?MaxPlayers=20?ServerPassword=?ServerAdminPassword=changeme" },
             new[]{ @"C:\ArkAscendedServer\ShooterGame\Saved" }),
