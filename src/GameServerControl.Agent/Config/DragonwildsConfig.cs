@@ -33,7 +33,11 @@ public sealed class DragonwildsConfig : IGameConfig
 
     private static string IniPath(ServerDef def)
     {
-        var platformDir = OperatingSystem.IsWindows() ? "WindowsServer" : "LinuxServer";
+        // PowerShell Direct/Hyper-V guests are Windows. Bare-metal agents use the
+        // platform-specific path documented by Jagex: WindowsServer on Windows, Linux on Linux.
+        var platformDir = def.HostingMode == HostingMode.Vm || OperatingSystem.IsWindows()
+            ? "WindowsServer"
+            : "Linux";
         return Path.Combine(def.GuestWorkingDir, "RSDragonwilds", "Saved", "Config", platformDir, "DedicatedServer.ini");
     }
 
