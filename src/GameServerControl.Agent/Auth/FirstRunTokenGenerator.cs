@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace GameServerControl.Agent.Auth;
@@ -9,7 +10,6 @@ namespace GameServerControl.Agent.Auth;
 /// </summary>
 public static class FirstRunTokenGenerator
 {
-    // Anything matching these is treated as "no real token set yet".
     private static readonly string[] PlaceholderTokens =
     {
         "",
@@ -19,10 +19,6 @@ public static class FirstRunTokenGenerator
         "<generate>"
     };
 
-    /// <summary>
-    /// Returns true if a new token was generated and persisted, false otherwise.
-    /// Caller is responsible for updating in-memory configuration.
-    /// </summary>
     public static bool EnsureToken(IConfiguration cfg, string baseDir, ILogger logger, out string token)
     {
         var current = cfg["Agent:ApiToken"] ?? "";
@@ -34,32 +30,31 @@ public static class FirstRunTokenGenerator
 
         token = GenerateToken();
         var appsettingsPath = Path.Combine(baseDir, "appsettings.json");
-        if (!File.Exists(appsettingsPath))
-        {
-            logger.LogWarning("appsettings.json not found at {Path}; generated token will only persist in memory.", appsettingsPath);
-            return true;
-        }
 
         try
         {
+            EnsureAppSettingsExists(baseDir, appsettingsPath, token, logger);
+
             var json = File.ReadAllText(appsettingsPath);
-            // Surgical regex replace so we don't reformat the user's whole settings file.
             var updated = Regex.Replace(
                 json,
                 "\"ApiToken\"\\s*:\\s*\"[^\"]*\"",
                 $"\"ApiToken\": \"{token}\"",
                 RegexOptions.Singleline);
-            if (updated == json)
+
+            if (updated == json && !json.Contains("\"ApiToken\"", StringComparison.OrdinalIgnoreCase))
             {
                 logger.LogWarning("Could not find ApiToken field in appsettings.json to update.");
                 return true;
             }
-            // Atomic write so we don't corrupt the file on a crash mid-write.
+
             var tmp = appsettingsPath + ".tmp";
             File.WriteAllText(tmp, updated);
-            File.Replace(tmp, appsettingsPath, appsettingsPath + ".bak");
+            if (File.Exists(appsettingsPath))
+                File.Replace(tmp, appsettingsPath, appsettingsPath + ".bak");
+            else
+                File.Move(tmp, appsettingsPath);
 
-            // Log only the first 8 chars to the log file; print the full token to console.
             logger.LogInformation("Generated new agent API token (prefix {Prefix}…). Full token saved to appsettings.json.", token[..Math.Min(8, token.Length)]);
             Console.WriteLine();
             Console.WriteLine("====================================================================");
@@ -79,9 +74,48 @@ public static class FirstRunTokenGenerator
         return true;
     }
 
+    private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, string token, ILogger logger)
+    {
+        if (File.Exists(appsettingsPath)) return;
+
+        var examplePath = Path.Combine(baseDir, "appsettings.json.example");
+        if (File.Exists(examplePath))
+        {
+            File.Copy(examplePath, appsettingsPath, overwrite: false);
+            logger.LogInformation("Created appsettings.json from appsettings.json.example.");
+            return;
+        }
+
+        var fallback = new
+        {
+            Logging = new
+            {
+                LogLevel = new Dictionary<string, string>
+                {
+                    ["Default"] = "Information",
+                    ["Microsoft.AspNetCore"] = "Warning",
+                    ["GameServerControl"] = "Information"
+                }
+            },
+            Agent = new
+            {
+                Bind = "http://127.0.0.1:5099",
+                BindHttps = "",
+                CertPassword = "",
+                ApiToken = token,
+                Repo = "Nereziel/GameServerControl",
+                ServersJsonPath = "servers.json",
+                AuditLogPath = "",
+                GuestCredentials = new Dictionary<string, object>()
+            }
+        };
+        File.WriteAllText(appsettingsPath, JsonSerializer.Serialize(fallback, new JsonSerializerOptions { WriteIndented = true }));
+        logger.LogWarning("appsettings.json.example was missing; created a minimal appsettings.json instead.");
+    }
+
     private static bool IsPlaceholder(string s)
     {
-        if (s.Length < 16) return true; // anything short is suspicious
+        if (s.Length < 16) return true;
         foreach (var p in PlaceholderTokens)
             if (string.Equals(s, p, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
@@ -90,7 +124,6 @@ public static class FirstRunTokenGenerator
     private static string GenerateToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);
-        // URL-safe base64 (no /, no +, no =) for friendlier copy/paste.
         return Convert.ToBase64String(bytes)
             .Replace('+', '-')
             .Replace('/', '_')
