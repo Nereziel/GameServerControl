@@ -7,14 +7,16 @@
     }
   },
   "Agent": {
-    "_BindHelp": "Bind the agent to a private interface. Loopback is safest by default; use a Tailscale IP only when you need direct Tailnet access.",
+    "_BindHelp": "The Agent serves both the API and Web UI. Loopback is safest by default; use a Tailscale/private IP only when direct remote access is required.",
     "Bind": "http://127.0.0.1:5099",
 
-    "_BindHttpsHelp": "Optional second HTTPS listener, e.g. https://100.x.y.z:5443. A self-signed certificate is generated when enabled.",
+    "_BindHttpsHelp": "Optional second HTTPS listener, e.g. https://100.x.y.z:5443. A self-signed certificate is generated when enabled. For Cloudflare/Tailscale deployments, terminating HTTPS outside the Agent is usually simpler.",
     "BindHttps": "",
     "CertPassword": "",
+    "CertSanHosts": "",
+    "CertSanIps": "",
 
-    "_TokenHelp": "Leave ApiToken as the placeholder below. The agent generates a strong random token on first boot and persists it here.",
+    "_TokenHelp": "Leave ApiToken as the placeholder below. The Agent generates a strong random token on first boot and persists it here.",
     "ApiToken": "REPLACE_WITH_32_CHARS+",
 
     "Repo": "Nereziel/GameServerControl",
@@ -23,7 +25,7 @@
     "_AuditHelp": "Override audit log directory. Empty defaults to <agent>/Logs/audit/.",
     "AuditLogPath": "",
 
-    "_CurseForgeHelp": "Optional secondary mod catalog. Obtain a CurseForge third-party API key, then map each Thunderstore community you want to augment to its CurseForge game ID. Keys stay server-side and are never sent to the browser.",
+    "_CurseForgeHelp": "Optional secondary mod catalog. Obtain a CurseForge third-party API key, then map each supported community to its CurseForge game ID. Keys stay server-side and are never sent to the browser.",
     "CurseForge": {
       "ApiKey": "",
       "Games": {
@@ -31,6 +33,7 @@
       }
     },
 
+    "_GuestCredentialsHelp": "Used only when a server is explicitly configured to run inside a Hyper-V VM through PowerShell Direct. BareMetal servers ignore this section.",
     "GuestCredentials": {
       "default": {
         "Username": "Administrator",
