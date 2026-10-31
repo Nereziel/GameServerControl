@@ -22,6 +22,11 @@ updates:
           - "minor"
           - "patch"
 
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+
     open-pull-requests-limit: 5
 
   # GitHub Actions
