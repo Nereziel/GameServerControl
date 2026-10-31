@@ -5,21 +5,12 @@ namespace GameServerControl.Agent.Hyperv;
 /// <summary>
 /// Bare-metal counterpart to <see cref="GuestProcessService"/>. Runs everything directly
 /// on the agent host instead of dispatching through PowerShell Direct into a VM guest.
-///
-/// Process detached pattern: we shell out via cmd /c start "" "exe" args so the launched
-/// process keeps running after this method returns and is parented to no one.
 /// </summary>
 public sealed class LocalProcessService
 {
     private readonly ILogger<LocalProcessService> _logger;
     public LocalProcessService(ILogger<LocalProcessService> logger) { _logger = logger; }
 
-    /// <summary>
-    /// True on Windows (we have <c>schtasks</c>) — false on Linux/macOS.
-    /// Orchestrator uses this to decide whether to drive autostart via the Task Scheduler
-    /// or fall through to direct <see cref="Process.Start"/>. Linux operators get
-    /// auto-restart by running the agent under a systemd unit with <c>Restart=on-failure</c>.
-    /// </summary>
     public bool HasScheduledTaskSupport => OperatingSystem.IsWindows();
 
     public Task<(bool Ok, int? Pid, string Error)> StartProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default)
@@ -33,7 +24,7 @@ public sealed class LocalProcessService
             {
                 FileName = exePath,
                 WorkingDirectory = string.IsNullOrWhiteSpace(workingDir) ? Path.GetDirectoryName(exePath) ?? "" : workingDir,
-                UseShellExecute = true,       // launches detached so the agent service can exit without killing the server
+                UseShellExecute = true,
                 CreateNoWindow = false,
                 WindowStyle = ProcessWindowStyle.Minimized
             };
@@ -56,23 +47,34 @@ public sealed class LocalProcessService
         try
         {
             var name = Path.GetFileNameWithoutExtension(exePath);
-            // Match by name first (cheap); if duplicates exist, prefer one whose MainModule path matches the target.
             var candidates = Process.GetProcessesByName(name);
-            Process? best = null;
+            if (candidates.Length == 0)
+                return Task.FromResult<(bool, int?)>((true, null));
+
+            var unreadable = new List<Process>();
             foreach (var p in candidates)
             {
                 try
                 {
-                    if (string.Equals(p.MainModule?.FileName, exePath, StringComparison.OrdinalIgnoreCase))
+                    if (PathsEqual(p.MainModule?.FileName, exePath))
                         return Task.FromResult<(bool, int?)>((true, p.Id));
-                    best ??= p;
                 }
                 catch
                 {
-                    best ??= p;  // MainModule access requires same architecture / privileges; tolerate
+                    unreadable.Add(p);
                 }
             }
-            return Task.FromResult<(bool, int?)>((true, best?.Id));
+
+            // If there is exactly one process with that leaf name and Windows denied MainModule
+            // access, accepting it is the least surprising fallback. With two or more candidates,
+            // guessing could stop or report the wrong game-server instance, so return Unknown.
+            if (candidates.Length == 1 && unreadable.Count == 1)
+                return Task.FromResult<(bool, int?)>((true, unreadable[0].Id));
+
+            if (candidates.Length > 1)
+                _logger.LogWarning("Ambiguous process lookup for {Exe}: found {Count} processes named {Name} and no exact path match.", exePath, candidates.Length, name);
+
+            return Task.FromResult<(bool, int?)>((candidates.Length == 1, null));
         }
         catch (Exception ex)
         {
@@ -88,27 +90,49 @@ public sealed class LocalProcessService
             Process? p = null;
             if (pid is int id)
             {
-                try { p = Process.GetProcessById(id); } catch { /* may not exist */ }
+                try
+                {
+                    var candidate = Process.GetProcessById(id);
+                    try
+                    {
+                        var actual = candidate.MainModule?.FileName;
+                        if (actual is null || PathsEqual(actual, exePath)) p = candidate;
+                        else _logger.LogWarning("Refusing to stop pid {Pid}: executable is {Actual}, expected {Expected}.", id, actual, exePath);
+                    }
+                    catch
+                    {
+                        // Same-service/admin deployments can occasionally fail MainModule access.
+                        // A PID supplied by our own tracker is still safer than a name-only lookup.
+                        p = candidate;
+                    }
+                }
+                catch { /* process may already be gone */ }
             }
+
             if (p is null)
             {
-                var name = Path.GetFileNameWithoutExtension(exePath);
-                p = Process.GetProcessesByName(name).FirstOrDefault();
+                var (ok, foundPid) = await FindProcessAsync(exePath, ct);
+                if (!ok)
+                {
+                    _logger.LogWarning("Refusing name-only stop for {Exe}: process lookup is ambiguous or unavailable.", exePath);
+                    return false;
+                }
+                if (foundPid is null) return true;
+                try { p = Process.GetProcessById(foundPid.Value); }
+                catch { return true; }
             }
-            if (p is null) return true;  // already gone
 
             if (!force)
             {
                 try { p.CloseMainWindow(); } catch { /* no UI */ }
                 var deadline = DateTime.UtcNow.AddSeconds(45);
                 while (DateTime.UtcNow < deadline && !p.HasExited)
-                {
                     await Task.Delay(500, ct);
-                }
                 if (p.HasExited) return true;
             }
 
-            try { p.Kill(entireProcessTree: true); } catch (Exception ex) { _logger.LogWarning(ex, "Kill failed for pid {Pid}", p.Id); return false; }
+            try { p.Kill(entireProcessTree: true); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Kill failed for pid {Pid}", p.Id); return false; }
             return true;
         }
         catch (Exception ex)
@@ -128,16 +152,14 @@ public sealed class LocalProcessService
 
     public async Task<bool> EndScheduledTaskAsync(string taskName, CancellationToken ct = default)
     {
-        if (!HasScheduledTaskSupport) return true; // nothing to end
+        if (!HasScheduledTaskSupport) return true;
         var (ok, _) = await RunCommandAsync($"schtasks /end /tn \"{taskName}\"", "", TimeSpan.FromSeconds(15), ct);
         return ok;
     }
 
     public async Task<bool?> GetAutostartAsync(string taskName, CancellationToken ct = default)
     {
-        if (!HasScheduledTaskSupport) return null; // unsupported here — return "unknown"
-        // /fo LIST /v outputs plain text. Look for the "Scheduled Task State:" row whose value is "Enabled" or "Disabled".
-        // (schtasks /xml is UTF-16 with BOM which mangles when read through cmd's default codepage.)
+        if (!HasScheduledTaskSupport) return null;
         var (ok, output) = await RunCommandAsync($"schtasks /query /tn \"{taskName}\" /fo LIST /v", "", TimeSpan.FromSeconds(10), ct);
         if (!ok || string.IsNullOrWhiteSpace(output)) return null;
         foreach (var rawLine in output.Replace("\r\n", "\n").Split('\n'))
@@ -157,16 +179,12 @@ public sealed class LocalProcessService
 
     public async Task<bool> SetAutostartAsync(string taskName, bool enabled, CancellationToken ct = default)
     {
-        if (!HasScheduledTaskSupport) return true; // nothing to set — orchestrator treats as a no-op
+        if (!HasScheduledTaskSupport) return true;
         var flag = enabled ? "/enable" : "/disable";
         var (ok, _) = await RunCommandAsync($"schtasks /change /tn \"{taskName}\" {flag}", "", TimeSpan.FromSeconds(15), ct);
         return ok;
     }
 
-    /// <summary>
-    /// Cross-platform kill-by-process-name. Strips an .exe suffix if present
-    /// (the leaf name with or without extension matches <see cref="Process.GetProcessesByName"/>).
-    /// </summary>
     public Task KillByNamesAsync(IEnumerable<string> exeNames, CancellationToken ct = default)
     {
         foreach (var raw in exeNames.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -190,9 +208,6 @@ public sealed class LocalProcessService
     {
         try
         {
-            // Cross-platform shell-out: cmd.exe /c on Windows, /bin/sh -c on Linux/macOS.
-            // We pass the command as a single ArgumentList entry on POSIX so quoting/escaping
-            // doesn't get re-mangled by .NET's argument splitter.
             var psi = new ProcessStartInfo
             {
                 WorkingDirectory = string.IsNullOrWhiteSpace(workingDir) ? Environment.CurrentDirectory : workingDir,
@@ -238,6 +253,22 @@ public sealed class LocalProcessService
         {
             _logger.LogError(ex, "RunCommand failed: {Cmd}", commandLine);
             return (false, ex.Message);
+        }
+    }
+
+    private static bool PathsEqual(string? a, string b)
+    {
+        if (string.IsNullOrWhiteSpace(a)) return false;
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+        catch
+        {
+            return string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
     }
 }
