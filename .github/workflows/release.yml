@@ -1,8 +1,7 @@
 name: Release
 
-# Builds self-contained Windows + Linux release artifacts and attaches them to a GitHub Release.
-# The in-app updater + one-line installers both fetch from /releases/latest, so the
-# asset names below are load-bearing — don't rename without updating the installers.
+# Builds self-contained Windows + Linux agent/web releases.
+# The one-line installers and Web UI updater fetch these assets from /releases/latest.
 on:
   push:
     tags:
@@ -18,7 +17,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build Windows artifacts
+    name: Build Windows agent
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -35,28 +34,19 @@ jobs:
       - name: Publish agent (win-x64, self-contained)
         run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
 
-      - name: Publish client (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Client -c Release -r win-x64 --self-contained true -o publish/Client-windows
-
       - name: Zip agent
         run: Compress-Archive -Path publish/Agent-windows/* -DestinationPath GameServerControl-Agent-windows.zip
         shell: pwsh
 
-      - name: Zip client
-        run: Compress-Archive -Path publish/Client-windows/* -DestinationPath GameServerControl-Client-windows.zip
-        shell: pwsh
-
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: windows-zips
-          path: |
-            GameServerControl-Agent-windows.zip
-            GameServerControl-Client-windows.zip
+          name: windows-agent
+          path: GameServerControl-Agent-windows.zip
           if-no-files-found: error
 
   build-linux:
-    name: Build Linux artifacts
+    name: Build Linux agent
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -80,10 +70,10 @@ jobs:
       - name: Tarball agent
         run: tar -czf GameServerControl-Agent-linux.tar.gz -C publish/Agent-linux .
 
-      - name: Upload artifacts
+      - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: linux-tar
+          name: linux-agent
           path: GameServerControl-Agent-linux.tar.gz
           if-no-files-found: error
 
@@ -95,15 +85,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Download Windows zips
+      - name: Download Windows agent
         uses: actions/download-artifact@v8
         with:
-          name: windows-zips
+          name: windows-agent
 
-      - name: Download Linux tarball
+      - name: Download Linux agent
         uses: actions/download-artifact@v8
         with:
-          name: linux-tar
+          name: linux-agent
 
       - name: Stage installer scripts as release assets
         run: |
@@ -129,12 +119,12 @@ jobs:
           prerelease: false
           files: |
             GameServerControl-Agent-windows.zip
-            GameServerControl-Client-windows.zip
             GameServerControl-Agent-linux.tar.gz
             GameServerControl-Install-Windows.ps1
             GameServerControl-Install-Linux.sh
           body: |
-            Self-contained release: no preinstalled .NET runtime is required on target hosts.
+            GameServerControl is now Agent + API + Web UI only. No desktop client is required.
+            Releases are self-contained; no preinstalled .NET runtime is required on target hosts.
 
             Install commands:
 
@@ -144,4 +134,4 @@ jobs:
                 # Linux
                 curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/linux/install-from-release.sh | sudo bash
 
-            Or download a zip/tarball below and follow the README.
+            Open the dashboard in a browser after installation.
