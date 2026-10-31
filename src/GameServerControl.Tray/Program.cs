@@ -55,7 +55,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly HttpClient _http;
     private readonly Dictionary<ServiceVisualState, Icon> _icons;
     private string? _pendingText;
-    private string? _latestTag;
+    private bool _initialUpdateChecked;
 
     public TrayApplicationContext(string adminUrl)
     {
@@ -116,14 +116,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("GameServerControl-Tray", CurrentVersionString()));
 
         _timer = new System.Windows.Forms.Timer { Interval = 2000, Enabled = true };
-        _timer.Tick += (_, _) => RefreshServiceState();
+        _timer.Tick += async (_, _) =>
+        {
+            RefreshServiceState();
+            if (!_initialUpdateChecked)
+            {
+                _initialUpdateChecked = true;
+                await CheckForUpdatesAsync(showNoUpdate: false);
+            }
+        };
 
         RefreshServiceState();
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(TimeSpan.FromSeconds(8));
-            await CheckForUpdatesAsync(showNoUpdate: false);
-        });
     }
 
     private void OpenAdministration()
@@ -258,7 +261,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         try
         {
-            SafeUi(() => _checkUpdateItem.Enabled = false);
+            _checkUpdateItem.Enabled = false;
             using var response = await _http.GetAsync(ReleasesApi);
             response.EnsureSuccessStatusCode();
             await using var stream = await response.Content.ReadAsStreamAsync();
@@ -266,27 +269,23 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var tag = doc.RootElement.GetProperty("tag_name").GetString();
             if (string.IsNullOrWhiteSpace(tag)) return;
 
-            _latestTag = tag;
             var current = ParseVersion(CurrentVersionString());
             var latest = ParseVersion(tag);
             var updateAvailable = current is not null && latest is not null && latest > current;
 
-            SafeUi(() =>
-            {
-                _updateItem.Text = updateAvailable ? $"Update to {tag}…" : "Update GameServerControl…";
-                if (updateAvailable)
-                    ShowBalloon("GameServerControl update available", $"{CurrentVersionString()} → {tag}", ToolTipIcon.Info);
-                else if (showNoUpdate)
-                    ShowBalloon("GameServerControl", $"No newer release found. Installed: {CurrentVersionString()}", ToolTipIcon.Info);
-            });
+            _updateItem.Text = updateAvailable ? $"Update to {tag}…" : "Update GameServerControl…";
+            if (updateAvailable)
+                ShowBalloon("GameServerControl update available", $"{CurrentVersionString()} → {tag}", ToolTipIcon.Info);
+            else if (showNoUpdate)
+                ShowBalloon("GameServerControl", $"No newer release found. Installed: {CurrentVersionString()}", ToolTipIcon.Info);
         }
         catch (Exception ex)
         {
-            if (showNoUpdate) SafeUi(() => ShowBalloon("Update check failed", ex.Message, ToolTipIcon.Warning));
+            if (showNoUpdate) ShowBalloon("Update check failed", ex.Message, ToolTipIcon.Warning);
         }
         finally
         {
-            SafeUi(() => _checkUpdateItem.Enabled = true);
+            _checkUpdateItem.Enabled = true;
         }
     }
 
@@ -357,14 +356,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon.BalloonTipText = text;
         _notifyIcon.BalloonTipIcon = icon;
         _notifyIcon.ShowBalloonTip(4000);
-    }
-
-    private void SafeUi(Action action)
-    {
-        if (_notifyIcon.ContextMenuStrip?.InvokeRequired == true)
-            _notifyIcon.ContextMenuStrip.BeginInvoke(action);
-        else
-            action();
     }
 
     protected override void ExitThreadCore()
