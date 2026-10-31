@@ -8,16 +8,18 @@ using Microsoft.AspNetCore.SignalR;
 namespace GameServerControl.Agent.Logs;
 
 /// <summary>
-/// Per-server background log tail. While a server's tail is running, new lines
-/// appended to its LogPathInGuest are pushed to SignalR clients as LogLine events
-/// (source = "log"). Multi-client safe; each server gets at most one tail loop.
+/// Per-server background log tail. New lines are pushed to SignalR clients and also retained
+/// in a small in-memory ring buffer so the dependency-free Web UI can poll recent log output.
+/// Multi-client safe; each server gets at most one tail loop.
 /// </summary>
 public sealed class LogTailService : IDisposable
 {
+    private const int MaxRecentLines = 500;
     private readonly IHubContext<StatusHub> _hub;
     private readonly ServerRegistry _registry;
     private readonly ILogger<LogTailService> _logger;
     private readonly ConcurrentDictionary<string, TailHandle> _active = new();
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<LogLine>> _recent = new();
 
     public LogTailService(IHubContext<StatusHub> hub, ServerRegistry registry, ILogger<LogTailService> logger)
     {
@@ -27,6 +29,14 @@ public sealed class LogTailService : IDisposable
     }
 
     public bool IsTailing(string serverId) => _active.ContainsKey(serverId);
+
+    public IReadOnlyList<LogLine> Recent(string serverId, int limit = 200)
+    {
+        limit = Math.Clamp(limit, 1, MaxRecentLines);
+        if (!_recent.TryGetValue(serverId, out var q)) return Array.Empty<LogLine>();
+        var snapshot = q.ToArray();
+        return snapshot.Length <= limit ? snapshot : snapshot[^limit..];
+    }
 
     public bool Start(string serverId)
     {
@@ -40,6 +50,7 @@ public sealed class LogTailService : IDisposable
 
         return _active.GetOrAdd(serverId, _ =>
         {
+            _recent[serverId] = new ConcurrentQueue<LogLine>();
             var cts = new CancellationTokenSource();
             var handle = new TailHandle(cts);
             handle.Task = Task.Run(() => TailLoop(serverId, def.LogPathInGuest!, cts.Token));
@@ -87,7 +98,6 @@ public sealed class LogTailService : IDisposable
                     carry.Append(Encoding.UTF8.GetString(buf, 0, n));
                     var s = carry.ToString();
                     var lines = s.Replace("\r\n", "\n").Split('\n');
-                    // Keep last partial line in carry
                     carry.Clear();
                     carry.Append(lines[^1]);
                     for (var i = 0; i < lines.Length - 1; i++)
@@ -114,6 +124,10 @@ public sealed class LogTailService : IDisposable
     private async Task EmitAsync(string serverId, string text)
     {
         var line = new LogLine(serverId, DateTimeOffset.UtcNow, "log", text);
+        var q = _recent.GetOrAdd(serverId, _ => new ConcurrentQueue<LogLine>());
+        q.Enqueue(line);
+        while (q.Count > MaxRecentLines) q.TryDequeue(out _);
+
         try { await _hub.Clients.All.SendAsync("logLine", line); }
         catch { /* hub may not be ready at startup */ }
     }
