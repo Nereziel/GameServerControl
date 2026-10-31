@@ -37,7 +37,7 @@ function profileToGame(p){
     key:p.key,label:p.label,icon:p.icon||'🖥',appId:p.steamAppId,size:p.estimatedSize||'varies',
     dir:p.installDirectoryName||p.key,exe:p.executableRelative||'',args:p.defaultStartArgs||[],
     saveRel:p.saveDirs||[],logRel:p.logPath||null,gameType:p.gameType||'SteamGeneric',
-    rconPort:p.defaultRconPort??null,note:p.notes||'',installable:!!p.installable,
+    rconPort:p.defaultRconPort??null,note:p.notes||'',installable:!!p.installable,ports:p.defaultPorts||[],
     caps:{config:!!c.managedConfig,mods:!!c.mods,rcon:!!c.rcon,players:!!c.playerManagement,log:!!c.liveLog,
       console:consoleMode==='rcon'?'rcon':consoleMode==='logonly'?'log':null,hyperV:c.hyperV!==false,scheduledTask:c.scheduledTask!==false}
   };
@@ -140,3 +140,85 @@ async function waitForAgentRestart(){
 function slugify(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}
 function expandRoot(value,root){return String(value||'').replaceAll('{root}',root.replace(/[\\/]+$/,''))}
 function joinPath(root,rel){const value=expandRoot(rel,root);if(/^[a-zA-Z]:[\\/]/.test(value)||value.startsWith('\\\\'))return value;return root.replace(/[\\/]+$/,'')+'\\'+value.replace(/^[\\/]+/,'')}
+
+function formatNetworkPort(p){
+  const proto=String(p.protocol||'').toUpperCase();
+  const start=Number(p.port),end=p.endPort==null?start:Number(p.endPort);
+  return `${proto} ${start}${end!==start?'-'+end:''} ${p.name||'Port'}`;
+}
+function parseNetworkPorts(text){
+  const result=[];
+  for(const raw of String(text||'').split(/\r?\n/)){
+    const line=raw.trim();if(!line||line.startsWith('#'))continue;
+    const m=line.match(/^(TCP|UDP)\s+(\d+)(?:-(\d+))?(?:\s+(.+))?$/i);
+    if(!m)throw new Error(`Invalid port line: ${line}. Use e.g. "UDP 2456-2457 Game".`);
+    const port=Number(m[2]),end=m[3]?Number(m[3]):null;
+    if(port<1||port>65535||(end!=null&&(end<port||end>65535)))throw new Error(`Invalid port range: ${line}`);
+    result.push({name:(m[4]||'Port').trim(),protocol:m[1].toUpperCase()==='TCP'?'Tcp':'Udp',port,endPort:end});
+  }
+  return result;
+}
+function effectiveNetworkPorts(d){const g=profileFor(d);return d.networkPorts??g?.ports??[]}
+function rangesOverlap(a,b){const ae=a.endPort==null?Number(a.port):Number(a.endPort),be=b.endPort==null?Number(b.port):Number(b.endPort);return Number(a.port)<=be&&Number(b.port)<=ae}
+function findNetworkConflict(ports){
+  for(const s of SERVERS){
+    if(s.hostingMode==='Vm')continue;
+    for(const a of ports||[])for(const b of effectiveNetworkPorts(s)){
+      if(String(a.protocol).toLowerCase()===String(b.protocol).toLowerCase()&&rangesOverlap(a,b))return {server:s,ours:a,theirs:b};
+    }
+  }
+  return null;
+}
+function resetNetworkDefaults(id){const d=SERVERS.find(x=>x.id===id),g=d?profileFor(d):null,ta=$('#networkPorts');if(ta)ta.value=(g?.ports||[]).map(formatNetworkPort).join('\n')}
+function openNetwork(id){
+  const d=SERVERS.find(x=>x.id===id);if(!d)return;const g=profileFor(d),ports=effectiveNetworkPorts(d),isVm=d.hostingMode==='Vm',isExe=/\.exe$/i.test(d.guestExePath||''),looksWindows=/^[A-Za-z]:[\\/]/.test(d.guestExePath||'');
+  const fw=isVm
+    ? '<div class="callout info">Hyper-V has its own guest network stack. GameServerControl does not change the guest Windows Firewall from the host.</div>'
+    : !looksWindows
+      ? '<div class="callout info">Automatic program firewall rules apply to Windows BareMetal servers only.</div>'
+      : isExe
+        ? `<div class="callout info"><b>Windows Firewall:</b> GameServerControl manages persistent inbound and outbound Allow rules for <span class="mono">${esc(d.guestExePath)}</span>. The ports below are currently used for collision detection, not firewall filtering.</div>`
+        : '<div class="callout info">This server launches through a script/JAR rather than an .exe, so a reliable Windows program rule cannot be created yet. Port reservations still prevent accidental conflicts.</div>';
+  const defaults=(g?.ports||[]).length?`<button class="btn" onclick="resetNetworkDefaults('${jsq(id)}')">Reset to ${esc(g.label)} defaults</button>`:'';
+  openModal('Network — '+d.name,`${fw}<div class="section">Reserved/listening ports</div><div class="field"><label>One port or range per line</label><textarea id="networkPorts" class="mono" style="min-height:180px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: <span class="mono">UDP 2456-2457 Game</span> or <span class="mono">TCP 7777 Game/API</span>. BareMetal servers on this Agent may not reserve overlapping ports of the same protocol.</div></div>${defaults}<div class="section">Profile defaults</div><div class="tiny muted">${(g?.ports||[]).length?(g.ports.map(formatNetworkPort).map(esc).join('<br>')):'No curated port defaults are defined for this game yet.'}</div>`,`<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveNetwork('${jsq(id)}')">Save network settings</button>`,true)
+}
+async function saveNetwork(id){
+  const d=SERVERS.find(x=>x.id===id);if(!d)return;
+  let ports;try{ports=parseNetworkPorts($('#networkPorts')?.value||'')}catch(e){return toast(e.message,'err')}
+  try{await api(`/api/servers/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify({...d,networkPorts:ports})});toast('Network settings saved.','ok');closeModal();await loadServers()}catch(e){toast('Network settings rejected: '+e.message,'err')}
+}
+
+function installNetworkUiHooks(){
+  if(typeof openManage==='function'&&!openManage.__networkWrapped){
+    const original=openManage;
+    const wrapped=function(id){
+      original(id);
+      const grid=document.querySelector('.manage-grid');
+      if(grid&&!grid.querySelector('[data-network-tile]')){
+        const b=document.createElement('button');b.className='manage-tile';b.dataset.networkTile='1';b.onclick=()=>openNetwork(id);
+        b.innerHTML='<span class="manage-icon">🌐</span><span><b>Network & firewall</b><small>Ports, conflicts and Windows Firewall</small></span>';
+        grid.appendChild(b);
+      }
+    };
+    wrapped.__networkWrapped=true;window.openManage=wrapped;
+  }
+  if(typeof openCreateSettings==='function'&&!openCreateSettings.__networkWrapped){
+    const originalCreate=openCreateSettings;
+    const wrappedCreate=function(key){
+      originalCreate(key);
+      const g=GAMES.find(x=>x.key===key),body=$('#modalBody');
+      if(body&&g?.ports?.length){const box=document.createElement('div');box.className='callout info';box.innerHTML='<b>Default network ports:</b><br>'+g.ports.map(formatNetworkPort).map(esc).join('<br>')+'<br><span class="tiny muted">GameServerControl checks these against other BareMetal servers before registration.</span>';body.appendChild(box)}
+    };
+    wrappedCreate.__networkWrapped=true;window.openCreateSettings=wrappedCreate;
+  }
+  if(typeof startInstall==='function'&&!startInstall.__networkWrapped){
+    const originalStart=startInstall;
+    const wrappedStart=async function(key){
+      const g=GAMES.find(x=>x.key===key),conflict=findNetworkConflict(g?.ports||[]);
+      if(conflict){toast(`Port conflict with ${conflict.server.name}: ${formatNetworkPort(conflict.ours)} overlaps ${formatNetworkPort(conflict.theirs)}. Change that server's Network settings first.`,'err');return}
+      return await originalStart(key);
+    };
+    wrappedStart.__networkWrapped=true;window.startInstall=wrappedStart;
+  }
+}
+window.addEventListener('DOMContentLoaded',installNetworkUiHooks);

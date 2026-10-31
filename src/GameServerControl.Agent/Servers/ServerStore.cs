@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using GameServerControl.Agent.Networking;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Servers;
@@ -18,58 +19,83 @@ public sealed class ServerStore
 
     private readonly string _path;
     private readonly ServerRegistry _registry;
+    private readonly ILogger<ServerStore> _logger;
     private readonly object _lock = new();
 
-    public ServerStore(IConfiguration cfg, IHostEnvironment env, ServerRegistry registry)
+    public ServerStore(IConfiguration cfg, IHostEnvironment env, ServerRegistry registry, ILogger<ServerStore> logger)
     {
         _registry = registry;
+        _logger = logger;
         var configured = cfg["Agent:ServersJsonPath"] ?? "servers.json";
         _path = Path.IsPathRooted(configured) ? configured : Path.Combine(env.ContentRootPath, configured);
     }
 
     public ServerDef Add(ServerDef def)
     {
-        Validate(def);
+        var normalized = Normalize(def);
+        Validate(normalized);
         lock (_lock)
         {
             var list = LoadAll();
-            if (list.Any(s => string.Equals(s.Id, def.Id, StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidOperationException($"Server with id '{def.Id}' already exists.");
-            list.Add(def);
+            if (list.Any(s => string.Equals(s.Id, normalized.Id, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException($"Server with id '{normalized.Id}' already exists.");
+            ValidatePortConflicts(normalized, list, excludeId: null);
+            list.Add(normalized);
             SaveAll(list);
             _registry.Reload();
         }
-        return def;
+        EnsureFirewall(normalized);
+        return normalized;
     }
 
     public ServerDef Update(string id, ServerDef def)
     {
         // Force the URL id onto the def so the caller can't accidentally rename via PUT body.
-        var normalized = def with { Id = id };
+        var normalized = Normalize(def with { Id = id });
         Validate(normalized);
         lock (_lock)
         {
             var list = LoadAll();
             var idx = list.FindIndex(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
             if (idx < 0) throw new KeyNotFoundException(id);
+            ValidatePortConflicts(normalized, list, id);
             list[idx] = normalized;
             SaveAll(list);
             _registry.Reload();
         }
+        EnsureFirewall(normalized);
         return normalized;
     }
 
     public bool Delete(string id)
     {
+        ServerDef? removedDef = null;
         lock (_lock)
         {
             var list = LoadAll();
-            var removed = list.RemoveAll(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
-            if (removed == 0) return false;
+            removedDef = list.FirstOrDefault(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (removedDef is null) return false;
+            list.Remove(removedDef);
             SaveAll(list);
             _registry.Reload();
         }
+
+        if (!WindowsFirewall.RemoveProgramRules(id, out var firewallError))
+            _logger.LogWarning("Could not remove Windows Firewall rules for {Id}: {Error}", id, firewallError);
         return true;
+    }
+
+    private void EnsureFirewall(ServerDef def)
+    {
+        if (!WindowsFirewall.EnsureProgramRules(def, out var error))
+            _logger.LogWarning("Could not create/update Windows Firewall rules for {Id}: {Error}", def.Id, error);
+    }
+
+    private static ServerDef Normalize(ServerDef def)
+    {
+        if (def.NetworkPorts is not null) return def;
+        var defaults = GameProfiles.FindFor(def)?.DefaultPorts;
+        return def with { NetworkPorts = defaults?.ToArray() ?? Array.Empty<NetworkPort>() };
     }
 
     private static void Validate(ServerDef def)
@@ -82,6 +108,67 @@ public sealed class ServerStore
             throw new ArgumentException("VmName is required when HostingMode is Vm.");
         if (string.IsNullOrWhiteSpace(def.GuestExePath))
             throw new ArgumentException("GuestExePath is required.");
+
+        var ports = EffectivePorts(def);
+        for (var i = 0; i < ports.Length; i++)
+        {
+            ValidatePort(ports[i]);
+            for (var j = i + 1; j < ports.Length; j++)
+            {
+                if (ports[i].Protocol == ports[j].Protocol && Overlaps(ports[i], ports[j]))
+                    throw new ArgumentException($"Network settings contain overlapping {ports[i].Protocol.ToString().ToUpperInvariant()} ports: {Describe(ports[i])} and {Describe(ports[j])}.");
+            }
+        }
+    }
+
+    private static void ValidatePortConflicts(ServerDef candidate, IEnumerable<ServerDef> all, string? excludeId)
+    {
+        // Different Hyper-V guests have separate network stacks/IPs, so equal port numbers are not a host collision.
+        if (candidate.HostingMode != HostingMode.BareMetal) return;
+        var candidatePorts = EffectivePorts(candidate);
+        if (candidatePorts.Length == 0) return;
+
+        foreach (var other in all)
+        {
+            if (!string.IsNullOrWhiteSpace(excludeId) && string.Equals(other.Id, excludeId, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (other.HostingMode != HostingMode.BareMetal) continue;
+
+            foreach (var ours in candidatePorts)
+            foreach (var theirs in EffectivePorts(other))
+            {
+                if (ours.Protocol != theirs.Protocol || !Overlaps(ours, theirs)) continue;
+                throw new ArgumentException(
+                    $"Port conflict with server '{other.Name}': {Describe(ours)} overlaps {Describe(theirs)}. " +
+                    "Change one server's Network ports before running both on this machine.");
+            }
+        }
+    }
+
+    private static NetworkPort[] EffectivePorts(ServerDef def)
+        => def.NetworkPorts ?? GameProfiles.FindFor(def)?.DefaultPorts ?? Array.Empty<NetworkPort>();
+
+    private static void ValidatePort(NetworkPort p)
+    {
+        var end = p.EndPort ?? p.Port;
+        if (p.Port is < 1 or > 65535 || end is < 1 or > 65535)
+            throw new ArgumentException($"Invalid network port range '{Describe(p)}'. Ports must be between 1 and 65535.");
+        if (end < p.Port)
+            throw new ArgumentException($"Invalid network port range '{Describe(p)}'. End port must be greater than or equal to the start port.");
+    }
+
+    private static bool Overlaps(NetworkPort a, NetworkPort b)
+    {
+        var aEnd = a.EndPort ?? a.Port;
+        var bEnd = b.EndPort ?? b.Port;
+        return a.Port <= bEnd && b.Port <= aEnd;
+    }
+
+    private static string Describe(NetworkPort p)
+    {
+        var end = p.EndPort ?? p.Port;
+        var range = end == p.Port ? p.Port.ToString() : $"{p.Port}-{end}";
+        return $"{p.Protocol.ToString().ToUpperInvariant()} {range} ({p.Name})";
     }
 
     private List<ServerDef> LoadAll()
