@@ -6,6 +6,19 @@
 <meta name="theme-color" content="#0b0d10" />
 <title>GameServerControl</title>
 <link rel="stylesheet" href="/webui/styles.css" />
+<style>
+/* Control-room layout. Kept here so the web-only Agent remains a single deployable UI bundle. */
+.noticebar{display:flex;align-items:center;gap:10px;margin:0 0 14px;padding:10px 12px;border:1px solid var(--line);background:var(--panel);border-radius:9px;font-size:12px}.noticebar.hidden{display:none}.noticebar.ok{border-color:rgba(63,185,80,.5);background:rgba(63,185,80,.06)}.noticebar.err{border-color:rgba(248,81,73,.55);background:rgba(248,81,73,.07)}.noticebar.info{border-color:rgba(88,166,255,.45);background:rgba(88,166,255,.06)}
+.server-control-layout{display:grid;grid-template-columns:minmax(270px,340px) minmax(0,1fr);gap:14px;align-items:start}.server-list{display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 150px);overflow:auto;padding-right:3px}.server-row{width:100%;display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:10px;padding:12px;transition:.12s}.server-row:hover{border-color:#4f5a68;background:#181c22}.server-row.selected{border-color:#657181;background:#1a1f26;box-shadow:inset 3px 0 0 var(--accent)}.server-row .server-row-icon{width:30px;text-align:center;font-size:22px}.server-row .server-row-main{flex:1;min-width:0}.server-row .server-row-name{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.server-row .server-row-meta{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}.server-row-state{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.35px}.server-row-state.up{color:var(--ok)}.server-row-state.warn{color:var(--warn)}.server-row-state.down{color:var(--muted)}
+.server-detail-panel{border:1px solid var(--line);background:var(--panel);border-radius:11px;min-height:420px;overflow:hidden}.server-detail-head{display:flex;gap:13px;align-items:flex-start;padding:18px;border-bottom:1px solid var(--line)}.server-detail-icon{font-size:31px;width:42px;text-align:center}.server-detail-title{font-size:20px;font-weight:850}.server-detail-sub{font-size:12px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}.server-detail-body{padding:17px}.server-state-large{margin-left:auto;font-size:12px;font-weight:850;border:1px solid var(--line);border-radius:999px;padding:5px 10px}.server-state-large.up{color:var(--ok);border-color:rgba(63,185,80,.45);background:rgba(63,185,80,.06)}.server-state-large.warn{color:var(--warn);border-color:rgba(210,153,34,.45);background:rgba(210,153,34,.06)}.server-state-large.down{color:var(--muted)}
+.operation-banner{display:flex;gap:10px;align-items:center;border:1px solid rgba(88,166,255,.4);background:rgba(88,166,255,.06);border-radius:9px;padding:11px 12px;margin-bottom:14px}.operation-banner.err{border-color:rgba(248,81,73,.5);background:rgba(248,81,73,.07)}.operation-banner.ok{border-color:rgba(63,185,80,.45);background:rgba(63,185,80,.06)}.spinner{width:15px;height:15px;border:2px solid rgba(255,255,255,.22);border-top-color:var(--info);border-radius:50%;animation:gscspin .7s linear infinite;flex:0 0 auto}@keyframes gscspin{to{transform:rotate(360deg)}}
+.control-buttons{display:grid;grid-template-columns:repeat(3,minmax(110px,1fr));gap:9px;margin-bottom:15px}.control-btn{min-height:46px;font-size:14px}.control-btn.stop:not(:disabled){border-color:rgba(248,81,73,.5)}.control-btn.restart:not(:disabled){border-color:rgba(210,153,34,.45)}
+.detail-metrics{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:8px;margin-bottom:16px}.metric-box{border:1px solid var(--line);background:#101318;border-radius:8px;padding:9px 10px}.metric-box span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.45px}.metric-box b{display:block;margin-top:3px;font-size:14px}.quick-panel{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}.quick-panel .manage-tile{min-height:66px}.server-path{margin-top:15px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}.server-path .mono{color:#c8d0da}
+.password-wrap{position:relative;display:flex;align-items:center}.password-wrap>input{padding-right:42px!important}.password-eye{position:absolute;right:5px;height:30px;min-width:32px;border:0;background:transparent;color:var(--muted);border-radius:5px;padding:0 7px}.password-eye:hover{color:var(--text);background:var(--panel2)}
+.install-live-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}.install-live-head .spacer{flex:1}.install-live-log{min-height:320px;max-height:55vh}.toast{display:none!important}
+@media(max-width:900px){.server-control-layout{grid-template-columns:1fr}.server-list{max-height:none}.server-detail-panel{min-height:0}.detail-metrics{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.control-buttons{grid-template-columns:1fr}.detail-metrics{grid-template-columns:1fr 1fr}.server-detail-head{padding:14px}.server-detail-body{padding:13px}}
+</style>
 </head>
 
 <body>
@@ -28,84 +41,124 @@
   </div>
   <div class="shell">
     <div class="tabs"><button id="tabServers" class="tab active" onclick="showView('servers')">Servers</button><button id="tabInstalls" class="tab" onclick="showView('installs')">Installations <span id="installBadge" class="badge hidden">0</span></button></div>
+    <div id="noticeBar" class="noticebar hidden"><strong id="noticeTitle">Status</strong><span id="noticeText" class="grow"></span><button class="btn" style="padding:4px 8px" onclick="clearNotice()">×</button></div>
     <section id="serversView"><div id="servers"></div></section>
-    <section id="installsView" class="hidden"><div class="summarybar"><div class="muted tiny">Install jobs keep running when this page is closed. This browser remembers their IDs.</div><div class="spacer"></div><button class="btn" onclick="clearFinishedJobs()">Clear finished</button></div><div id="jobs"></div></section>
+    <section id="installsView" class="hidden"><div class="summarybar"><div class="muted tiny">Install jobs keep running when this page is closed. Active jobs stream their log continuously.</div><div class="spacer"></div><button class="btn" onclick="clearFinishedJobs()">Clear finished</button></div><div id="jobs"></div></section>
   </div>
 </div>
 <div id="overlay" class="overlay hidden" onclick="if(event.target===this)closeModal()">
   <div id="modal" class="modal"><div class="modalhead"><h2 id="modalTitle">Dialog</h2><div class="spacer"></div><button class="btn" onclick="closeModal()">Close</button></div><div id="modalBody" class="modalbody"></div><div id="modalFoot" class="modalfoot"></div></div>
 </div>
 <div id="toast" class="toast"></div>
-<script src="/webui/core.js" defer></script>
-<script src="/webui/server-admin.js" defer></script>
-<script src="/webui/jobs-mods.js" defer></script>
-<script src="/webui/config-backups.js" defer></script>
+
+<!-- Scripts are at the end of body, so they do not need defer. core loads first, then the
+     control-room overrides install before config-backups performs its legacy immediate boot. -->
+<script src="/webui/core.js"></script>
 <script>
-window.addEventListener('DOMContentLoaded', () => {
-  window.deleteServer = function(id) {
-    const d = SERVERS.find(x => x.id === id);
-    if (!d) return;
-    const bareMetal = d.hostingMode !== 'Vm';
-    const hasSaves = Array.isArray(d.saveDirs) && d.saveDirs.length > 0;
-    const permanent = bareMetal
-      ? `<div class="section">Delete server completely</div>
-         <div class="callout">This permanently stops the server and deletes the entire server folder. This cannot be undone.</div>
-         <div class="kv compact"><div>Folder to delete</div><div class="mono">${esc(d.guestWorkingDir || '')}</div></div>
-         <div class="checkrow" style="margin-top:14px"><input id="deleteFinalBackup" type="checkbox" ${hasSaves ? 'checked' : 'disabled'}><label for="deleteFinalBackup">Create a final save backup before deletion${hasSaves ? '' : ' (no save folders configured)'}</label></div>
-         <div class="field"><label>Type the exact server name to confirm</label><input id="deleteConfirm" autocomplete="off" placeholder="${esc(d.name)}" oninput="syncPermanentDeleteButton('${jsq(id)}')"><div class="help">Required: <b>${esc(d.name)}</b></div></div>
-         <button id="permanentDeleteBtn" class="btn danger" disabled onclick="permanentDeleteServer('${jsq(id)}')">Permanently delete server and files</button>`
-      : `<div class="section">Delete server completely</div><div class="callout info">Complete file deletion is disabled for Hyper-V servers because the server folder is inside the guest VM. Remove the definition here and manage VM files separately.</div>`;
+window.GSCUX={booted:false,selected:null,actions:{},refreshing:false,noticeTimer:null};
 
-    openModal('Delete — ' + d.name,
-      `<div class="section">Remove from GameServerControl</div>
-       <div class="help">Removes only the server definition. All game files and saves remain untouched.</div>
-       <button class="btn" onclick="removeServerOnly('${jsq(id)}')">Remove only</button>
-       ${permanent}`,
-      '<button class="btn" onclick="closeModal()">Cancel</button>', true);
-  };
+function clearNotice(){const n=$('#noticeBar');if(n)n.classList.add('hidden');if(GSCUX.noticeTimer){clearTimeout(GSCUX.noticeTimer);GSCUX.noticeTimer=null}}
+function setNotice(msg,kind='info',persistent=false,title=null){
+  const n=$('#noticeBar'),text=$('#noticeText'),head=$('#noticeTitle');if(!n||!text||!head)return;
+  clearNotice();n.className='noticebar '+(kind||'info');text.textContent=msg||'';head.textContent=title||(kind==='err'?'Error':kind==='ok'?'Done':'Status');n.classList.remove('hidden');
+  if(!persistent)GSCUX.noticeTimer=setTimeout(clearNotice,kind==='err'?9000:5000);
+}
+toast=function(msg,kind=''){setNotice(msg,kind==='err'?'err':kind==='ok'?'ok':'info',false)};
 
-  window.removeServerOnly = async function(id) {
-    const d = SERVERS.find(x => x.id === id);
-    if (!confirm(`Remove "${d?.name || id}" from GameServerControl?\n\nServer files will remain untouched.`)) return;
-    try {
-      await api(`/api/servers/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      toast('Server removed from GameServerControl. Files were kept.', 'ok');
-      closeModal();
-      await loadServers();
-    } catch (e) {
-      toast('Remove failed: ' + e.message, 'err');
-    }
-  };
+boot=async function(){
+  if(GSCUX.booted)return;GSCUX.booted=true;
+  $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
+  try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
+  await Promise.allSettled([loadServers(),refreshJobs(false)]);
+  await checkForUpdate(false);
+  setInterval(()=>loadServers(true),2000);
+  setInterval(()=>{try{const active=loadJobRefs().some(r=>!(JOB_CACHE[r.jobId]?.finished));if(CURRENT_VIEW==='installs'||active)refreshJobs(false)}catch{}},1000);
+  setInterval(()=>checkForUpdate(false),30*60*1000);
+};
 
-  window.syncPermanentDeleteButton = function(id) {
-    const d = SERVERS.find(x => x.id === id);
-    const input = $('#deleteConfirm');
-    const button = $('#permanentDeleteBtn');
-    if (button) button.disabled = !d || !input || input.value !== d.name;
-  };
+loadServers=async function(silent=false){
+  if(GSCUX.refreshing)return;GSCUX.refreshing=true;
+  try{
+    const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;
+    if(GSCUX.selected&&!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=null;
+    if(!GSCUX.selected&&SERVERS.length)GSCUX.selected=SERVERS[0].id;
+    renderServers();
+  }catch(e){if(!silent)setNotice('Refresh failed: '+e.message,'err',false)}finally{GSCUX.refreshing=false}
+};
 
-  window.permanentDeleteServer = async function(id) {
-    const d = SERVERS.find(x => x.id === id);
-    if (!d) return;
-    const confirmation = $('#deleteConfirm')?.value || '';
-    if (confirmation !== d.name) return toast('Type the exact server name first.', 'err');
-    const createFinalBackup = !!$('#deleteFinalBackup')?.checked;
-    const button = $('#permanentDeleteBtn');
-    if (button) { button.disabled = true; button.textContent = 'Deleting…'; }
-    try {
-      const result = await api(`/api/servers/${encodeURIComponent(id)}/delete-completely`, {
-        method: 'POST',
-        body: JSON.stringify({ confirmation, createFinalBackup })
-      });
-      toast(result.message || 'Server permanently deleted.', 'ok');
-      closeModal();
-      await loadServers();
-    } catch (e) {
-      toast('Permanent deletion cancelled/failed: ' + e.message, 'err');
-      if (button) { button.textContent = 'Permanently delete server and files'; syncPermanentDeleteButton(id); }
-    }
-  };
-});
+window.selectServer=function(id){GSCUX.selected=id;renderServers()};
+function actionVisual(id,actual){const a=GSCUX.actions[id];return a?.state||actual||'Unknown'}
+function stateClass(state){return state==='Running'?'up':['Starting','Stopping','Restarting','Working'].includes(state)?'warn':'down'}
+function quickTile(icon,title,desc,onclick){return `<button class="manage-tile" onclick="${onclick}"><span class="manage-icon">${icon}</span><span><b>${esc(title)}</b><small>${esc(desc)}</small></span></button>`}
+
+renderServers=function(){
+  const root=$('#servers');if(!root)return;
+  if(!SERVERS.length){root.innerHTML='<div class="empty">No servers registered yet.<br><br><button class="btn primary" onclick="openCreate()">Create your first server</button> <button class="btn" onclick="openDiscover()">Discover installed servers</button> <button class="btn" onclick="openAddExisting()">Add existing server</button></div>';return}
+  if(!GSCUX.selected||!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=SERVERS[0].id;
+  const rows=SERVERS.map(d=>{const s=STATUS[d.id]||{},m=serverMeta(d),state=actionVisual(d.id,s.processState),selected=d.id===GSCUX.selected;return `<button class="server-row ${selected?'selected':''}" onclick="selectServer('${jsq(d.id)}')"><span class="server-row-icon">${m.icon}</span><span class="server-row-main"><span class="server-row-name">${esc(d.name)}</span><span class="server-row-meta">${esc(m.label)} · ${s.pidInGuest?'PID '+s.pidInGuest:(d.hostingMode==='Vm'?'Hyper-V':'This machine')}</span></span><span class="server-row-state ${stateClass(state)}">${esc(state)}</span></button>`}).join('');
+  root.innerHTML=`<div class="server-control-layout"><aside class="server-list">${rows}</aside><div id="serverControlPanel"></div></div>`;
+  renderServerControlPanel();
+};
+
+window.renderServerControlPanel=function(){
+  const host=$('#serverControlPanel'),d=SERVERS.find(x=>x.id===GSCUX.selected);if(!host||!d)return;
+  const s=STATUS[d.id]||{},m=serverMeta(d),g=m.profile||{},caps=g.caps||{},pending=GSCUX.actions[d.id],actual=s.processState||'Unknown',display=actionVisual(d.id,actual),up=actual==='Running',busy=!!pending||['Starting','Stopping'].includes(actual);
+  let op='';if(pending){op=`<div class="operation-banner ${pending.error?'err':pending.done?'ok':''}">${pending.done||pending.error?'':'<span class="spinner"></span>'}<div><b>${esc(pending.label)}</b>${pending.detail?`<div class="tiny muted">${esc(pending.detail)}</div>`:''}</div></div>`}
+  const consoleTile=caps.console==='rcon'?(d.rconPort&&d.rconPassword?quickTile('⌨','Console','Interactive RCON console',`openConsole('${jsq(d.id)}')`):quickTile('⌨','Set up console','RCON port/password required',`openEdit('${jsq(d.id)}')`)):caps.console==='log'&&d.logPathInGuest?quickTile('▤','Live log','Follow server output live',`openLog('${jsq(d.id)}')`):'';
+  const configTile=caps.config?quickTile('⚙','Configuration','Game-specific settings',`openConfig('${jsq(d.id)}')`):'';
+  const modsTile=caps.mods?quickTile('◇','Mods','Browse, install and update',`openMods('${jsq(d.id)}')`):'';
+  const network=(typeof effectiveNetworkPorts==='function'?effectiveNetworkPorts(d):d.networkPorts||[]).map(formatNetworkPort).join(', ');
+  host.innerHTML=`<div class="server-detail-panel"><div class="server-detail-head"><div class="server-detail-icon">${m.icon}</div><div class="grow"><div class="server-detail-title">${esc(d.name)}</div><div class="server-detail-sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V virtual machine':'This machine'}</div></div><div class="server-state-large ${stateClass(display)}">${esc(display)}</div></div><div class="server-detail-body">${op}${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="control-buttons"><button class="btn primary control-btn" ${up||busy?'disabled':''} onclick="action('${jsq(d.id)}','start')">Start</button><button class="btn danger control-btn stop" ${!up||busy?'disabled':''} onclick="action('${jsq(d.id)}','stop')">Stop</button><button class="btn control-btn restart" ${!up||busy?'disabled':''} onclick="action('${jsq(d.id)}','restart')">Restart</button></div><div class="detail-metrics"><div class="metric-box"><span>PID</span><b>${s.pidInGuest??'—'}</b></div><div class="metric-box"><span>CPU</span><b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></div><div class="metric-box"><span>RAM</span><b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></div><div class="metric-box"><span>Last backup</span><b>${s.lastBackupAt?new Date(s.lastBackupAt).toLocaleString():'—'}</b></div></div><div class="quick-panel">${consoleTile}${configTile}${modsTile}${quickTile('▣','Backups','Create and restore saves',`openBackups('${jsq(d.id)}')`)}${quickTile('◎','Network','Ports and Windows Firewall',`openNetwork('${jsq(d.id)}')`)}${quickTile('⋯','More settings','Schedule, update, edit, delete…',`openManage('${jsq(d.id)}')`)}</div><div class="server-path"><div><b>Folder:</b> <span class="mono">${esc(d.guestWorkingDir||'')}</span></div>${network?`<div style="margin-top:4px"><b>Ports:</b> ${esc(network)}</div>`:''}</div></div></div>`;
+};
+
+action=async function(id,a){
+  if(GSCUX.actions[id])return;
+  const labels={start:['Starting server…','Starting'],stop:['Stopping server…','Stopping'],restart:['Restarting server…','Restarting'],backup:['Creating backup…','Working'],update:['Updating server…','Working'],apply:['Applying configuration…','Working']};
+  const spec=labels[a]||['Working…','Working'];GSCUX.selected=id;GSCUX.actions[id]={kind:a,label:spec[0],state:spec[1],detail:a==='stop'?'Waiting for the server process to exit.':a==='restart'?'Stopping first, then starting again.':''};renderServers();setNotice(spec[0],'info',true);
+  try{
+    const r=await api(`/api/servers/${encodeURIComponent(id)}/${a}`,{method:'POST'});
+    if(!r?.success)throw new Error(r?.message||`${a} failed`);
+    GSCUX.actions[id]={kind:a,label:r.message||'Completed',state:a==='stop'?'NotRunning':a==='start'||a==='restart'?'Running':'Working',done:true};
+    await loadServers(true);setNotice(r.message||`${a} completed`,'ok',false);
+    setTimeout(()=>{delete GSCUX.actions[id];renderServers()},1200);
+  }catch(e){GSCUX.actions[id]={kind:a,label:`${a} failed`,state:STATUS[id]?.processState||'Unknown',error:true,detail:e.message};renderServers();setNotice(`${a} failed: ${e.message}`,'err',false);setTimeout(()=>{delete GSCUX.actions[id];renderServers()},5000)}
+};
+</script>
+<script src="/webui/server-admin.js"></script>
+<script src="/webui/jobs-mods.js"></script>
+<script src="/webui/config-backups.js"></script>
+<script>
+/* Parallel install polling + live detail log. */
+refreshJobs=async function(render=true){
+  const refs=loadJobRefs();let active=0;
+  await Promise.all(refs.map(async r=>{try{JOB_CACHE[r.jobId]=await api('/api/servers/install/'+encodeURIComponent(r.jobId));if(!JOB_CACHE[r.jobId].finished)active++}catch{JOB_CACHE[r.jobId]={jobId:r.jobId,phase:'expired',line:'Job no longer available (Agent may have restarted).',finished:true,success:false,logLines:[]}}}));
+  const badge=$('#installBadge');if(badge){badge.textContent=active;badge.classList.toggle('hidden',active===0)}if(render||CURRENT_VIEW==='installs')renderJobs();
+};
+
+async function updateLiveJobDetail(id){
+  try{const p=await api('/api/servers/install/'+encodeURIComponent(id));JOB_CACHE[id]=p;const phase=$('#liveJobPhase'),bar=$('#liveJobBar'),line=$('#liveJobLine'),log=$('#liveJobLog'),state=$('#liveJobState');if(!log)return p;const nearBottom=log.scrollHeight-log.scrollTop-log.clientHeight<50;if(phase)phase.textContent=phaseText(p.phase||'');if(bar)bar.style.width=Math.max(0,Math.min(100,p.percentHint??0))+'%';if(line)line.textContent=p.line||'';if(state){state.textContent=p.finished?(p.success?'DONE':'FAILED'):'ACTIVE';state.className='state '+(p.success?'up':p.finished?'down':'warn')}log.textContent=(p.logLines||[]).join('\n')||'Waiting for SteamCMD output…';if(nearBottom)log.scrollTop=log.scrollHeight;return p}catch(e){const line=$('#liveJobLine');if(line)line.textContent='Log refresh failed: '+e.message;return null}}
+openJob=async function(id){
+  const r=loadJobRefs().find(x=>x.jobId===id)||{jobId:id};
+  openModal(r.name||id,`<div class="install-live-head"><div><div class="jobphase">Job ${esc(id)} · <span id="liveJobPhase">Loading</span></div><div id="liveJobLine" class="jobline" style="margin-top:5px">Loading…</div></div><div class="spacer"></div><span id="liveJobState" class="state warn">ACTIVE</span></div><div class="progress"><div id="liveJobBar" class="bar" style="width:0"></div></div><pre id="liveJobLog" class="log install-live-log">Connecting…</pre>`,`<button class="btn" onclick="closeModal()">Run in background</button>`,true);
+  let stopped=false;const tick=async()=>{if(stopped)return;const p=await updateLiveJobDetail(id);if(p?.finished&&timer){clearInterval(timer);timer=null}};let timer=setInterval(tick,650);MODAL_CLEANUP=()=>{stopped=true;if(timer)clearInterval(timer)};await tick();
+};
+
+/* Password visibility for login, RCON and every game-config Password field. */
+function enhancePasswordFields(root=document){
+  root.querySelectorAll('input[type="password"]:not([data-eye-ready])').forEach(input=>{input.dataset.eyeReady='1';const wrap=document.createElement('div');wrap.className='password-wrap';input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);const b=document.createElement('button');b.type='button';b.className='password-eye';b.textContent='◉';b.title='Show password';b.setAttribute('aria-label','Show password');b.onclick=()=>{const show=input.type==='password';input.type=show?'text':'password';b.title=show?'Hide password':'Show password';b.setAttribute('aria-label',b.title);b.textContent=show?'○':'◉'};wrap.appendChild(b)})
+}
+const baseOpenModal=openModal;openModal=function(...args){baseOpenModal(...args);enhancePasswordFields($('#modal'))};enhancePasswordFields(document);
+new MutationObserver(()=>enhancePasswordFields(document)).observe(document.body,{childList:true,subtree:true});
+
+/* Keep the complete-delete behavior introduced earlier. */
+window.deleteServer=function(id){
+  const d=SERVERS.find(x=>x.id===id);if(!d)return;const bareMetal=d.hostingMode!=='Vm',hasSaves=Array.isArray(d.saveDirs)&&d.saveDirs.length>0;
+  const permanent=bareMetal?`<div class="section">Delete server completely</div><div class="callout">This permanently stops the server and deletes the entire server folder. This cannot be undone.</div><div class="kv compact"><div>Folder to delete</div><div class="mono">${esc(d.guestWorkingDir||'')}</div></div><div class="checkrow" style="margin-top:14px"><input id="deleteFinalBackup" type="checkbox" ${hasSaves?'checked':'disabled'}><label for="deleteFinalBackup">Create a final save backup before deletion${hasSaves?'':' (no save folders configured)'}</label></div><div class="field"><label>Type the exact server name to confirm</label><input id="deleteConfirm" autocomplete="off" placeholder="${esc(d.name)}" oninput="syncPermanentDeleteButton('${jsq(id)}')"><div class="help">Required: <b>${esc(d.name)}</b></div></div><button id="permanentDeleteBtn" class="btn danger" disabled onclick="permanentDeleteServer('${jsq(id)}')">Permanently delete server and files</button>`:`<div class="section">Delete server completely</div><div class="callout info">Complete file deletion is disabled for Hyper-V servers because the server folder is inside the guest VM.</div>`;
+  openModal('Delete — '+d.name,`<div class="section">Remove from GameServerControl</div><div class="help">Removes only the server definition. All game files and saves remain untouched.</div><button class="btn" onclick="removeServerOnly('${jsq(id)}')">Remove only</button>${permanent}`,'<button class="btn" onclick="closeModal()">Cancel</button>',true)
+};
+window.removeServerOnly=async function(id){const d=SERVERS.find(x=>x.id===id);if(!confirm(`Remove "${d?.name||id}" from GameServerControl?\n\nServer files will remain untouched.`))return;try{await api(`/api/servers/${encodeURIComponent(id)}`,{method:'DELETE'});setNotice('Server removed. Files were kept.','ok');closeModal();await loadServers()}catch(e){setNotice('Remove failed: '+e.message,'err')}};
+window.syncPermanentDeleteButton=function(id){const d=SERVERS.find(x=>x.id===id),input=$('#deleteConfirm'),button=$('#permanentDeleteBtn');if(button)button.disabled=!d||!input||input.value!==d.name};
+window.permanentDeleteServer=async function(id){const d=SERVERS.find(x=>x.id===id);if(!d)return;const confirmation=$('#deleteConfirm')?.value||'';if(confirmation!==d.name)return setNotice('Type the exact server name first.','err');const createFinalBackup=!!$('#deleteFinalBackup')?.checked,button=$('#permanentDeleteBtn');if(button){button.disabled=true;button.textContent='Deleting…'}try{const result=await api(`/api/servers/${encodeURIComponent(id)}/delete-completely`,{method:'POST',body:JSON.stringify({confirmation,createFinalBackup})});setNotice(result.message||'Server permanently deleted.','ok');closeModal();await loadServers()}catch(e){setNotice('Permanent deletion cancelled/failed: '+e.message,'err');if(button){button.textContent='Permanently delete server and files';syncPermanentDeleteButton(id)}}};
 </script>
 </body>
 </html>

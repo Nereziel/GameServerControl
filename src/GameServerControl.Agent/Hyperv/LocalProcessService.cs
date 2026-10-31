@@ -8,6 +8,7 @@ namespace GameServerControl.Agent.Hyperv;
 /// </summary>
 public sealed class LocalProcessService
 {
+    private static readonly TimeSpan GracefulStopTimeout = TimeSpan.FromSeconds(8);
     private readonly ILogger<LocalProcessService> _logger;
     public LocalProcessService(ILogger<LocalProcessService> logger) { _logger = logger; }
 
@@ -124,15 +125,37 @@ public sealed class LocalProcessService
 
             if (!force)
             {
-                try { p.CloseMainWindow(); } catch { /* no UI */ }
-                var deadline = DateTime.UtcNow.AddSeconds(45);
-                while (DateTime.UtcNow < deadline && !p.HasExited)
-                    await Task.Delay(500, ct);
-                if (p.HasExited) return true;
+                var closeSignalSent = false;
+                try { closeSignalSent = p.CloseMainWindow(); } catch { /* no GUI window */ }
+
+                // Dedicated servers frequently run without a GUI window. In that case Windows has
+                // no graceful WM_CLOSE signal to deliver, so waiting for the old 45-second timeout
+                // only made Stop/Restart look broken. Wait briefly only when a real close signal was
+                // accepted; otherwise proceed to process-tree termination immediately.
+                if (closeSignalSent)
+                {
+                    var deadline = DateTime.UtcNow.Add(GracefulStopTimeout);
+                    while (DateTime.UtcNow < deadline && !p.HasExited)
+                        await Task.Delay(250, ct);
+                    if (p.HasExited) return true;
+                    _logger.LogInformation("Graceful stop timed out for pid {Pid} after {Seconds}s; terminating process tree.", p.Id, GracefulStopTimeout.TotalSeconds);
+                }
+                else
+                {
+                    _logger.LogDebug("Process {Pid} has no closeable main window; terminating process tree without waiting.", p.Id);
+                }
             }
 
-            try { p.Kill(entireProcessTree: true); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Kill failed for pid {Pid}", p.Id); return false; }
+            try
+            {
+                p.Kill(entireProcessTree: true);
+                await p.WaitForExitAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Kill failed for pid {Pid}", p.Id);
+                return false;
+            }
             return true;
         }
         catch (Exception ex)
