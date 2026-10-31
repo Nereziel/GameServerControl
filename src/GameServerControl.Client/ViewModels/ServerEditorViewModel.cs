@@ -15,7 +15,7 @@ public sealed partial class ServerEditorViewModel : ObservableObject
     [ObservableProperty] private string name = "";
     [ObservableProperty] private string vmName = "";
     [ObservableProperty] private HostingMode hostingMode = HostingMode.BareMetal;
-    [ObservableProperty] private GameType gameType = GameType.Custom;
+    [ObservableProperty] private GameType gameType = GameServerControl.Shared.GameType.Custom;
     [ObservableProperty] private string guestExePath = "";
     [ObservableProperty] private string guestWorkingDir = "";
     [ObservableProperty] private string startArgsText = "";
@@ -41,11 +41,11 @@ public sealed partial class ServerEditorViewModel : ObservableObject
         => !string.IsNullOrWhiteSpace(SelectedPresetKey)
             ? GamePresets.FindByKey(SelectedPresetKey)
             : GamePresets.All.FirstOrDefault(p => !string.IsNullOrWhiteSpace(SteamAppId) && p.SteamAppId == SteamAppId)
-              ?? GamePresets.All.FirstOrDefault(p => p.GameType == GameType && p.GameType != GameType.SteamGeneric);
+              ?? GamePresets.All.FirstOrDefault(p => p.GameType == GameType && p.GameType != GameServerControl.Shared.GameType.SteamGeneric);
 
     public bool ShowVmSettings => HostingMode == HostingMode.Vm;
-    public bool ShowRconSettings => CurrentPreset?.Capabilities.Rcon == true || GameType == GameType.Custom;
-    public bool ShowLogSettings => CurrentPreset?.Capabilities.LiveLog == true || GameType == GameType.Custom;
+    public bool ShowRconSettings => CurrentPreset?.Capabilities.Rcon == true || GameType == GameServerControl.Shared.GameType.Custom;
+    public bool ShowLogSettings => CurrentPreset?.Capabilities.LiveLog == true || GameType == GameServerControl.Shared.GameType.Custom;
     public bool ShowLifecycleSettings => HostingMode == HostingMode.BareMetal;
     public string ProfileNote => CurrentPreset?.Notes ?? "";
     public string StorageHint => CurrentPreset is { } p && p.DefaultSaveDirs.Length > 0
@@ -69,9 +69,7 @@ public sealed partial class ServerEditorViewModel : ObservableObject
         SteamAppId = discovered.SteamAppId;
 
         if (preset is not null && !string.IsNullOrEmpty(preset.DefaultWorkingDir))
-        {
             RebasePresetPaths(preset.DefaultWorkingDir, discovered.InstallPath);
-        }
 
         if (string.IsNullOrWhiteSpace(Name)) Name = discovered.DisplayName;
         Id = SlugifyName(discovered.DisplayName);
@@ -123,7 +121,6 @@ public sealed partial class ServerEditorViewModel : ObservableObject
             RconHost = "auto";
             RconPort = preset.Capabilities.Rcon && preset.DefaultRconPort is int port ? port.ToString() : "";
             if (!preset.Capabilities.Rcon) RconPassword = "";
-
             if (string.IsNullOrWhiteSpace(Name)) Name = preset.Label;
             if (!IsEdit && string.IsNullOrWhiteSpace(Id)) Id = preset.Key;
         }
@@ -150,7 +147,6 @@ public sealed partial class ServerEditorViewModel : ObservableObject
         var from = fromRoot.TrimEnd('\\', '/');
         var to = toRoot.TrimEnd('\\', '/');
         if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to) || from.Equals(to, StringComparison.OrdinalIgnoreCase)) return;
-
         StartArgsText = StartArgsText.Replace(from, to, StringComparison.OrdinalIgnoreCase);
         SaveDirsText = SaveDirsText.Replace(from, to, StringComparison.OrdinalIgnoreCase);
         LogPathInGuest = LogPathInGuest.Replace(from, to, StringComparison.OrdinalIgnoreCase);
@@ -158,8 +154,7 @@ public sealed partial class ServerEditorViewModel : ObservableObject
 
     partial void OnNameChanged(string value)
     {
-        if (!IsEdit && string.IsNullOrWhiteSpace(Id))
-            Id = SlugifyName(value);
+        if (!IsEdit && string.IsNullOrWhiteSpace(Id)) Id = SlugifyName(value);
     }
 
     private static string SlugifyName(string s)
@@ -205,15 +200,11 @@ public sealed partial class ServerEditorViewModel : ObservableObject
             VmName: HostingMode == HostingMode.Vm ? VmName?.Trim() ?? "" : "",
             GameType: GameType,
             GuestExePath: GuestExePath.Trim(),
-            GuestWorkingDir: string.IsNullOrWhiteSpace(GuestWorkingDir)
-                ? Path.GetDirectoryName(GuestExePath.Trim()) ?? ""
-                : GuestWorkingDir.Trim(),
+            GuestWorkingDir: string.IsNullOrWhiteSpace(GuestWorkingDir) ? Path.GetDirectoryName(GuestExePath.Trim()) ?? "" : GuestWorkingDir.Trim(),
             StartArgs: SplitLines(StartArgsText),
             SaveDirs: SplitLines(SaveDirsText),
             SteamAppId: string.IsNullOrWhiteSpace(SteamAppId) ? null : SteamAppId.Trim(),
-            GuestCredentialId: HostingMode == HostingMode.Vm
-                ? (string.IsNullOrWhiteSpace(GuestCredentialId) ? "default" : GuestCredentialId.Trim())
-                : null,
+            GuestCredentialId: HostingMode == HostingMode.Vm ? (string.IsNullOrWhiteSpace(GuestCredentialId) ? "default" : GuestCredentialId.Trim()) : null,
             LogPathInGuest: ShowLogSettings && !string.IsNullOrWhiteSpace(LogPathInGuest) ? LogPathInGuest.Trim() : null,
             RconHost: ShowRconSettings ? (string.IsNullOrWhiteSpace(RconHost) ? "auto" : RconHost.Trim()) : null,
             RconPort: ShowRconSettings ? rconPortVal : null,
