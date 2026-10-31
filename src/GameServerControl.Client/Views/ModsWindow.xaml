@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:GameServerControl.Client.ViewModels"
         Title="Mods"
-        Width="920" Height="680"
+        Width="980" Height="720" MinWidth="780" MinHeight="560"
         Background="{StaticResource BgBrush0}"
         Foreground="{StaticResource TextBrush}"
         TextElement.Foreground="{StaticResource TextBrush}"
@@ -27,21 +27,18 @@
             <TextBlock x:Name="ModsFolderText" FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,8,0,0" TextWrapping="Wrap"/>
         </StackPanel>
 
-        <!-- Tabs -->
         <TabControl Grid.Row="1" Background="{StaticResource BgBrush1}" BorderBrush="{StaticResource BorderBrush}">
-            <!-- =========================================================== -->
-            <!-- Browse tab: search Thunderstore                              -->
-            <!-- =========================================================== -->
+            <!-- Browse -->
             <TabItem Header="Browse">
                 <Grid Margin="8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Search box -->
-                    <Grid Grid.Row="0" Margin="0,4,0,4">
+                    <Grid Grid.Row="0" Margin="0,4,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -52,18 +49,37 @@
                                  KeyDown="SearchBox_KeyDown"/>
                         <Button Grid.Column="1" Content="Search" Style="{StaticResource ActionButton}" Click="Search_Click" Margin="8,0,0,0"/>
                     </Grid>
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
-                        <CheckBox x:Name="ShowAllCheckbox" Content="Also show mods that require client install"
-                                  Foreground="{StaticResource TextBrush}" VerticalAlignment="Center"
-                                  Checked="ShowAllChanged" Unchecked="ShowAllChanged"
-                                  ToolTip="Off (default): only show mods that work without players installing anything. On: include client-required mods, marked with a warning."/>
-                        <TextBlock x:Name="SearchSourceText" FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="16,0,0,0" VerticalAlignment="Center"/>
-                    </StackPanel>
 
-                    <!-- Search results -->
-                    <Border Grid.Row="2" Background="{StaticResource BgBrush0}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4">
+                    <WrapPanel Grid.Row="1" Margin="0,0,0,4">
+                        <CheckBox x:Name="ShowAllCheckbox" Content="Show client-required mods"
+                                  Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,18,4"
+                                  Checked="BrowseFilterChanged" Unchecked="BrowseFilterChanged">
+                            <CheckBox.ToolTip>
+                                <ToolTip MaxWidth="380">
+                                    <TextBlock TextWrapping="Wrap"
+                                               Text="Off by default: only mods marked server-side are shown. Enable this to include mods that players may also need to install on their clients."/>
+                                </ToolTip>
+                            </CheckBox.ToolTip>
+                        </CheckBox>
+                        <CheckBox x:Name="ShowDeprecatedCheckbox" Content="Show deprecated"
+                                  Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,18,4"
+                                  Checked="BrowseFilterChanged" Unchecked="BrowseFilterChanged">
+                            <CheckBox.ToolTip>
+                                <ToolTip MaxWidth="380">
+                                    <TextBlock TextWrapping="Wrap"
+                                               Text="Deprecated packages are hidden by default because they may be abandoned or replaced. Enable this only when you intentionally need an older package."/>
+                                </ToolTip>
+                            </CheckBox.ToolTip>
+                        </CheckBox>
+                    </WrapPanel>
+
+                    <TextBlock Grid.Row="2" x:Name="SearchSourceText" FontSize="11"
+                               Foreground="{StaticResource TextDimBrush}" Margin="0,0,0,8"
+                               TextWrapping="Wrap"/>
+
+                    <Border Grid.Row="3" Background="{StaticResource BgBrush0}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4">
                         <Grid>
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <ItemsControl x:Name="SearchList">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -77,38 +93,41 @@
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <!-- Icon -->
                                                     <Border Grid.Column="0" Width="56" Height="56" CornerRadius="4"
                                                             Background="{StaticResource BgBrush2}" Margin="0,0,12,0">
                                                         <Image Source="{Binding IconUrl}" Stretch="Uniform"/>
                                                     </Border>
-                                                    <!-- Info -->
-                                                    <StackPanel Grid.Column="1">
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold"/>
-                                                            <TextBlock Text="{Binding Owner, StringFormat=' by {0}'}" FontSize="12" Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center" Margin="6,2,0,0"/>
-                                                            <Border Margin="8,2,0,0" Padding="6,1" CornerRadius="3" Background="{StaticResource BgBrush2}">
+                                                    <StackPanel Grid.Column="1" MinWidth="0">
+                                                        <WrapPanel>
+                                                            <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" Margin="0,0,6,2"/>
+                                                            <TextBlock Text="{Binding Owner, StringFormat='by {0}'}" FontSize="12" Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center" Margin="0,2,8,2"/>
+                                                            <Border Margin="0,2,6,2" Padding="6,1" CornerRadius="3" Background="{StaticResource BgBrush2}">
                                                                 <TextBlock Text="{Binding Version, StringFormat=v{0}}" FontSize="11" Foreground="{StaticResource TextDimBrush}"/>
                                                             </Border>
-                                                            <Border Margin="6,2,0,0" Padding="6,1" CornerRadius="3" Background="#0F2A14"
+                                                            <Border Margin="0,2,6,2" Padding="6,1" CornerRadius="3" Background="#0F2A14"
                                                                     BorderBrush="#3FB950" BorderThickness="1"
                                                                     Visibility="{Binding ServerSideOnly, Converter={x:Static vm:BoolVisibilityConverter.Instance}}">
                                                                 <TextBlock Text="✓ server-side" FontSize="11" Foreground="#3FB950"/>
                                                             </Border>
-                                                            <Border Margin="6,2,0,0" Padding="6,1" CornerRadius="3" Background="#3A2A0D"
+                                                            <Border Margin="0,2,6,2" Padding="6,1" CornerRadius="3" Background="#3A2A0D"
                                                                     BorderBrush="#D29922" BorderThickness="1"
                                                                     Visibility="{Binding ClientRequired, Converter={x:Static vm:BoolVisibilityConverter.Instance}}">
-                                                                <TextBlock Text="⚠ needs client install" FontSize="11" Foreground="#D29922"/>
+                                                                <TextBlock Text="⚠ client required" FontSize="11" Foreground="#D29922"/>
                                                             </Border>
-                                                        </StackPanel>
-                                                        <TextBlock Text="{Binding DescriptionShort}" FontSize="12" Foreground="{StaticResource TextDimBrush}" Margin="0,4,0,0" TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="36"/>
-                                                        <TextBlock FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,4,0,0">
-                                                            <Run Text="Downloads:"/><Run Text="{Binding DownloadsLabel, Mode=OneWay}"/>
-                                                            <Run Text=" · ⭐"/><Run Text="{Binding RatingScore, Mode=OneWay}"/>
+                                                            <Border Margin="0,2,6,2" Padding="6,1" CornerRadius="3" Background="#3B1115"
+                                                                    BorderBrush="#F85149" BorderThickness="1"
+                                                                    Visibility="{Binding Deprecated, Converter={x:Static vm:BoolVisibilityConverter.Instance}}">
+                                                                <TextBlock Text="DEPRECATED" FontSize="11" FontWeight="SemiBold" Foreground="#F85149"/>
+                                                            </Border>
+                                                        </WrapPanel>
+                                                        <TextBlock Text="{Binding DescriptionShort}" FontSize="12" Foreground="{StaticResource TextDimBrush}" Margin="0,4,0,0"
+                                                                   TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="38"/>
+                                                        <TextBlock FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,4,0,0" TextWrapping="Wrap">
+                                                            <Run Text="Downloads: "/><Run Text="{Binding DownloadsLabel, Mode=OneWay}"/>
+                                                            <Run Text=" · ⭐ "/><Run Text="{Binding RatingScore, Mode=OneWay}"/>
                                                             <Run Text=" · "/><Run Text="{Binding CategoriesLabel, Mode=OneWay}"/>
                                                         </TextBlock>
                                                     </StackPanel>
-                                                    <!-- Actions -->
                                                     <StackPanel Grid.Column="2" Orientation="Vertical" VerticalAlignment="Center" Margin="12,0,0,0">
                                                         <Button Content="Install" Style="{StaticResource ActionButton}" Click="SearchInstall_Click" Tag="{Binding}" MinWidth="80"/>
                                                         <Button Content="Page" Style="{StaticResource ActionButton}" Click="OpenPage_Click" Tag="{Binding PackageUrl}" MinWidth="80" Margin="0,4,0,0"/>
@@ -123,33 +142,36 @@
                                        Text="No results. Try a different query (or empty for popular mods)."
                                        Foreground="{StaticResource TextDimBrush}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       TextWrapping="Wrap" TextAlignment="Center" Margin="24"
                                        Visibility="Collapsed"/>
                         </Grid>
                     </Border>
                 </Grid>
             </TabItem>
 
-            <!-- =========================================================== -->
-            <!-- Installed tab: list + uninstall + URL paste                   -->
-            <!-- =========================================================== -->
+            <!-- Installed -->
             <TabItem Header="Installed">
                 <Grid Margin="8">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
-                    <!-- Update toolbar -->
-                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
+
+                    <WrapPanel Grid.Row="0" Margin="0,0,0,5">
                         <Button Content="Check for updates" Style="{StaticResource ActionButton}" Click="CheckUpdates_Click"/>
-                        <Button Content="Update all" Style="{StaticResource ActionButton}" Click="UpdateAll_Click" Margin="6,0,0,0"
+                        <Button Content="Update all" Style="{StaticResource ActionButton}" Click="UpdateAll_Click" Margin="6,0,10,0"
                                 x:Name="UpdateAllBtn" IsEnabled="False"/>
-                        <TextBlock x:Name="UpdatesSummary" VerticalAlignment="Center" Margin="14,0,0,0" Foreground="{StaticResource TextDimBrush}"/>
-                    </StackPanel>
-                    <!-- Installed list -->
-                    <Border Grid.Row="1" Background="{StaticResource BgBrush0}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4">
+                        <CheckBox x:Name="UpdatesOnlyCheckbox" Content="Updates only" VerticalAlignment="Center" Margin="4,0,0,0"
+                                  Checked="UpdatesOnlyChanged" Unchecked="UpdatesOnlyChanged"/>
+                    </WrapPanel>
+                    <TextBlock Grid.Row="1" x:Name="UpdatesSummary" Margin="0,0,0,8"
+                               Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap"/>
+
+                    <Border Grid.Row="2" Background="{StaticResource BgBrush0}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4">
                         <Grid>
-                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                 <ItemsControl x:Name="ModList">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -162,19 +184,29 @@
                                                         <ColumnDefinition Width="*"/>
                                                         <ColumnDefinition Width="Auto"/>
                                                     </Grid.ColumnDefinitions>
-                                                    <StackPanel Grid.Column="0">
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <TextBlock Text="{Binding DisplayName}" FontSize="14" FontWeight="SemiBold"/>
-                                                            <TextBlock Text="{Binding Version, StringFormat=' v{0}'}" FontSize="12" Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center" Margin="6,2,0,0"/>
-                                                        </StackPanel>
-                                                        <TextBlock Text="{Binding ModId}" FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,3,0,0"/>
-                                                        <TextBlock FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,0">
+                                                    <StackPanel Grid.Column="0" MinWidth="0">
+                                                        <WrapPanel>
+                                                            <TextBlock Text="{Binding DisplayName}" FontSize="14" FontWeight="SemiBold" Margin="0,0,6,2"/>
+                                                            <TextBlock Text="{Binding Version, StringFormat='v{0}'}" FontSize="12" Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center" Margin="0,2,8,2"/>
+                                                            <Border Margin="0,2,6,2" Padding="6,1" CornerRadius="3" Background="#0F2A14"
+                                                                    BorderBrush="#3FB950" BorderThickness="1"
+                                                                    Visibility="{Binding UpdateAvailable, Converter={x:Static vm:BoolVisibilityConverter.Instance}}">
+                                                                <TextBlock Text="{Binding UpdateLabel}" FontSize="11" Foreground="#3FB950"/>
+                                                            </Border>
+                                                        </WrapPanel>
+                                                        <TextBlock Text="{Binding ModId}" FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                                                        <TextBlock FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,0" TextWrapping="Wrap">
                                                             <Run Text="{Binding SizeKb, Mode=OneWay, StringFormat={}{0} KB}"/>
-                                                            <Run Text="·"/>
+                                                            <Run Text=" · "/>
                                                             <Run Text="{Binding InstalledAtLabel, Mode=OneWay}"/>
                                                         </TextBlock>
                                                     </StackPanel>
-                                                    <Button Grid.Column="1" Content="Uninstall" Style="{StaticResource ActionButton}" VerticalAlignment="Center" Click="Uninstall_Click" Tag="{Binding ModId}"/>
+                                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0">
+                                                        <Button Content="Update" Style="{StaticResource ActionButton}" Click="UpdateOne_Click" Tag="{Binding}"
+                                                                Visibility="{Binding UpdateAvailable, Converter={x:Static vm:BoolVisibilityConverter.Instance}}" MinWidth="86"/>
+                                                        <Button Content="Uninstall" Style="{StaticResource ActionButton}" Click="Uninstall_Click" Tag="{Binding ModId}"
+                                                                MinWidth="86" Margin="0,4,0,0"/>
+                                                    </StackPanel>
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
@@ -185,15 +217,15 @@
                                        Text="No mods installed yet. Use the Browse tab to find one."
                                        Foreground="{StaticResource TextDimBrush}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       TextWrapping="Wrap" TextAlignment="Center" Margin="24"
                                        Visibility="Collapsed"/>
                         </Grid>
                     </Border>
 
-                    <!-- Power user: install from URL -->
-                    <Border Grid.Row="2" Background="{StaticResource BgBrush2}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,10,0,0">
+                    <Border Grid.Row="3" Background="{StaticResource BgBrush2}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,10,0,0">
                         <StackPanel>
                             <TextBlock Text="Advanced: install from URL" FontWeight="SemiBold" Margin="0,0,0,4"/>
-                            <TextBlock Text="For mods not on Thunderstore — paste any direct .zip URL." FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,0,0,6"/>
+                            <TextBlock Text="For mods not in the catalog — paste a direct .zip URL." FontSize="11" Foreground="{StaticResource TextDimBrush}" Margin="0,0,0,6" TextWrapping="Wrap"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -210,10 +242,8 @@
             </TabItem>
         </TabControl>
 
-        <!-- Status -->
         <TextBlock Grid.Row="2" x:Name="StatusText" Margin="0,10,0,0" Foreground="{StaticResource TextDimBrush}" TextWrapping="Wrap"/>
 
-        <!-- Footer -->
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="Refresh installed" Style="{StaticResource ActionButton}" Click="Refresh_Click"/>
             <Button Content="Close" Style="{StaticResource ActionButton}" Click="Close_Click"/>
