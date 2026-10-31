@@ -27,11 +27,13 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
+      # RID-specific publish needs its own restore/build graph. A plain AnyCPU build
+      # does not produce net8.0/win-x64 assets, so do not use --no-build here.
       - name: Publish agent (win-x64)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained false -o publish/Agent-windows --no-build
+        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained false -o publish/Agent-windows
 
       - name: Publish client (win-x64)
-        run: dotnet publish src/GameServerControl.Client -c Release -r win-x64 --self-contained false -o publish/Client-windows --no-build
+        run: dotnet publish src/GameServerControl.Client -c Release -r win-x64 --self-contained false -o publish/Client-windows
 
       - name: Upload Windows agent
         uses: actions/upload-artifact@v4
@@ -72,8 +74,9 @@ jobs:
       - name: Build Agent (Release)
         run: dotnet build src/GameServerControl.Agent -c Release --no-restore
 
+      # Same as Windows: linux-x64 needs a RID-specific restore/build graph.
       - name: Publish agent (linux-x64)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained false -o publish/Agent-linux --no-build
+        run: dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained false -o publish/Agent-linux
 
       - name: Stage deploy artifacts alongside agent
         run: |
