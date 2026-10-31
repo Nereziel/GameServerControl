@@ -1,4 +1,4 @@
-# GameServerControl — Windows installer / updater (Agent + API + Web UI only).
+# GameServerControl — Windows installer / updater (Agent + API + Web UI + optional tray helper).
 #
 # Run from an elevated PowerShell:
 #   iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1 | iex
@@ -9,7 +9,8 @@
 #   $env:GSC_REPO       — owner/name (default: Nereziel/GameServerControl)
 #   $env:GSC_INSTALL    — install root (default: C:\GameServerControl)
 #   $env:GSC_VERSION    — pin a tag like v1.1.0 (default: latest)
-#   $env:GSC_SILENT_UPDATE — when set, skip interactive shortcut/token output
+#   $env:GSC_SILENT_UPDATE — when set, skip interactive shortcut/token/tray replacement output
+#   $env:GSC_FROM_TRAY  — internal: updater was started by the tray helper
 
 #Requires -RunAsAdministrator
 
@@ -28,10 +29,13 @@ if (-not $isElevated) {
 $repo      = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl' }
 $installRt = if ($env:GSC_INSTALL) { $env:GSC_INSTALL } else { 'C:\GameServerControl' }
 $agentDir  = Join-Path $installRt 'Agent'
+$trayDir   = Join-Path $installRt 'Tray'
+$trayExe   = Join-Path $trayDir 'GameServerControl.Tray.exe'
 $legacyClientDir = Join-Path $installRt 'Client'
 $pinnedTag = $env:GSC_VERSION
 $svcName   = 'GameServerControlAgent'
 $silentUpdate = -not [string]::IsNullOrWhiteSpace($env:GSC_SILENT_UPDATE)
+$fromTray = -not [string]::IsNullOrWhiteSpace($env:GSC_FROM_TRAY)
 
 function Write-Step($msg) { Write-Host ''; Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
@@ -42,7 +46,8 @@ Write-Host ''
 Write-Host 'GameServerControl installer (Windows)'
 Write-Host '-------------------------------------'
 Write-Host "Repository: $repo"
-Write-Ok 'Web-only architecture: Agent + API + browser UI.'
+Write-Ok 'Web-only administration: Agent + API + browser UI.'
+Write-Ok 'Optional tray helper provides quick local service controls.'
 Write-Ok 'Self-contained release — system .NET runtime is not required.'
 
 Write-Step 'Resolving release from GitHub'
@@ -58,6 +63,8 @@ Write-Ok "Tag: $($release.tag_name)  ·  Published: $($release.published_at)"
 
 $asset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Agent-windows.zip' } | Select-Object -First 1
 if (-not $asset) { throw 'Release asset not found: GameServerControl-Agent-windows.zip' }
+$trayAsset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Tray-windows.zip' } | Select-Object -First 1
+$installTray = (-not $silentUpdate) -and ($null -ne $trayAsset)
 
 Write-Step 'Downloading Agent + Web UI'
 $tmpRoot = Join-Path $env:TEMP "gsc-install-$(Get-Random -Maximum 99999)"
@@ -65,6 +72,16 @@ New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
 $agentZip = Join-Path $tmpRoot 'agent.zip'
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $agentZip
 Write-Ok 'Agent package downloaded.'
+
+$trayZip = Join-Path $tmpRoot 'tray.zip'
+if ($installTray) {
+    Invoke-WebRequest -Uri $trayAsset.browser_download_url -OutFile $trayZip
+    Write-Ok 'Tray helper package downloaded.'
+} elseif (-not $trayAsset) {
+    Write-Warn2 'This release has no Windows tray helper asset; Agent installation will continue without it.'
+} elseif ($silentUpdate) {
+    Write-Skip 'Silent Agent update: keeping the currently running tray helper untouched.'
+}
 
 $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if ($svc -and $svc.Status -eq 'Running') {
@@ -116,6 +133,17 @@ if (Test-Path $legacyClientDir) {
     } catch { Write-Warn2 "Could not fully remove legacy client: $_" }
 }
 
+if ($installTray) {
+    Write-Step "Installing tray helper to $trayDir"
+    Get-Process -Name 'GameServerControl.Tray' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 400
+    if (Test-Path $trayDir) { Remove-Item $trayDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $trayDir | Out-Null
+    Expand-Archive -Path $trayZip -DestinationPath $trayDir -Force
+    if (-not (Test-Path $trayExe)) { throw "Tray executable missing after extraction: $trayExe" }
+    Write-Ok "Tray helper: $trayExe"
+}
+
 Write-Step 'SteamCMD'
 $steamCmdDir = Join-Path $agentDir 'SteamCMD'
 $steamCmdExe = Join-Path $steamCmdDir 'steamcmd.exe'
@@ -158,24 +186,44 @@ try {
 } catch { Write-Warn2 "Could not set optional service metadata/recovery: $_" }
 
 # This helper lives outside Agent so the service can replace its own directory safely.
+# When called from Tray, a non-elevated parent waits for the elevated installer and then
+# starts the new Tray binary again at normal user integrity.
 $updateHelper = Join-Path $installRt 'Update-GameServerControl.ps1'
 $updateHelperContent = @'
-param([switch]$Silent)
+param([switch]$Silent, [switch]$FromTray)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
+
 if (-not $isElevated) {
-    $extra = if ($Silent) { ' -Silent' } else { '' }
-    Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`"$extra"
-    exit
+    $flags = @()
+    if ($Silent) { $flags += '-Silent' }
+    if ($FromTray) { $flags += '-FromTray' }
+    $flagText = $flags -join ' '
+    try {
+        $p = Start-Process powershell.exe -Verb RunAs -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $flagText"
+    } catch { exit 1 }
+    $p.WaitForExit()
+
+    if ($FromTray) {
+        $trayExe = Join-Path (Split-Path $PSCommandPath -Parent) 'Tray\GameServerControl.Tray.exe'
+        if (Test-Path $trayExe) {
+            Start-Process -FilePath $trayExe -ArgumentList '--url', 'http://localhost:5099/'
+        }
+    } elseif (-not $Silent) {
+        Write-Host ''
+        Read-Host 'Update finished. Press Enter to close'
+    }
+    exit $p.ExitCode
 }
+
 if ($Silent) { $env:GSC_SILENT_UPDATE = '1'; Start-Sleep -Seconds 3 }
+if ($FromTray) { $env:GSC_FROM_TRAY = '1'; Start-Sleep -Seconds 2 }
 $repo = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl' }
 $env:GSC_REPO = $repo
 $installer = "https://raw.githubusercontent.com/$repo/main/deploy/windows/install.ps1"
 Invoke-WebRequest -Uri $installer -UseBasicParsing | Invoke-Expression
-if (-not $Silent) { Write-Host ''; Read-Host 'Update finished. Press Enter to close' }
 '@
 Set-Content -LiteralPath $updateHelper -Value $updateHelperContent -Encoding UTF8
 Write-Ok "Updater helper: $updateHelper"
@@ -211,9 +259,27 @@ IconIndex=0
     $upd.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$updateHelper`""
     $upd.WorkingDirectory = $installRt
     $upd.IconLocation = "$svcExePath,0"
-    $upd.Description = 'Update GameServerControl Agent/API/Web UI'
+    $upd.Description = 'Update GameServerControl Agent/API/Web UI/Tray'
     $upd.Save()
     Write-Ok "Updater shortcut: $updateShortcutPath"
+
+    if (Test-Path $trayExe) {
+        Write-Step 'Configuring tray helper autostart'
+        $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+        New-Item -Path $runKey -Force | Out-Null
+        Set-ItemProperty -Path $runKey -Name 'GameServerControlTray' -Value "`"$trayExe`" --url `"http://localhost:5099/`""
+        Write-Ok 'Tray helper will start when this user signs in.'
+
+        if (-not $fromTray) {
+            try {
+                Get-Process -Name 'GameServerControl.Tray' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+                Start-Process -FilePath $trayExe -ArgumentList '--url', 'http://localhost:5099/'
+                Write-Ok 'Tray helper started.'
+            } catch { Write-Warn2 "Could not start tray helper now: $_" }
+        } else {
+            Write-Skip 'Tray update: non-elevated updater parent will restart the tray helper.'
+        }
+    }
 
     Write-Step 'Reading the persisted API token'
     try {
@@ -234,4 +300,5 @@ Write-Host "Installed $($release.tag_name)."
 Write-Host "  Service: $svcName"
 Write-Host '  Web UI:  http://localhost:5099/'
 Write-Host "  Config:  $appSettings"
+if (Test-Path $trayExe) { Write-Host "  Tray:    $trayExe" }
 Write-Host ''
