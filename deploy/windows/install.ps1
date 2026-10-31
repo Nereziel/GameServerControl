@@ -11,9 +11,10 @@
 #   5. Extracts agent to C:\GameServerControl\Agent, client to C:\GameServerControl\Client.
 #   6. Preserves existing appsettings.json + servers.json + tokens.json (treats them as user data).
 #   7. Creates appsettings.json from the shipped example on first install.
-#   8. Registers + starts the Windows service.
-#   9. Creates / refreshes a desktop shortcut pointing at the new client exe.
-#  10. Prints the persisted API token from appsettings.json.
+#   8. Ensures a private SteamCMD is available and stores Agent:SteamCmdPath.
+#   9. Registers + starts the Windows service.
+#  10. Creates / refreshes a desktop shortcut pointing at the new client exe.
+#  11. Prints the persisted API token from appsettings.json.
 #
 # Override variables (set before piping into iex):
 #   $env:GSC_REPO       — owner/name (default: Nereziel/GameServerControl)
@@ -149,6 +150,35 @@ if (-not (Test-Path $appSettings)) {
     }
 }
 Write-Ok "Agent unpacked."
+
+# ---- Private SteamCMD ----
+# Server creation already knows how to bootstrap SteamCMD itself, but the legacy update path
+# reads Agent:SteamCmdPath. Install a private copy up front so updates also work immediately,
+# including for servers discovered on disk rather than installed through GSC.
+Write-Step "SteamCMD"
+$steamCmdDir = Join-Path $agentDir 'SteamCMD'
+$steamCmdExe = Join-Path $steamCmdDir 'steamcmd.exe'
+if (-not (Test-Path $steamCmdExe)) {
+    New-Item -ItemType Directory -Force -Path $steamCmdDir | Out-Null
+    $steamZip = Join-Path $tmpRoot 'steamcmd.zip'
+    Invoke-WebRequest -Uri 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip' -OutFile $steamZip
+    Expand-Archive -Path $steamZip -DestinationPath $steamCmdDir -Force
+    if (-not (Test-Path $steamCmdExe)) { throw "SteamCMD extraction completed but steamcmd.exe is missing: $steamCmdExe" }
+    Write-Ok "SteamCMD installed to $steamCmdExe"
+} else {
+    Write-Ok "SteamCMD already present."
+}
+
+try {
+    $cfgObj = Get-Content -LiteralPath $appSettings -Raw | ConvertFrom-Json
+    if (-not $cfgObj.Agent) { throw "Agent section missing in appsettings.json" }
+    $cfgObj.Agent | Add-Member -NotePropertyName 'SteamCmdPath' -NotePropertyValue $steamCmdExe -Force
+    $cfgObj.Agent | Add-Member -NotePropertyName 'Repo' -NotePropertyValue $repo -Force
+    $cfgObj | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $appSettings -Encoding UTF8
+    Write-Ok "Configured Agent:SteamCmdPath."
+} catch {
+    throw "Failed to update $appSettings with SteamCMD path: $_"
+}
 
 Write-Step "Installing client to $clientDir"
 if (Test-Path $clientDir) { Remove-Item $clientDir -Recurse -Force }
