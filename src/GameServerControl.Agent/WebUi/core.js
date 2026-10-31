@@ -5,7 +5,7 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 let CFG={url:'',token:''};
 let SERVERS=[],STATUS={},CURRENT_VIEW='servers',JOB_CACHE={},MOD_CTX=null,MOD_RESULTS=[],MOD_UPDATES=[],MODAL_CLEANUP=null;
-let GAMES=[],UPDATE_STATUS=null;
+let PROFILES=[],GAMES=[],UPDATE_STATUS=null;
 const CFG_KEY='gsc.connection.v2';
 
 function toast(msg,kind=''){
@@ -45,7 +45,8 @@ function profileToGame(p){
 
 async function loadProfiles(){
   const profiles=await api('/api/game-profiles');
-  GAMES=(profiles||[]).filter(p=>p.installable).map(profileToGame);
+  PROFILES=(profiles||[]).map(profileToGame);
+  GAMES=PROFILES.filter(g=>g.installable);
   if(!GAMES.length)throw new Error('Agent returned no installable game profiles.');
 }
 
@@ -80,7 +81,7 @@ window.addEventListener('DOMContentLoaded',init);
 
 async function refreshAll(){await Promise.allSettled([loadServers(),refreshJobs(false),checkForUpdate(false)])}
 async function loadServers(){try{const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;renderServers()}catch(e){toast('Refresh failed: '+e.message,'err')}}
-function profileFor(d){return GAMES.find(g=>g.appId&&g.appId===d.steamAppId)||null}
+function profileFor(d){return PROFILES.find(g=>g.appId&&g.appId===d.steamAppId)||PROFILES.find(g=>g.gameType===d.gameType&&g.gameType!=='SteamGeneric')||null}
 function serverMeta(d){const g=profileFor(d);return g?{icon:g.icon,label:g.label,profile:g}:{icon:'🖥',label:d.gameType||'Server',profile:{caps:{}}}}
 
 function renderServers(){
