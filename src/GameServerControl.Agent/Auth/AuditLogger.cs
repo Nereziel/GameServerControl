@@ -1,4 +1,5 @@
 using System.Text.Json;
+using GameServerControl.Agent.Servers;
 
 namespace GameServerControl.Agent.Auth;
 
@@ -65,18 +66,74 @@ public sealed class AuditLogger
 /// <summary>
 /// ASP.NET Core middleware that pipes every API response into the audit log.
 /// Registered after Authorization so we only log authenticated requests.
+///
+/// The complete-server deletion endpoint is intentionally implemented here rather
+/// than as a broad filesystem endpoint. RoleEnforcementMiddleware has already
+/// required an Admin token before this middleware runs, and the action is audited
+/// exactly like every other mutation.
 /// </summary>
 public sealed class AuditMiddleware
 {
+    private const string DeletePrefix = "/api/servers/";
+    private const string DeleteSuffix = "/delete-completely";
+
     private readonly RequestDelegate _next;
     private readonly AuditLogger _log;
     public AuditMiddleware(RequestDelegate next, AuditLogger log) { _next = next; _log = log; }
 
     public async Task InvokeAsync(HttpContext ctx)
     {
-        await _next(ctx);
-        // Only audit /api/* paths and only when the user passed auth (else status 401 already).
+        if (TryGetCompleteDeleteServerId(ctx, out var id))
+            await HandleCompleteDeleteAsync(ctx, id!);
+        else
+            await _next(ctx);
+
+        // Only audit /api/* paths and only when the user passed auth/role checks.
         if (ctx.Request.Path.StartsWithSegments("/api"))
             _log.Record(ctx, ctx.Response.StatusCode);
+    }
+
+    private static bool TryGetCompleteDeleteServerId(HttpContext ctx, out string? id)
+    {
+        id = null;
+        if (!HttpMethods.IsPost(ctx.Request.Method)) return false;
+        var path = ctx.Request.Path.Value ?? "";
+        if (!path.StartsWith(DeletePrefix, StringComparison.OrdinalIgnoreCase) ||
+            !path.EndsWith(DeleteSuffix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var encoded = path.Substring(DeletePrefix.Length, path.Length - DeletePrefix.Length - DeleteSuffix.Length).Trim('/');
+        if (string.IsNullOrWhiteSpace(encoded) || encoded.Contains('/')) return false;
+        id = Uri.UnescapeDataString(encoded);
+        return true;
+    }
+
+    private static async Task HandleCompleteDeleteAsync(HttpContext ctx, string id)
+    {
+        DeleteServerRequest? request;
+        try
+        {
+            request = await ctx.Request.ReadFromJsonAsync<DeleteServerRequest>(cancellationToken: ctx.RequestAborted);
+        }
+        catch (JsonException)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await ctx.Response.WriteAsJsonAsync(new DeleteServerResult(false, "invalid_request", "Invalid JSON request."), ctx.RequestAborted);
+            return;
+        }
+
+        if (request is null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await ctx.Response.WriteAsJsonAsync(new DeleteServerResult(false, "invalid_request", "Request body is required."), ctx.RequestAborted);
+            return;
+        }
+
+        var service = ActivatorUtilities.CreateInstance<ServerDeletionService>(ctx.RequestServices);
+        var result = await service.DeleteCompletelyAsync(id, request, ctx.RequestAborted);
+        ctx.Response.StatusCode = result.Success
+            ? StatusCodes.Status200OK
+            : result.Code == "not_found" ? StatusCodes.Status404NotFound : StatusCodes.Status400BadRequest;
+        await ctx.Response.WriteAsJsonAsync(result, ctx.RequestAborted);
     }
 }
