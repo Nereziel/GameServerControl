@@ -54,10 +54,12 @@ builder.Services.AddSingleton<ValheimConfig>();
 builder.Services.AddSingleton<PalworldConfig>();
 builder.Services.AddSingleton<WindroseConfig>();
 builder.Services.AddSingleton<SatisfactoryConfig>();
+builder.Services.AddSingleton<DragonwildsConfig>();
 builder.Services.AddSingleton<GameServerControl.Agent.Admin.SatisfactoryAdminClient>();
 // Dynamic auto-discovery extensions (one per game). Inject as IEnumerable in consumers.
 builder.Services.AddSingleton<IDynamicSchemaExtension, PalworldDynamicSchema>();
 builder.Services.AddSingleton<IDynamicSchemaExtension, SatisfactoryDynamicSchema>();
+builder.Services.AddSingleton<IDynamicSchemaExtension, DragonwildsDynamicSchema>();
 // Discovery is cross-platform: probes Windows registry on Windows, Linux Steam paths on Linux.
 builder.Services.AddSingleton<GameServerControl.Agent.Discovery.SteamLibraryReader>();
 builder.Services.AddSingleton<GameServerControl.Agent.Discovery.ServerDiscoveryService>();
@@ -325,6 +327,8 @@ static string ModUnsupportedReason(ServerDef def) => def.SteamAppId switch
                  "PalServer\\Pal\\Binaries\\Win64\\. Follow Palguard's README on GitHub.",
     "4129620" => "Windrose's modding ecosystem is still developing — no community marketplace yet. " +
                  "Watch the official Windrose Discord for emerging tools.",
+    "4019830" => "RuneScape: Dragonwilds does not have a supported centralized mod marketplace in GameServerControl yet. " +
+                 "Manage server-side mods manually for now.",
     "2430930" => "ARK: Survival Ascended distributes mods through Steam Workshop, not Thunderstore. " +
                  "Workshop-based mod management isn't wired into the dashboard yet.",
     "376030"  => "ARK: Survival Evolved distributes mods through Steam Workshop, not Thunderstore. " +
