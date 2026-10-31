@@ -1,130 +1,258 @@
 # GameServerControl
 
-I host game servers for me and a few friends. After getting fed up with SSH and steamcmd for the hundredth time, I built this.
+Self-hosted game-server control plane with an ASP.NET Core agent, a Windows WPF client, and a Cloudflare Worker web dashboard.
 
-It's a service you install on the machine your game servers live on. You point a browser at it (or the Windows desktop client) and you get a dashboard for everything: install new servers, start/stop them, browse mods, manage RCON, take backups, schedule maintenance, see when something's crashed.
+The agent manages dedicated servers on Windows, Linux, and macOS. It can install Steam dedicated servers with SteamCMD, discover existing installations, start/stop/restart processes, create backups, schedule maintenance, edit supported game configuration, manage selected mod ecosystems, use RCON where implemented, and send Discord lifecycle notifications.
 
-Right now it handles Valheim, RuneScape: Dragonwilds, Satisfactory, Palworld, ARK Survival Ascended, ARK Survival Evolved, Rust, V Rising, Conan Exiles, Squad, Soulmask, 7 Days to Die, Terraria, Don't Starve Together, Project Zomboid, Minecraft Java, and Windrose. Adding more is a couple files of work, see the bottom of this doc.
+This fork is maintained at `Nereziel/GameServerControl` and carries additional deployment hardening plus RuneScape: Dragonwilds support.
 
-The agent itself runs on Windows, Linux, and macOS. The desktop client is Windows-only (it's WPF, sorry). Everyone else uses the browser UI which works on phones too.
+## Supported games
 
-MIT licensed. Meant to live behind Tailscale or a LAN. There's HTTPS with a self-signed cert and a random API token, but don't expose the port to the public internet expecting that to be enough.
+Current presets include:
 
-## Install
+- Valheim
+- RuneScape: Dragonwilds
+- Satisfactory
+- Palworld
+- ARK: Survival Ascended
+- ARK: Survival Evolved
+- Rust
+- V Rising
+- Conan Exiles
+- Squad
+- Soulmask
+- 7 Days to Die
+- Terraria
+- Don't Starve Together
+- Project Zomboid
+- Minecraft Java
+- Windrose
 
-Re-run the same command later to upgrade. The scripts grab .NET 8 if you don't have it, fetch the latest release, set up the right service flavor, and keep your config files across upgrades.
+Not every game has every integration. Install/start/stop/update/backup support is broader than config editing, RCON, or mod-marketplace support.
 
-Windows, admin PowerShell:
+## Architecture
 
-    iwr https://raw.githubusercontent.com/tyrus2244/GameServerControl/main/deploy/windows/install.ps1 | iex
+For a private LAN/Tailscale deployment the desktop client can connect directly to an agent.
 
-If you only want the desktop client (no admin, no service):
+For Internet-facing web administration, this fork uses a Cloudflare Worker as the public frontend and API boundary:
 
-    iwr https://raw.githubusercontent.com/tyrus2244/GameServerControl/main/deploy/windows/install-client.ps1 | iex
+```text
+Browser
+  -> Cloudflare Worker (static dashboard + /api proxy)
+  -> HTTPS VPS gateway
+  -> Tailscale
+  -> GameServerControl Agent
+  -> dedicated game server
+```
 
-Linux:
+The GameServerControl bearer token is stored as a Cloudflare Worker secret and is not exposed to browser JavaScript. The VPS gateway is expected to validate a second gateway secret before forwarding requests over Tailscale. The GSC agent port itself should not be publicly forwarded.
 
-    curl -fsSL https://raw.githubusercontent.com/tyrus2244/GameServerControl/main/deploy/linux/install-from-release.sh | sudo bash
+See [`worker/README.md`](worker/README.md) for the Worker/gateway contract.
 
-macOS:
+## Windows install
 
-    curl -fsSL https://raw.githubusercontent.com/tyrus2244/GameServerControl/main/deploy/macos/install-from-release.sh | bash
+A release must exist before using the one-line installer, because the installer downloads the release artifacts rather than building from source.
 
-The agent prints a generated API token to the log on first boot. Paste it into the client or the browser UI when prompted.
+Run from an elevated PowerShell:
 
-## Screenshots
+```powershell
+iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1 | iex
+```
 
-<p align="center"><img src="docs/screenshots/dashboard.png"     width="800"/></p>
-<p align="center"><img src="docs/screenshots/create-wizard.png" width="800"/></p>
-<p align="center"><img src="docs/screenshots/mods-window.png"   width="800"/></p>
-<p align="center"><img src="docs/screenshots/players.png"       width="800"/></p>
-<p align="center"><img src="docs/screenshots/web-ui.png"        width="800"/></p>
+The installer:
 
-## How it works
+- installs the .NET 8 Desktop Runtime when required,
+- downloads the Windows agent and client from the latest `Nereziel/GameServerControl` release,
+- preserves `appsettings.json`, `servers.json`, and `tokens.json` during upgrades,
+- creates `appsettings.json` from the shipped template on first install,
+- installs a private SteamCMD copy for reliable game updates,
+- registers and starts the Windows service,
+- creates the desktop-client shortcut,
+- prints the persisted first-run API token.
 
-The Create Server button is the part I'm most happy with. You pick a game from a list, give it a path to install to, and the agent handles the rest. If steamcmd isn't on the box it downloads it. Then it runs `+login anonymous +force_install_dir <path> +app_update <appid> validate` and parses the progress percentage out of steamcmd's output so the bar actually moves. When it finishes the server is registered with default args, save dirs, and exe path, ready to start.
+Client only:
 
-If you've already got servers set up the old-fashioned way, the Discover button scans Steam libraries (via `libraryfolders.vdf` and `appmanifest_*.acf`) plus a handful of common paths like `C:\GameServers`, `~/gameservers`, `/srv/gameservers`, and `~/Library/Application Support/Steam` on Mac. Anything it finds that isn't already registered shows up with an Add button. There's also a plain manual Add for stuff Discover doesn't catch.
+```powershell
+iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install-client.ps1 | iex
+```
 
-The mod browser has different backends per game because every game's mod scene is different. Valheim pulls from Thunderstore. Satisfactory uses ficsit.app's GraphQL API. ARK does Workshop installs through steamcmd, you paste a workshop URL or ID. Palworld has a curated list because the Palworld mod ecosystem mostly lives on GitHub Releases instead of a single marketplace. Windrose has no community marketplace yet so the Mods tab just says so. By default the browser filters to server-side mods so your players don't have to install anything themselves. Thunderstore dependencies resolve automatically, and there's a Check Updates button that compares installed versions against the marketplace.
+## Linux install
 
-Backups for bare-metal installs are zip archives of the save directories. For VMs it uses Hyper-V checkpoints. Restoring takes a safety snapshot of the current state first so a bad restore is recoverable. Scheduled maintenance has three buttons: daily restart, weekly steamcmd update, hourly backup. On Windows that drives Task Scheduler. On Linux you do the same thing yourself with a systemd timer (recipe in the wiki). On macOS you use a LaunchAgent with a calendar interval.
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/linux/install-from-release.sh | sudo bash
+```
 
-RCON is the feature I use most. The Players window shows who's online, refreshes every 10 seconds, has kick/ban/broadcast buttons. Source-engine RCON for Palworld, with a pluggable interface for other dialects. There's a separate Console window if you want to type raw RCON commands.
+The Linux installer uses a dedicated `gsc` service account by default and installs a private SteamCMD copy.
 
-If a server goes from Running to NotRunning without you clicking Stop, the agent counts that as a crash and posts to a Discord webhook if you've configured one for that server.
+## macOS install
 
-You can connect to multiple agents from the same dashboard. Settings holds a list of agent URLs and tokens. Servers from every agent merge into one list, each card shows which host owns it, and actions route to the right agent automatically.
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/macos/install-from-release.sh | bash
+```
 
-Tokens live in `tokens.json` next to `servers.json` on the agent. Two roles, Admin and ReadOnly. Anything that mutates state needs Admin. The Tokens window in the client manages them.
+The macOS agent runs as a user-scoped LaunchAgent.
 
-## Docker
+## Agent defaults and security
 
-There's a Dockerfile and a docker-compose example under `deploy/docker/`. The image is the agent only (no desktop client, you wouldn't run WPF in a container anyway). It auto-downloads steamcmd into the container on first install, so the host doesn't need it.
+The default listener is intentionally loopback-only:
 
-To run with compose:
+```text
+http://127.0.0.1:5099
+```
 
-    cd deploy/docker
-    docker compose up -d
+Change `Agent:Bind` only when the agent must be reachable directly on a LAN or Tailnet. Do not bind it to a public-facing interface without an appropriate private network/reverse-proxy design.
 
-Three bind mounts get exposed by the compose file:
+On first boot the placeholder API token is replaced with a cryptographically random token and persisted to `appsettings.json`. Additional Admin/ReadOnly tokens can be managed through the token API/client. Write operations require an Admin token.
 
-    ./data/config        agent config (appsettings.json, servers.json, tokens.json, SteamCMD cache)
-    ./data/gameservers   where Create Server installs land. Point this at a big disk.
-    ./data/backups       zip backups
+Optional HTTPS uses a generated self-signed certificate whose SANs are derived from the current host rather than a fixed Tailscale address.
 
-Adjust the paths to wherever you want them on your host. Port 5099 is forwarded by default.
+## Cloudflare Worker dashboard
 
-The container image isn't published to a registry yet, you build it locally. If you want it on Docker Hub or ghcr let me know.
+The Worker project lives in `worker/` and uses Node.js 24 + Wrangler.
 
-## Stuff that isn't there yet
+```bash
+cd worker
+npm install
+npm run dev
+```
 
-VM hosting is Windows-only because Hyper-V is Windows-only. Linux and Mac users just use bare-metal mode, which is what most people want anyway.
+Deployment requires these Worker secrets:
 
-No native client on Mac or Linux. The browser UI covers it. Open to a contributor doing an Avalonia or MAUI port if anyone really wants one.
+```text
+GATEWAY_BASE_URL
+GATEWAY_SECRET
+WINDOWS_AGENT_TOKEN
+```
 
-The Discord webhook is fire-and-forget. If Discord is down when a crash happens the event is lost, not retried.
+The initial Worker dashboard supports status polling and the common Start, Stop, Restart, Backup, and Update actions for the Windows node. The backend route format is `/api/windows/...`; adding an Ubuntu node later follows the same model with a separate agent token and VPS route.
 
-The in-app update banner notifies you when there's a new release but doesn't self-update. Auto-replacing a running service is a footgun I didn't want to ship.
+Cloudflare Access should protect the Worker/custom domain before it is used as a public administration panel.
 
-ARK ASA is fifty gigabytes. Plan your disk before clicking Install.
+## RuneScape: Dragonwilds
 
-## Platforms
+Dragonwilds dedicated-server support uses SteamCMD App ID `4019830`.
 
-Agent runs on Windows, Linux, and macOS (Apple Silicon and Intel). Desktop client only runs on Windows. Hyper-V mode only on Windows. Everything else is the same across all three.
+Windows preset:
 
-On Windows the agent is a regular Windows service. On Linux it's a systemd unit. On macOS it's a per-user LaunchAgent in `~/Library/LaunchAgents`, which means you'll want auto-login enabled on a headless Mac so it starts on boot.
+```text
+Executable: RSDragonwilds.exe
+Arguments:  -log -NewConsole
+Saves:      RSDragonwilds\Saved\Savegames
+Config:     RSDragonwilds\Saved\Config\WindowsServer\DedicatedServer.ini
+Log:        RSDragonwilds\Saved\Logs\RSDragonwilds.log
+```
+
+The config editor handles these values while preserving unknown keys in the INI file:
+
+```text
+OwnerId
+ServerName
+DefaultWorldName
+AdminPassword
+WorldPassword
+```
+
+Stop Dragonwilds before changing its dedicated-server configuration because the game can rewrite the file while running.
+
+## SteamCMD installation and update
+
+Create Server uses `SteamCmdManager`, which can locate or download SteamCMD automatically. Release installers also establish a stable SteamCMD path so an existing/discovered server can use the Update action immediately.
+
+After a new Steam installation completes, the agent verifies that the expected server executable actually exists before registering the server. This prevents a stale game preset from being reported as a successful install.
+
+## Discovery
+
+The agent scans Steam libraries and common server roots. On Windows these include locations such as:
+
+```text
+C:\GameServers
+D:\GameServers
+C:\Servers
+D:\Servers
+```
+
+Linux/macOS have corresponding common server paths. Already configured installations are marked so they are not accidentally registered twice.
+
+## Backups
+
+Bare-metal backups are ZIP archives of each server's configured save directories. Backup retention is configurable and defaults to keeping the newest ten archives. Restore creates a pre-restore safety backup before replacing save files.
+
+Hyper-V-hosted servers use VM checkpoints instead of ZIP backups.
+
+## Mods
+
+Mod support is game-specific rather than pretending every ecosystem behaves the same way. Current code contains managers/integrations for Valheim/BepInEx/Thunderstore, Satisfactory, Palworld curated sources, and ARK Workshop scenarios. Games without a registered manager return an explicit unsupported reason instead of silently pretending installation succeeded.
+
+Dragonwilds currently has no dedicated mod-manager integration in this fork.
+
+## RCON
+
+RCON is implemented behind a pluggable interface. Palworld/Source-style RCON is currently integrated; other games can add their own dialect without changing the dashboard contract.
+
+## Multiple instances
+
+Bare-metal process detection prefers an exact executable path. If multiple same-name server processes exist and an exact path cannot be established, the agent refuses to guess rather than targeting an arbitrary instance.
+
+## CI and releases
+
+GitHub Actions builds/publishes Windows and Linux artifacts on normal CI. The release workflow additionally builds macOS artifacts and attaches the platform packages to tagged GitHub releases.
+
+GitHub Actions use Node 24-compatible action versions. Cloudflare Worker validation uses Node.js 24 and performs a Wrangler dry-run build.
+
+Dependabot is intentionally conservative:
+
+- NuGet minor/patch updates are grouped.
+- NuGet major updates are ignored until an explicit framework migration is planned.
+- Worker npm minor/patch updates are grouped; npm major updates are ignored.
+- GitHub Actions updates are grouped and still have to pass CI.
+
+## Development
+
+Requires .NET 8 SDK.
+
+```bash
+dotnet restore
+dotnet build -c Release
+```
+
+The desktop client targets `net8.0-windows` and is Windows-only. The agent targets `net8.0` and is cross-platform.
 
 ## Adding a game
 
-Three pieces, in order of effort:
+For a basic Windows preset, add it to:
 
-Add a row to `Shared/GamePresets.cs` with the Steam app ID, default exe path, args, save dirs. That's the minimum, gets you Install / Start / Stop / Backup. If the game has a settings file you want an editor for, implement `IGameConfig`. Easiest is to copy `Config/ValheimConfig.cs` or `Config/PalworldConfig.cs` and adapt. If the game uses a non-standard RCON dialect, implement `IGameRcon`.
+```text
+src/GameServerControl.Client/ViewModels/GamePresets.cs
+```
 
-PRs welcome.
+For discovery, add the platform executable names to:
 
-## Repo layout
+```text
+src/GameServerControl.Agent/Discovery/ServerDiscoveryService.cs
+```
 
-    src/
-      GameServerControl.Shared/   DTOs, schemas, models
-      GameServerControl.Agent/    The service. ASP.NET Core 8.
-        Auth/                     Tokens, roles, audit log
-        Config/                   Per-game config editors
-        Discovery/                Steam library + appmanifest parsing
-        Hyperv/                   VM control, PowerShell Direct, local process service
-        Mods/                     Per-game mod managers
-        Notifications/            Discord webhook, update checker
-        Rcon/                     RCON glue
-        Servers/                  Orchestrator, store, SteamCMD installer
-        WebUi/                    Single HTML file
-      GameServerControl.Client/   WPF desktop dashboard
-    deploy/                       Install scripts + service definitions
-    .github/workflows/            CI, tagged-release pipeline
+If the game has an editable settings file, implement `IGameConfig` and register it through the config factory/schema extension model. If it has a unique mod ecosystem, implement `IModManager`. If it uses a non-standard RCON protocol, implement `IGameRcon`.
+
+The built-in agent Web UI is retained as a private/local fallback. The public web direction for this fork is the Worker dashboard under `worker/`.
+
+## Repository layout
+
+```text
+src/
+  GameServerControl.Shared/   shared models and schemas
+  GameServerControl.Agent/    ASP.NET Core agent/service
+  GameServerControl.Client/   Windows WPF dashboard
+deploy/
+  windows/                    Windows release installers
+  linux/                      systemd installers/service
+  macos/                      LaunchAgent installer
+  docker/                     container deployment files
+worker/                       Cloudflare Worker + static public dashboard
+.github/workflows/            CI and release workflows
+```
 
 ## License
 
-MIT. See LICENSE.
+MIT. See `LICENSE`.
 
----
-
-Maintained by TK-ECLIPSE. https://paypal.me/TKECLIPSE if you want to throw a few bucks.
+Original project and branding credit remain with TK-ECLIPSE. This repository is a fork maintained by Nereziel for its deployment-specific changes.
