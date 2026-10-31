@@ -17,15 +17,17 @@ public static class WindowsFirewall
     public static bool EnsureProgramRules(ServerDef def, out string? error)
     {
         error = null;
-        if (!OperatingSystem.IsWindows() || def.HostingMode != HostingMode.BareMetal)
-            return true;
+        if (!OperatingSystem.IsWindows()) return true;
 
-        if (string.IsNullOrWhiteSpace(def.GuestExePath) ||
-            !string.Equals(Path.GetExtension(def.GuestExePath), ".exe", StringComparison.OrdinalIgnoreCase))
+        var applicable = def.HostingMode == HostingMode.BareMetal
+            && !string.IsNullOrWhiteSpace(def.GuestExePath)
+            && string.Equals(Path.GetExtension(def.GuestExePath), ".exe", StringComparison.OrdinalIgnoreCase);
+
+        if (!applicable)
         {
-            // .bat/.jar launchers cannot be represented correctly by a Windows Firewall
-            // program rule. Their ports are still tracked for collision detection.
-            return true;
+            // If the server used to be BareMetal/.exe, remove stale rules when it moves to
+            // Hyper-V or changes to a .bat/.jar launcher.
+            return RemoveProgramRules(def.Id, out error);
         }
 
         string exe;
