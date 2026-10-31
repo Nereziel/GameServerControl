@@ -63,7 +63,12 @@ Write-Host "Repository: $repo"
 
 # ---- .NET 8 Desktop Runtime check ----
 Write-Step ".NET 8 Desktop Runtime"
-$hasDesktop = & dotnet --list-runtimes 2>$null | Select-String 'Microsoft.WindowsDesktop.App 8\.'
+$dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
+$hasDesktop = if ($dotnetCmd) {
+    & $dotnetCmd.Source --list-runtimes 2>$null | Select-String 'Microsoft.WindowsDesktop.App 8\.'
+} else {
+    $null
+}
 if (-not $hasDesktop) {
     Write-Warn2 "Missing — downloading Microsoft's bootstrapper…"
     $dotnetUrl = 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe'
