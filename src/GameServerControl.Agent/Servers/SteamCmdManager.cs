@@ -113,7 +113,14 @@ public sealed class SteamCmdManager
         await p.WaitForExitAsync(ct);
     }
 
-    /// <summary>Runs <c>+app_update {appId} validate</c> and streams stdout/stderr through <paramref name="onLine"/>.</summary>
+    /// <summary>
+    /// Runs <c>+app_update {appId} validate</c> and streams stdout/stderr through
+    /// <paramref name="onLine"/>. A freshly unpacked SteamCMD often self-updates on its
+    /// first run and exits with code 7 before the requested app command really executes.
+    /// That code is therefore retried once. A SteamCMD Success! marker is also accepted
+    /// even if the bootstrapper returns a non-zero exit code; ServerInstaller performs a
+    /// second on-disk executable check before registering the server.
+    /// </summary>
     public async Task<(bool Ok, int ExitCode)> RunAppUpdateAsync(
         string installDir,
         string appId,
@@ -123,45 +130,88 @@ public sealed class SteamCmdManager
         var exe = await EnsureAsync(ct);
         Directory.CreateDirectory(installDir);
 
-        var args = $"+force_install_dir \"{installDir}\" +login anonymous +app_update {appId} validate +quit";
-        var psi = new ProcessStartInfo
-        {
-            FileName = exe,
-            Arguments = args,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            WorkingDirectory = Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory
-        };
+        const int maxAttempts = 2;
+        var lastExitCode = -1;
 
-        using var p = new Process { StartInfo = psi };
-        var progressRegex = new Regex(@"progress:\s*([\d.]+)", RegexOptions.IgnoreCase);
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            var args = $"+force_install_dir \"{installDir}\" +login anonymous +app_update {appId} validate +quit";
+            var psi = new ProcessStartInfo
+            {
+                FileName = exe,
+                Arguments = args,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                WorkingDirectory = Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory
+            };
 
-        p.OutputDataReceived += (_, e) =>
-        {
-            if (string.IsNullOrEmpty(e.Data)) return;
-            int? pct = null;
-            var m = progressRegex.Match(e.Data);
-            if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var v))
-                pct = (int)Math.Clamp(v, 0, 100);
-            onLine(e.Data, pct);
-        };
-        p.ErrorDataReceived += (_, e) =>
-        {
-            if (string.IsNullOrEmpty(e.Data)) return;
-            onLine(e.Data, null);
-        };
+            using var p = new Process { StartInfo = psi };
+            var progressRegex = new Regex(@"progress:\s*([\d.]+)", RegexOptions.IgnoreCase);
+            var sawSuccess = false;
 
-        if (!p.Start()) return (false, -1);
-        p.BeginOutputReadLine();
-        p.BeginErrorReadLine();
-        try { await p.WaitForExitAsync(ct); }
-        catch (OperationCanceledException)
-        {
-            try { p.Kill(true); } catch { /* swallow */ }
-            return (false, -2);
+            void HandleLine(string line)
+            {
+                if (line.Contains($"Success! App '{appId}'", StringComparison.OrdinalIgnoreCase))
+                    sawSuccess = true;
+
+                int? pct = null;
+                var m = progressRegex.Match(line);
+                if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var v))
+                    pct = (int)Math.Clamp(v, 0, 100);
+                onLine(line, pct);
+            }
+
+            p.OutputDataReceived += (_, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data);
+            };
+            p.ErrorDataReceived += (_, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data);
+            };
+
+            if (!p.Start()) return (false, -1);
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
+
+            try
+            {
+                await p.WaitForExitAsync(ct);
+                // WaitForExit() after the async wait lets redirected output handlers drain before
+                // we inspect sawSuccess.
+                p.WaitForExit();
+            }
+            catch (OperationCanceledException)
+            {
+                try { p.Kill(true); } catch { /* swallow */ }
+                return (false, -2);
+            }
+
+            lastExitCode = p.ExitCode;
+
+            if (sawSuccess)
+            {
+                if (lastExitCode != 0)
+                    onLine($"SteamCMD reported success despite exit code {lastExitCode}; verifying installed executable on disk…", null);
+                return (true, lastExitCode);
+            }
+
+            if (lastExitCode == 0)
+                return (true, 0);
+
+            if (lastExitCode == 7 && attempt < maxAttempts)
+            {
+                onLine("SteamCMD first-run/bootstrap returned exit code 7; retrying the install once…", null);
+                try { await Task.Delay(TimeSpan.FromSeconds(1), ct); }
+                catch (OperationCanceledException) { return (false, -2); }
+                continue;
+            }
+
+            return (false, lastExitCode);
         }
-        return (p.ExitCode == 0, p.ExitCode);
+
+        return (false, lastExitCode);
     }
 }
