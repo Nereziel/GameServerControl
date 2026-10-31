@@ -1,3 +1,4 @@
+using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Logs;
 using GameServerControl.Shared;
 
@@ -99,13 +100,6 @@ public sealed class ServerDeletionService
             backupCreated = true;
         }
 
-        // Remove GameServerControl maintenance tasks before the definition disappears.
-        try { await _scheduler.ApplyAsync(id, null, ct); }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to remove maintenance tasks for {Id}; continuing with server deletion", id);
-        }
-
         try
         {
             if (Directory.Exists(deleteRoot))
@@ -121,6 +115,13 @@ public sealed class ServerDeletionService
         {
             _logger.LogError(ex, "Permanent deletion failed for {Id} at {Path}", id, deleteRoot);
             return Fail("delete_failed", "Could not delete the complete server folder. The server remains registered. " + ex.Message);
+        }
+
+        // Files are gone, so now remove GameServerControl's own scheduled maintenance tasks.
+        try { await _scheduler.ApplyAsync(id, null, ct); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to remove maintenance tasks for {Id}; continuing with definition deletion", id);
         }
 
         if (!_store.Delete(id))
