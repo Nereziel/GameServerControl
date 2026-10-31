@@ -32,7 +32,8 @@ public sealed record GameProfile(
     int? DefaultRconPort = null,
     string? Notes = null,
     bool Installable = false,
-    string? EstimatedSize = null)
+    string? EstimatedSize = null,
+    NetworkPort[]? DefaultPorts = null)
 {
     public string DefaultWindowsInstallPath => string.IsNullOrWhiteSpace(InstallDirectoryName)
         ? ""
@@ -55,7 +56,7 @@ public sealed record GameProfile(
 }
 
 /// <summary>
-/// Single source of truth for game capabilities, safe defaults and installability.
+/// Single source of truth for game capabilities, safe defaults, network-port reservations and installability.
 /// The Agent API exposes these profiles directly to the Web UI so unsupported settings
 /// cannot drift between backend and frontend implementations.
 /// </summary>
@@ -78,7 +79,8 @@ public static class GameProfiles
                    "-savedir", @"{root}\data", "-logFile", @"{root}\logs\valheim.log" },
             new[]{ @"{root}\data" }, @"{root}\logs\valheim.log",
             new GameCapabilities(ManagedConfig: true, Mods: true, LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
-            Notes: "World data, admin lists and logs stay under the server folder.", Installable: true, EstimatedSize: "~1 GB"),
+            Notes: "World data, admin lists and logs stay under the server folder.", Installable: true, EstimatedSize: "~1 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 2456, 2457) }),
 
         new("dragonwilds", "RuneScape: Dragonwilds", "🐉", GameType.SteamGeneric, "4019830", "Dragonwilds", "RSDragonwilds.exe",
             new[]{ "-log", "-NewConsole" },
@@ -89,19 +91,23 @@ public static class GameProfiles
         new("ark-asa", "ARK: Survival Ascended", "🦖", GameType.SteamGeneric, "2430930", "ArkAscended", @"ShooterGame\Binaries\Win64\ArkAscendedServer.exe",
             new[]{ "TheIsland_WP?listen?MaxPlayers=20?ServerPassword=?ServerAdminPassword=change-me" },
             new[]{ @"{root}\ShooterGame\Saved" }, null,
-            new GameCapabilities(Mods: true), Installable: true, EstimatedSize: "~50 GB"),
+            new GameCapabilities(Mods: true), Installable: true, EstimatedSize: "~50 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game + peer", NetworkProtocol.Udp, 7777, 7778), new NetworkPort("Query", NetworkProtocol.Udp, 27015) }),
 
         new("ark-se", "ARK: Survival Evolved", "🦖", GameType.SteamGeneric, "376030", "ArkSE", @"ShooterGame\Binaries\Win64\ShooterGameServer.exe",
             new[]{ "TheIsland?listen?MaxPlayers=20?ServerAdminPassword=change-me", "-server", "-log" },
             new[]{ @"{root}\ShooterGame\Saved" }, null,
-            new GameCapabilities(Mods: true), Installable: true, EstimatedSize: "~14 GB"),
+            new GameCapabilities(Mods: true), Installable: true, EstimatedSize: "~14 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game + peer", NetworkProtocol.Udp, 7777, 7778), new NetworkPort("Query", NetworkProtocol.Udp, 27015) }),
 
         new("palworld", "Palworld", "🐾", GameType.SteamGeneric, "2394010", "PalServer", @"PalServer\PalServer.exe",
             new[]{ "-useperfthreads", "-NoAsyncLoadingThread", "-UseMultithreadForDS", "EpicApp=PalServer" },
             new[]{ @"{root}\Pal\Saved" }, null,
             new GameCapabilities(ManagedConfig: true, Mods: true, Rcon: true, PlayerManagement: true, ConsoleMode: GameConsoleMode.Rcon),
+            DefaultRconPort: 25575,
             Notes: "RCON is optional. Enable it in Palworld server settings, then enter its port and password.",
-            Installable: true, EstimatedSize: "~7 GB"),
+            Installable: true, EstimatedSize: "~7 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 8211), new NetworkPort("Query", NetworkProtocol.Udp, 27015) }),
 
         new("satisfactory", "Satisfactory", "⚙", GameType.SteamGeneric, "1690800", "Satisfactory", "FactoryServer.exe",
             new[]{ "-log", "-unattended" },
@@ -109,7 +115,8 @@ public static class GameProfiles
             @"{root}\FactoryGame\Saved\Logs\FactoryGame.log",
             new GameCapabilities(ManagedConfig: true, Mods: true, LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
             Notes: "Satisfactory does not document a save-root override. The default GameServerControl Windows service runs as LocalSystem, so saves remain in that service profile; logs are install-relative.",
-            Installable: true, EstimatedSize: "~12 GB"),
+            Installable: true, EstimatedSize: "~12 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game / API", NetworkProtocol.Udp, 7777), new NetworkPort("Game / API", NetworkProtocol.Tcp, 7777), new NetworkPort("Reliable messaging", NetworkProtocol.Tcp, 8888) }),
 
         new("zomboid", "Project Zomboid", "🧟", GameType.SteamGeneric, "380870", "ProjectZomboid", "StartServer64.bat",
             new[]{ @"-cachedir={root}\data", "-servername", "GameServerControl" },
@@ -123,11 +130,13 @@ public static class GameProfiles
 
         new("conan", "Conan Exiles", "🗿", GameType.SteamGeneric, "443030", "Conan", "ConanSandboxServer.exe",
             new[]{ "-log", "-MULTIHOME=0.0.0.0", "-Port=7777", "-QueryPort=27015" },
-            new[]{ @"{root}\ConanSandbox\Saved" }, null, Basic, Installable: true, EstimatedSize: "~50 GB"),
+            new[]{ @"{root}\ConanSandbox\Saved" }, null, Basic, Installable: true, EstimatedSize: "~50 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 7777), new NetworkPort("Query", NetworkProtocol.Udp, 27015) }),
 
         new("squad", "Squad", "🎯", GameType.SteamGeneric, "403240", "Squad", "SquadGameServer.exe",
             new[]{ "-log", "-Port=7787", "-QueryPort=27165", "-MultiHome=0.0.0.0" },
-            new[]{ @"{root}\SquadGame\Saved" }, null, Basic, Installable: true, EstimatedSize: "~40 GB"),
+            new[]{ @"{root}\SquadGame\Saved" }, null, Basic, Installable: true, EstimatedSize: "~40 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 7787), new NetworkPort("Query", NetworkProtocol.Udp, 27165) }),
 
         new("soulmask", "Soulmask", "🗿", GameType.SteamGeneric, "3017310", "Soulmask", @"WS\Binaries\Win64\WSServer.exe",
             new[]{ "-log", "Level01_Main", "-server", "-SteamServerName=My Soulmask Server" },
@@ -136,7 +145,8 @@ public static class GameProfiles
         new("rust", "Rust", "🔧", GameType.SteamGeneric, "258550", "Rust", "RustDedicated.exe",
             new[]{ "-batchmode", "+server.port", "28015", "+rcon.port", "28016", "+rcon.password", "change-me", "+server.hostname", "My Rust Server" },
             new[]{ @"{root}\server" }, null, Basic,
-            Notes: "Rust supports RCON, but GameServerControl hides it until a Rust RCON handler is implemented.", Installable: true, EstimatedSize: "~8 GB"),
+            Notes: "Rust supports RCON, but GameServerControl hides it until a Rust RCON handler is implemented.", Installable: true, EstimatedSize: "~8 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 28015), new NetworkPort("RCON", NetworkProtocol.Tcp, 28016) }),
 
         new("7dtd", "7 Days to Die", "🧟", GameType.SteamGeneric, "294420", "SevenDaysToDie", "7DaysToDieServer.exe",
             new[]{ "-quit", "-batchmode", "-nographics", "-configfile=serverconfig.xml", @"-UserDataFolder={root}\data" },
@@ -146,7 +156,8 @@ public static class GameProfiles
         new("terraria", "Terraria", "🌳", GameType.SteamGeneric, "105600", "Terraria", "TerrariaServer.exe",
             new[]{ "-world", @"{root}\worlds\World.wld", "-autocreate", "2", "-worldname", "World", "-port", "7777", "-maxplayers", "8" },
             new[]{ @"{root}\worlds" }, null, Basic,
-            Notes: "Creates/loads World.wld under the server folder instead of the Windows Documents profile.", Installable: true, EstimatedSize: "~0.5 GB"),
+            Notes: "Creates/loads World.wld under the server folder instead of the Windows Documents profile.", Installable: true, EstimatedSize: "~0.5 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Tcp, 7777) }),
 
         new("dst", "Don't Starve Together", "❄", GameType.SteamGeneric, "343050", "DST", @"bin\dontstarve_dedicated_server_nullrenderer.exe",
             new[]{ "-console", "-persistent_storage_root", @"{root}\data", "-conf_dir", "DST", "-cluster", "MyCluster", "-shard", "Master" },
@@ -157,7 +168,8 @@ public static class GameProfiles
             new[]{ "java", "-Xmx4G", "-Xms4G", "-jar", "server.jar", "nogui" },
             new[]{ @"{root}\world", @"{root}\world_nether", @"{root}\world_the_end" }, @"{root}\logs\latest.log",
             new GameCapabilities(LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
-            Notes: "Manual registration only; Minecraft installation is not handled by SteamCMD."),
+            Notes: "Manual registration only; Minecraft installation is not handled by SteamCMD.",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Tcp, 25565) }),
     };
 
     public static GameProfile? FindByKey(string? key)
