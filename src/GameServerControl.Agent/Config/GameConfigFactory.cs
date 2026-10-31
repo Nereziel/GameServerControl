@@ -9,6 +9,11 @@ public sealed class GameConfigFactory
 
     public IGameConfig? For(ServerDef def)
     {
+        // Dragonwilds exposes its schema through a dynamic extension, so handle it
+        // before consulting the static ConfigSchemas table.
+        if (def.GameType == GameType.SteamGeneric && def.SteamAppId == "4019830")
+            return _sp.GetRequiredService<DragonwildsConfig>();
+
         var schema = ConfigSchemas.For(def);
         return schema?.Key switch
         {

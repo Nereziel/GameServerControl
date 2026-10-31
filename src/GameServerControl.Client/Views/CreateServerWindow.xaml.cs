@@ -46,6 +46,7 @@ public partial class CreateServerWindow : Window
         // Curated list of "we know SteamCMD can install this anonymously" games. Keep order roughly
         // by popularity. Sizes are typical — actual download depends on game updates.
         _games.Add(new("valheim",      "Valheim",                 "",  "896660",  "~1 GB",   "Valheim",      GamePresets.FindByKey("valheim")!));
+        _games.Add(new("dragonwilds",  "RuneScape: Dragonwilds",  "", "4019830", "varies",  "Dragonwilds",  GamePresets.FindByKey("dragonwilds")!));
         _games.Add(new("palworld",     "Palworld",                "", "2394010", "~7 GB",   "PalServer",    GamePresets.FindByKey("palworld")!));
         _games.Add(new("satisfactory", "Satisfactory",            "",  "1690800", "~12 GB",  "Satisfactory", GamePresets.FindByKey("satisfactory")!));
         _games.Add(new("ark-asa",      "ARK: Survival Ascended",  "", "2430930", "~50 GB",  "ArkAscended",  GamePresets.FindByKey("ark-asa")!));
@@ -144,6 +145,9 @@ public partial class CreateServerWindow : Window
                 ? path + s.Substring(presetRoot.Length)
                 : s)
             .ToArray();
+        var logPath = _selected.Key == "dragonwilds"
+            ? Path.Combine(path, "RSDragonwilds", "Saved", "Logs", "RSDragonwilds.log")
+            : null;
 
         var def = new ServerDef(
             Id: id,
@@ -156,7 +160,7 @@ public partial class CreateServerWindow : Window
             SaveDirs: rewrittenSaves,
             SteamAppId: _selected.SteamAppId,
             GuestCredentialId: "default",
-            LogPathInGuest: null,
+            LogPathInGuest: logPath,
             RconHost: "auto",
             RconPort: null,
             RconPassword: null,
