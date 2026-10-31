@@ -23,6 +23,14 @@
     "_AuditHelp": "Override audit log directory. Empty defaults to <agent>/Logs/audit/.",
     "AuditLogPath": "",
 
+    "_CurseForgeHelp": "Optional secondary mod catalog. Obtain a CurseForge third-party API key, then map each Thunderstore community you want to augment to its CurseForge game ID. Keys stay server-side and are never sent to the browser.",
+    "CurseForge": {
+      "ApiKey": "",
+      "Games": {
+        "valheim": ""
+      }
+    },
+
     "GuestCredentials": {
       "default": {
         "Username": "Administrator",
