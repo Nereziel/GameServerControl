@@ -45,6 +45,23 @@ public enum ServerActionKind
     ApplyConfig
 }
 
+public enum NetworkProtocol
+{
+    Tcp,
+    Udp
+}
+
+/// <summary>
+/// Port reservation metadata for one server. The Agent currently uses this to detect
+/// accidental conflicts between BareMetal servers; Windows Firewall remains program-based.
+/// EndPort is inclusive. Null means a single port.
+/// </summary>
+public record NetworkPort(
+    string Name,
+    NetworkProtocol Protocol,
+    int Port,
+    int? EndPort = null);
+
 public record ServerDef(
     string Id,
     string Name,
@@ -63,7 +80,8 @@ public record ServerDef(
     HostingMode HostingMode = HostingMode.Vm,           // back-compat default for existing servers.json entries
     string? ScheduledTaskName = null,                   // if set, Start/Stop drive Windows Task Scheduler instead of Process.Start
     string[]? StopProcessNames = null,                  // extra .exe leaf names to kill on Stop (in addition to GuestExePath's leaf)
-    string? DiscordWebhookUrl = null                    // optional: POST lifecycle events (start/stop/crash/backup/update) here
+    string? DiscordWebhookUrl = null,                   // optional: POST lifecycle events (start/stop/crash/backup/update) here
+    NetworkPort[]? NetworkPorts = null                  // reserved/listening ports for collision detection and future port-based firewall rules
 );
 
 public record ServerStatus(
