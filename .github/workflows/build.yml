@@ -9,7 +9,7 @@ on:
 
 jobs:
   windows-build:
-    name: Windows agent + web UI
+    name: Windows agent + web UI + tray
     runs-on: windows-latest
 
     steps:
@@ -41,11 +41,21 @@ jobs:
       - name: Publish agent (win-x64, self-contained)
         run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
 
+      - name: Publish tray helper (win-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Tray -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/Tray-windows
+
       - name: Upload Windows agent
         uses: actions/upload-artifact@v7
         with:
           name: GameServerControl-Agent-windows
           path: publish/Agent-windows
+          if-no-files-found: error
+
+      - name: Upload Windows tray helper
+        uses: actions/upload-artifact@v7
+        with:
+          name: GameServerControl-Tray-windows
+          path: publish/Tray-windows
           if-no-files-found: error
 
   linux-build:
