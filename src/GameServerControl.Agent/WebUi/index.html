@@ -40,5 +40,72 @@
 <script src="/webui/server-admin.js" defer></script>
 <script src="/webui/jobs-mods.js" defer></script>
 <script src="/webui/config-backups.js" defer></script>
+<script>
+window.addEventListener('DOMContentLoaded', () => {
+  window.deleteServer = function(id) {
+    const d = SERVERS.find(x => x.id === id);
+    if (!d) return;
+    const bareMetal = d.hostingMode !== 'Vm';
+    const hasSaves = Array.isArray(d.saveDirs) && d.saveDirs.length > 0;
+    const permanent = bareMetal
+      ? `<div class="section">Delete server completely</div>
+         <div class="callout">This permanently stops the server and deletes the entire server folder. This cannot be undone.</div>
+         <div class="kv compact"><div>Folder to delete</div><div class="mono">${esc(d.guestWorkingDir || '')}</div></div>
+         <div class="checkrow" style="margin-top:14px"><input id="deleteFinalBackup" type="checkbox" ${hasSaves ? 'checked' : 'disabled'}><label for="deleteFinalBackup">Create a final save backup before deletion${hasSaves ? '' : ' (no save folders configured)'}</label></div>
+         <div class="field"><label>Type the exact server name to confirm</label><input id="deleteConfirm" autocomplete="off" placeholder="${esc(d.name)}" oninput="syncPermanentDeleteButton('${jsq(id)}')"><div class="help">Required: <b>${esc(d.name)}</b></div></div>
+         <button id="permanentDeleteBtn" class="btn danger" disabled onclick="permanentDeleteServer('${jsq(id)}')">Permanently delete server and files</button>`
+      : `<div class="section">Delete server completely</div><div class="callout info">Complete file deletion is disabled for Hyper-V servers because the server folder is inside the guest VM. Remove the definition here and manage VM files separately.</div>`;
+
+    openModal('Delete — ' + d.name,
+      `<div class="section">Remove from GameServerControl</div>
+       <div class="help">Removes only the server definition. All game files and saves remain untouched.</div>
+       <button class="btn" onclick="removeServerOnly('${jsq(id)}')">Remove only</button>
+       ${permanent}`,
+      '<button class="btn" onclick="closeModal()">Cancel</button>', true);
+  };
+
+  window.removeServerOnly = async function(id) {
+    const d = SERVERS.find(x => x.id === id);
+    if (!confirm(`Remove "${d?.name || id}" from GameServerControl?\n\nServer files will remain untouched.`)) return;
+    try {
+      await api(`/api/servers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      toast('Server removed from GameServerControl. Files were kept.', 'ok');
+      closeModal();
+      await loadServers();
+    } catch (e) {
+      toast('Remove failed: ' + e.message, 'err');
+    }
+  };
+
+  window.syncPermanentDeleteButton = function(id) {
+    const d = SERVERS.find(x => x.id === id);
+    const input = $('#deleteConfirm');
+    const button = $('#permanentDeleteBtn');
+    if (button) button.disabled = !d || !input || input.value !== d.name;
+  };
+
+  window.permanentDeleteServer = async function(id) {
+    const d = SERVERS.find(x => x.id === id);
+    if (!d) return;
+    const confirmation = $('#deleteConfirm')?.value || '';
+    if (confirmation !== d.name) return toast('Type the exact server name first.', 'err');
+    const createFinalBackup = !!$('#deleteFinalBackup')?.checked;
+    const button = $('#permanentDeleteBtn');
+    if (button) { button.disabled = true; button.textContent = 'Deleting…'; }
+    try {
+      const result = await api(`/api/servers/${encodeURIComponent(id)}/delete-completely`, {
+        method: 'POST',
+        body: JSON.stringify({ confirmation, createFinalBackup })
+      });
+      toast(result.message || 'Server permanently deleted.', 'ok');
+      closeModal();
+      await loadServers();
+    } catch (e) {
+      toast('Permanent deletion cancelled/failed: ' + e.message, 'err');
+      if (button) { button.textContent = 'Permanently delete server and files'; syncPermanentDeleteButton(id); }
+    }
+  };
+});
+</script>
 </body>
 </html>
