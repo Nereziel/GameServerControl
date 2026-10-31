@@ -37,7 +37,7 @@ function profileToGame(p){
     key:p.key,label:p.label,icon:p.icon||'🖥',appId:p.steamAppId,size:p.estimatedSize||'varies',
     dir:p.installDirectoryName||p.key,exe:p.executableRelative||'',args:p.defaultStartArgs||[],
     saveRel:p.saveDirs||[],logRel:p.logPath||null,gameType:p.gameType||'SteamGeneric',
-    rconPort:p.defaultRconPort??null,note:p.notes||'',installable:!!p.installable,
+    rconPort:p.defaultRconPort??null,note:p.notes||'',installable:!!p.installable,ports:p.defaultPorts||[],
     caps:{config:!!c.managedConfig,mods:!!c.mods,rcon:!!c.rcon,players:!!c.playerManagement,log:!!c.liveLog,
       console:consoleMode==='rcon'?'rcon':consoleMode==='logonly'?'log':null,hyperV:c.hyperV!==false,scheduledTask:c.scheduledTask!==false}
   };
