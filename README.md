@@ -1,6 +1,6 @@
 # GameServerControl
 
-GameServerControl is a self-hosted game-server control panel built around a single **Agent + HTTP API + Web UI**. There is no desktop client requirement: install the Agent on the game-server host and manage it from a browser.
+GameServerControl is a self-hosted game-server control panel built around a single **Agent + HTTP API + Web UI**. There is no desktop client requirement: install the Agent on the game-server host and manage it from a browser. Windows can optionally run a small tray helper for local service controls and opening the browser dashboard.
 
 ## Architecture
 
@@ -20,14 +20,20 @@ GameServerControl Agent
    ├─ live logs / supported consoles
    ├─ mod management
    └─ authenticated API
+
+Windows tray helper (optional)
+   ├─ opens the Web UI
+   ├─ shows Agent service status
+   ├─ Start / Stop / Restart Agent
+   └─ launches GameServerControl updater
 ```
 
 The built-in web dashboard is served by the Agent itself. For remote/public access, keep the Agent private and place Cloudflare Access / Worker / Tunnel or another authenticated reverse proxy in front of it.
 
 ## Supported hosts
 
-- Windows Server / Windows 10/11: full Agent feature set, including Hyper-V integration where configured.
-- Linux: Agent, API and Web UI; Hyper-V-specific features are unavailable.
+- Windows Server / Windows 10/11: full Agent feature set, including Hyper-V integration where configured, plus the optional tray helper.
+- Linux: Agent, API and Web UI; Hyper-V and Windows tray features are unavailable.
 - Release artifacts are self-contained and do not require a preinstalled .NET runtime.
 
 ## Windows install
@@ -42,6 +48,7 @@ Default locations:
 
 ```text
 C:\GameServerControl\Agent
+C:\GameServerControl\Tray
 C:\GameServers\<game>
 ```
 
@@ -50,6 +57,8 @@ The installer:
 - downloads the self-contained Agent release,
 - installs/configures private SteamCMD,
 - registers `GameServerControlAgent` as a Windows service,
+- installs the small Windows tray helper when the release contains it,
+- registers the tray helper for the current user's Windows sign-in,
 - preserves `appsettings.json`, `servers.json` and `tokens.json` during updates,
 - creates a desktop shortcut to `http://localhost:5099/`,
 - creates an external updater helper so the Agent can safely update itself.
@@ -59,6 +68,8 @@ After installation open:
 ```text
 http://localhost:5099/
 ```
+
+The tray icon can also open the dashboard. Its right-click menu provides Agent status, Start / Stop / Restart, update check, GameServerControl update and tray autostart control. Service-changing actions request administrator approval when needed. Exiting the tray icon does not stop the Agent or any game server.
 
 The first successful start generates and persists an API token in:
 
@@ -132,6 +143,8 @@ Do not expose the Agent API directly to the public Internet. For remote administ
 
 The Agent checks GitHub Releases for a newer version. On Windows, an Admin user can start an update directly from the Web UI. The Agent launches an updater process outside its own install directory, returns the HTTP response, then the external updater stops and replaces the Agent and starts the service again. Running game-server processes are not intentionally stopped by a GameServerControl self-update.
 
+The Windows tray helper can also check GitHub Releases and launch the same updater. When the update starts from the tray, the tray exits so its executable can be replaced, then the non-elevated updater parent starts the new tray helper again after the elevated install finishes.
+
 A manual fallback updater shortcut is also created by the Windows installer.
 
 ## Development
@@ -162,16 +175,17 @@ http://127.0.0.1:5099
 
 ## Release layout
 
-Current releases contain only the Agent/Web application:
+Current releases contain the Agent/Web application and Windows releases additionally contain the tray helper:
 
 ```text
 GameServerControl-Agent-windows.zip
+GameServerControl-Tray-windows.zip
 GameServerControl-Agent-linux.tar.gz
 GameServerControl-Install-Windows.ps1
 GameServerControl-Install-Linux.sh
 ```
 
-The former WPF desktop client has been retired; browser control is the supported UI.
+The former WPF desktop client remains retired; browser control is the supported administration UI. The tray helper is intentionally limited to local quick actions and does not duplicate the Web UI.
 
 ## License
 
