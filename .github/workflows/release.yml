@@ -1,6 +1,6 @@
 name: Release
 
-# Builds self-contained Windows + Linux agent/web releases.
+# Builds self-contained Windows + Linux agent/web releases plus the optional Windows tray helper.
 # The one-line installers and Web UI updater fetch these assets from /releases/latest.
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v1.0.8)'
+        description: 'Tag to build (e.g. v1.1.0)'
         required: true
 
 permissions:
@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build-windows:
-    name: Build Windows agent
+    name: Build Windows agent + tray
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -34,15 +34,22 @@ jobs:
       - name: Publish agent (win-x64, self-contained)
         run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
 
-      - name: Zip agent
-        run: Compress-Archive -Path publish/Agent-windows/* -DestinationPath GameServerControl-Agent-windows.zip
-        shell: pwsh
+      - name: Publish tray helper (win-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Tray -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/Tray-windows
 
-      - name: Upload artifact
+      - name: Zip Windows packages
+        shell: pwsh
+        run: |
+          Compress-Archive -Path publish/Agent-windows/* -DestinationPath GameServerControl-Agent-windows.zip
+          Compress-Archive -Path publish/Tray-windows/* -DestinationPath GameServerControl-Tray-windows.zip
+
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: windows-agent
-          path: GameServerControl-Agent-windows.zip
+          name: windows-packages
+          path: |
+            GameServerControl-Agent-windows.zip
+            GameServerControl-Tray-windows.zip
           if-no-files-found: error
 
   build-linux:
@@ -85,10 +92,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Download Windows agent
+      - name: Download Windows packages
         uses: actions/download-artifact@v8
         with:
-          name: windows-agent
+          name: windows-packages
 
       - name: Download Linux agent
         uses: actions/download-artifact@v8
@@ -119,11 +126,12 @@ jobs:
           prerelease: false
           files: |
             GameServerControl-Agent-windows.zip
+            GameServerControl-Tray-windows.zip
             GameServerControl-Agent-linux.tar.gz
             GameServerControl-Install-Windows.ps1
             GameServerControl-Install-Linux.sh
           body: |
-            GameServerControl is now Agent + API + Web UI only. No desktop client is required.
+            GameServerControl uses Agent + API + Web UI for administration. Windows releases also include a small optional tray helper for quick Agent controls and opening the browser dashboard.
             Releases are self-contained; no preinstalled .NET runtime is required on target hosts.
 
             Install commands:
