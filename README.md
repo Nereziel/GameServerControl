@@ -2,7 +2,9 @@
 
 Self-hosted game-server control plane with an ASP.NET Core agent, a Windows WPF client, and a Cloudflare Worker web dashboard.
 
-The agent manages dedicated servers on Windows, Linux, and macOS. It can install Steam dedicated servers with SteamCMD, discover existing installations, start/stop/restart processes, create backups, schedule maintenance, edit supported game configuration, manage selected mod ecosystems, use RCON where implemented, and send Discord lifecycle notifications.
+This fork's supported release targets are **Windows and Linux**. The agent can install Steam dedicated servers with SteamCMD, discover existing installations, start/stop/restart processes, create backups, schedule maintenance, edit supported game configuration, manage selected mod ecosystems, use RCON where implemented, and send Discord lifecycle notifications.
+
+The upstream macOS deployment files remain in the source tree for reference, but this fork does not build, test, or publish macOS release artifacts.
 
 This fork is maintained at `Nereziel/GameServerControl` and carries additional deployment hardening plus RuneScape: Dragonwilds support.
 
@@ -84,13 +86,11 @@ curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/dep
 
 The Linux installer uses a dedicated `gsc` service account by default and installs a private SteamCMD copy.
 
-## macOS install
+Linux CI and release jobs are pinned to **Ubuntu 24.04** instead of `ubuntu-latest`, so GitHub runner-image migrations do not silently change the build environment.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/macos/install-from-release.sh | bash
-```
+## macOS
 
-The macOS agent runs as a user-scoped LaunchAgent.
+macOS CI/release builds are intentionally disabled in this fork. Existing `deploy/macos/` files are retained as upstream reference only and are not part of supported releases.
 
 ## Agent defaults and security
 
@@ -171,7 +171,7 @@ C:\Servers
 D:\Servers
 ```
 
-Linux/macOS have corresponding common server paths. Already configured installations are marked so they are not accidentally registered twice.
+Linux has corresponding common server paths. Already configured installations are marked so they are not accidentally registered twice.
 
 ## Backups
 
@@ -195,7 +195,7 @@ Bare-metal process detection prefers an exact executable path. If multiple same-
 
 ## CI and releases
 
-GitHub Actions builds/publishes Windows and Linux artifacts on normal CI. The release workflow additionally builds macOS artifacts and attaches the platform packages to tagged GitHub releases.
+GitHub Actions builds/publishes only the supported **Windows and Linux** targets. Linux and Worker jobs are pinned to `ubuntu-24.04`; macOS CI and release jobs are disabled.
 
 GitHub Actions use Node 24-compatible action versions. Cloudflare Worker validation uses Node.js 24 and performs a Wrangler dry-run build.
 
@@ -215,7 +215,7 @@ dotnet restore
 dotnet build -c Release
 ```
 
-The desktop client targets `net8.0-windows` and is Windows-only. The agent targets `net8.0` and is cross-platform.
+The desktop client targets `net8.0-windows` and is Windows-only. The supported agent release targets in this fork are Windows and Linux.
 
 ## Adding a game
 
@@ -245,7 +245,7 @@ src/
 deploy/
   windows/                    Windows release installers
   linux/                      systemd installers/service
-  macos/                      LaunchAgent installer
+  macos/                      upstream reference; not built/released by this fork
   docker/                     container deployment files
 worker/                       Cloudflare Worker + static public dashboard
 .github/workflows/            CI and release workflows
