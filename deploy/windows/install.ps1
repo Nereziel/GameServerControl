@@ -152,6 +152,20 @@ try {
 }
 
 # ---- Install client ----
+# In-app updates are launched by the WPF client itself. It normally exits immediately,
+# but terminate any lingering copy from our own install directory so DLL/EXE locks cannot
+# make Remove-Item fail halfway through an otherwise successful update.
+$runningClients = @(Get-Process -Name 'GameServerControl' -ErrorAction SilentlyContinue | Where-Object {
+    try { $_.Path -and $_.Path.StartsWith($clientDir, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+})
+if ($runningClients.Count -gt 0) {
+    Write-Step 'Closing running GameServerControl client'
+    foreach ($p in $runningClients) {
+        try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch { Write-Warn2 "Could not stop client PID $($p.Id): $_" }
+    }
+    Start-Sleep -Milliseconds 500
+}
+
 Write-Step "Installing client to $clientDir"
 if (Test-Path $clientDir) { Remove-Item $clientDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $clientDir | Out-Null
@@ -209,11 +223,12 @@ if (-not $svc -or $svc.Status -ne 'Running') {
     Write-Ok 'Service running.'
 }
 
-# ---- Desktop shortcut ----
-Write-Step 'Refreshing desktop shortcut'
+# ---- Desktop shortcuts + reusable updater helper ----
+Write-Step 'Refreshing desktop shortcuts'
 $userDesktop = [Environment]::GetFolderPath('DesktopDirectory')
-$shortcutPath = Join-Path $userDesktop 'GameServerControl.lnk'
 $sh = New-Object -ComObject WScript.Shell
+
+$shortcutPath = Join-Path $userDesktop 'GameServerControl.lnk'
 $lnk = $sh.CreateShortcut($shortcutPath)
 $lnk.TargetPath = $clientExe
 $lnk.WorkingDirectory = $clientDir
@@ -221,6 +236,36 @@ $lnk.IconLocation = "$clientExe,0"
 $lnk.Description = 'GameServerControl dashboard'
 $lnk.Save()
 Write-Ok "Shortcut: $shortcutPath"
+
+$updateHelper = Join-Path $installRt 'Update-GameServerControl.ps1'
+$updateHelperContent = @'
+$ErrorActionPreference = 'Stop'
+$isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isElevated) {
+    $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    Start-Process powershell.exe -Verb RunAs -ArgumentList $argLine
+    exit
+}
+$ProgressPreference = 'SilentlyContinue'
+$repo = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl' }
+$env:GSC_REPO = $repo
+$installer = "https://raw.githubusercontent.com/$repo/main/deploy/windows/install.ps1"
+Invoke-WebRequest -Uri $installer -UseBasicParsing | Invoke-Expression
+Write-Host ''
+Read-Host 'Update finished. Press Enter to close'
+'@
+Set-Content -LiteralPath $updateHelper -Value $updateHelperContent -Encoding UTF8
+
+$updateShortcutPath = Join-Path $userDesktop 'Update GameServerControl.lnk'
+$upd = $sh.CreateShortcut($updateShortcutPath)
+$upd.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$upd.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$updateHelper`""
+$upd.WorkingDirectory = $installRt
+$upd.IconLocation = "$clientExe,0"
+$upd.Description = 'Update GameServerControl Agent and Client to the latest release'
+$upd.Save()
+Write-Ok "Updater shortcut: $updateShortcutPath"
 
 # ---- Surface persisted API token ----
 Write-Step 'Reading the persisted API token'
@@ -244,5 +289,6 @@ Write-Host "Installed $($release.tag_name)."
 Write-Host "  Service: $svcName"
 Write-Host '  Web UI:  http://localhost:5099/'
 Write-Host '  Client:  desktop shortcut'
+Write-Host '  Updater: Update GameServerControl desktop shortcut'
 Write-Host "  Config:  $appSettings"
 Write-Host ''
