@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace GameServerControl.Agent.Servers;
@@ -106,6 +107,41 @@ public sealed class SteamCmdManager
     }
 
     /// <summary>
+    /// SteamCMD uses carriage-return progress updates while downloading. DataReceived/ReadLine
+    /// only emits on newline, which made the dashboard look frozen until installation completed.
+    /// This pump treats both CR and LF as record boundaries so progress reaches the browser live.
+    /// </summary>
+    private static async Task PumpOutputAsync(StreamReader reader, Action<string> onRecord, CancellationToken ct)
+    {
+        var buffer = new char[2048];
+        var current = new StringBuilder(256);
+
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+            if (read == 0) break;
+
+            for (var i = 0; i < read; i++)
+            {
+                var ch = buffer[i];
+                if (ch is '\r' or '\n')
+                {
+                    if (current.Length > 0)
+                    {
+                        onRecord(current.ToString());
+                        current.Clear();
+                    }
+                    continue;
+                }
+                current.Append(ch);
+            }
+        }
+
+        if (current.Length > 0)
+            onRecord(current.ToString());
+    }
+
+    /// <summary>
     /// Run an anonymous SteamCMD app update. SteamCMD is unusual on its very first invocation:
     /// it may self-update and return 7, or even return 0 without ever reaching app_update. We
     /// therefore retry once when the completion marker was not observed. The caller still verifies
@@ -142,64 +178,93 @@ public sealed class SteamCmdManager
 
             using var p = new Process { StartInfo = psi };
             var progressRegex = new Regex(@"progress:\s*([\d.]+)", RegexOptions.IgnoreCase);
+            var stateGate = new object();
             var sawSuccess = false;
             var sawAppUpdateActivity = false;
             var sawHardError = false;
+            string? lastRecord = null;
+            var lastRecordAt = DateTime.MinValue;
 
-            void HandleLine(string line)
+            void HandleRecord(string raw)
             {
-                if (line.Contains($"Success! App '{appId}'", StringComparison.OrdinalIgnoreCase))
-                    sawSuccess = true;
-
-                if (line.Contains("Update state", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("downloading", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("verifying", StringComparison.OrdinalIgnoreCase))
-                    sawAppUpdateActivity = true;
-
-                if (line.Contains("ERROR!", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("No subscription", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("Disk write failure", StringComparison.OrdinalIgnoreCase) ||
-                    line.Contains("Missing file permissions", StringComparison.OrdinalIgnoreCase))
-                    sawHardError = true;
+                var line = raw.Trim();
+                if (line.Length == 0) return;
 
                 int? pct = null;
-                var m = progressRegex.Match(line);
-                if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var v))
-                    pct = (int)Math.Clamp(v, 0, 100);
-                onLine(line, pct);
+                var emit = true;
+                lock (stateGate)
+                {
+                    if (line.Contains($"Success! App '{appId}'", StringComparison.OrdinalIgnoreCase))
+                        sawSuccess = true;
+
+                    if (line.Contains("Update state", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("downloading", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("verifying", StringComparison.OrdinalIgnoreCase))
+                        sawAppUpdateActivity = true;
+
+                    if (line.Contains("ERROR!", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("No subscription", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("Disk write failure", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("Missing file permissions", StringComparison.OrdinalIgnoreCase))
+                        sawHardError = true;
+
+                    var m = progressRegex.Match(line);
+                    if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var v))
+                        pct = (int)Math.Clamp(v, 0, 100);
+
+                    // SteamCMD can redraw an identical status several times a second. Keep the live
+                    // feed useful without filling the bounded install log with exact duplicates.
+                    var now = DateTime.UtcNow;
+                    if (string.Equals(lastRecord, line, StringComparison.Ordinal) && now - lastRecordAt < TimeSpan.FromSeconds(1))
+                        emit = false;
+                    else
+                    {
+                        lastRecord = line;
+                        lastRecordAt = now;
+                    }
+                }
+
+                if (emit) onLine(line, pct);
             }
 
-            p.OutputDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data); };
-            p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data); };
-
             if (!p.Start()) return (false, -1);
-            p.BeginOutputReadLine();
-            p.BeginErrorReadLine();
+            var stdoutTask = PumpOutputAsync(p.StandardOutput, HandleRecord, ct);
+            var stderrTask = PumpOutputAsync(p.StandardError, HandleRecord, ct);
 
             try
             {
                 await p.WaitForExitAsync(ct);
-                p.WaitForExit(); // drain redirected output handlers
+                await Task.WhenAll(stdoutTask, stderrTask);
             }
             catch (OperationCanceledException)
             {
                 try { p.Kill(true); } catch { }
+                try { await Task.WhenAll(stdoutTask, stderrTask); } catch { }
                 return (false, -2);
             }
 
             lastExitCode = p.ExitCode;
+            bool success;
+            bool hardError;
+            bool activity;
+            lock (stateGate)
+            {
+                success = sawSuccess;
+                hardError = sawHardError;
+                activity = sawAppUpdateActivity;
+            }
 
-            if (sawSuccess)
+            if (success)
             {
                 if (lastExitCode != 0)
                     onLine($"SteamCMD reported success despite exit code {lastExitCode}; verifying files on disk…", null);
                 return (true, lastExitCode);
             }
 
-            if (sawHardError)
+            if (hardError)
                 return (false, lastExitCode);
 
-            if (attempt < maxAttempts && (lastExitCode == 7 || !sawAppUpdateActivity))
+            if (attempt < maxAttempts && (lastExitCode == 7 || !activity))
             {
                 var reason = lastExitCode == 7
                     ? "SteamCMD bootstrap exited with code 7"
