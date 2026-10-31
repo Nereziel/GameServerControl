@@ -30,13 +30,7 @@ jobs:
           if ($parseErrors.Count -gt 0) { throw (($parseErrors | ForEach-Object { $_.Message }) -join "`n") }
 
       - name: Validate Web UI JavaScript
-        shell: pwsh
-        run: |
-          Get-ChildItem src/GameServerControl.Agent/WebUi/*.js | ForEach-Object {
-            Write-Host "Checking $($_.FullName)"
-            node --check $_.FullName
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+        run: node scripts/validate-webui.mjs
 
       - name: Restore
         run: dotnet restore
@@ -73,12 +67,7 @@ jobs:
           bash -n deploy/linux/install.sh
 
       - name: Validate Web UI JavaScript
-        run: |
-          set -e
-          for file in src/GameServerControl.Agent/WebUi/*.js; do
-            echo "Checking $file"
-            node --check "$file"
-          done
+        run: node scripts/validate-webui.mjs
 
       - name: Restore Shared
         run: dotnet restore src/GameServerControl.Shared
