@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace GameServerControl.Agent.Servers;
@@ -31,26 +30,21 @@ public sealed class SteamCmdManager
 
     private string PrivateCacheDir => Path.Combine(AppContext.BaseDirectory, "SteamCMD");
 
-    /// <summary>Find or fetch steamcmd, returning the absolute path to the binary.</summary>
     public async Task<string> EnsureAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
         {
-            // 1) Operator override
             var configured = _cfg["Agent:SteamCmdPath"];
             if (!string.IsNullOrWhiteSpace(configured) && File.Exists(configured))
                 return configured;
 
-            // 2) PATH lookup — covers winget/apt installs
             var onPath = WhichSteamCmd();
             if (onPath is not null) return onPath;
 
-            // 3) Private cache
             var cached = Path.Combine(PrivateCacheDir, ExeName);
             if (File.Exists(cached)) return cached;
 
-            // 4) Download fresh
             _logger.LogInformation("steamcmd not found — downloading from {Url}", DistributionUrl);
             Directory.CreateDirectory(PrivateCacheDir);
             var archivePath = Path.Combine(PrivateCacheDir, OperatingSystem.IsWindows() ? "steamcmd.zip" : "steamcmd.tar.gz");
@@ -67,11 +61,10 @@ public sealed class SteamCmdManager
             }
             else
             {
-                // Use tar via shell — extracts steamcmd.sh + linux32/steamcmd into place.
                 await RunShellAsync($"tar -xzf \"{archivePath}\" -C \"{PrivateCacheDir}\"", ct);
                 await RunShellAsync($"chmod +x \"{cached}\"", ct);
             }
-            try { File.Delete(archivePath); } catch { /* not critical */ }
+            try { File.Delete(archivePath); } catch { }
 
             if (!File.Exists(cached))
                 throw new FileNotFoundException("Extracted steamcmd archive but binary missing. Check " + PrivateCacheDir);
@@ -83,7 +76,6 @@ public sealed class SteamCmdManager
 
     private static string? WhichSteamCmd()
     {
-        // Plain "where"/"which" style PATH lookup with both candidate exe names.
         var candidates = OperatingSystem.IsWindows() ? new[] { "steamcmd.exe", "steamcmd" } : new[] { "steamcmd.sh", "steamcmd" };
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
         var sep = OperatingSystem.IsWindows() ? ';' : ':';
@@ -114,12 +106,10 @@ public sealed class SteamCmdManager
     }
 
     /// <summary>
-    /// Runs <c>+app_update {appId} validate</c> and streams stdout/stderr through
-    /// <paramref name="onLine"/>. A freshly unpacked SteamCMD often self-updates on its
-    /// first run and exits with code 7 before the requested app command really executes.
-    /// That code is therefore retried once. A SteamCMD Success! marker is also accepted
-    /// even if the bootstrapper returns a non-zero exit code; ServerInstaller performs a
-    /// second on-disk executable check before registering the server.
+    /// Run an anonymous SteamCMD app update. SteamCMD is unusual on its very first invocation:
+    /// it may self-update and return 7, or even return 0 without ever reaching app_update. We
+    /// therefore retry once when the completion marker was not observed. The caller still verifies
+    /// the expected game executable on disk, which remains the final source of truth.
     /// </summary>
     public async Task<(bool Ok, int ExitCode)> RunAppUpdateAsync(
         string installDir,
@@ -136,6 +126,9 @@ public sealed class SteamCmdManager
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             var args = $"+force_install_dir \"{installDir}\" +login anonymous +app_update {appId} validate +quit";
+            if (attempt > 1)
+                onLine($"Retrying SteamCMD install (attempt {attempt}/{maxAttempts})…", null);
+
             var psi = new ProcessStartInfo
             {
                 FileName = exe,
@@ -150,11 +143,24 @@ public sealed class SteamCmdManager
             using var p = new Process { StartInfo = psi };
             var progressRegex = new Regex(@"progress:\s*([\d.]+)", RegexOptions.IgnoreCase);
             var sawSuccess = false;
+            var sawAppUpdateActivity = false;
+            var sawHardError = false;
 
             void HandleLine(string line)
             {
                 if (line.Contains($"Success! App '{appId}'", StringComparison.OrdinalIgnoreCase))
                     sawSuccess = true;
+
+                if (line.Contains("Update state", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("downloading", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("verifying", StringComparison.OrdinalIgnoreCase))
+                    sawAppUpdateActivity = true;
+
+                if (line.Contains("ERROR!", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("No subscription", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("Disk write failure", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("Missing file permissions", StringComparison.OrdinalIgnoreCase))
+                    sawHardError = true;
 
                 int? pct = null;
                 var m = progressRegex.Match(line);
@@ -163,14 +169,8 @@ public sealed class SteamCmdManager
                 onLine(line, pct);
             }
 
-            p.OutputDataReceived += (_, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data);
-            };
-            p.ErrorDataReceived += (_, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data);
-            };
+            p.OutputDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data); };
+            p.ErrorDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) HandleLine(e.Data); };
 
             if (!p.Start()) return (false, -1);
             p.BeginOutputReadLine();
@@ -179,13 +179,11 @@ public sealed class SteamCmdManager
             try
             {
                 await p.WaitForExitAsync(ct);
-                // WaitForExit() after the async wait lets redirected output handlers drain before
-                // we inspect sawSuccess.
-                p.WaitForExit();
+                p.WaitForExit(); // drain redirected output handlers
             }
             catch (OperationCanceledException)
             {
-                try { p.Kill(true); } catch { /* swallow */ }
+                try { p.Kill(true); } catch { }
                 return (false, -2);
             }
 
@@ -194,22 +192,27 @@ public sealed class SteamCmdManager
             if (sawSuccess)
             {
                 if (lastExitCode != 0)
-                    onLine($"SteamCMD reported success despite exit code {lastExitCode}; verifying installed executable on disk…", null);
+                    onLine($"SteamCMD reported success despite exit code {lastExitCode}; verifying files on disk…", null);
                 return (true, lastExitCode);
             }
 
-            if (lastExitCode == 0)
-                return (true, 0);
+            if (sawHardError)
+                return (false, lastExitCode);
 
-            if (lastExitCode == 7 && attempt < maxAttempts)
+            if (attempt < maxAttempts && (lastExitCode == 7 || !sawAppUpdateActivity))
             {
-                onLine("SteamCMD first-run/bootstrap returned exit code 7; retrying the install once…", null);
+                var reason = lastExitCode == 7
+                    ? "SteamCMD bootstrap exited with code 7"
+                    : "SteamCMD exited before a completed app_update was observed";
+                onLine(reason + "; retrying once after bootstrap initialization…", null);
                 try { await Task.Delay(TimeSpan.FromSeconds(1), ct); }
                 catch (OperationCanceledException) { return (false, -2); }
                 continue;
             }
 
-            return (false, lastExitCode);
+            // On the final attempt allow exit 0 through to the caller's on-disk executable check.
+            // Some SteamCMD builds omit the Success! line even though the depot operation completed.
+            return (lastExitCode == 0, lastExitCode);
         }
 
         return (false, lastExitCode);
