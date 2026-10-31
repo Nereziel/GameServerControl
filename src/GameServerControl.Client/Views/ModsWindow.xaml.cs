@@ -14,6 +14,9 @@ public partial class ModsWindow : Window
     private readonly AgentClient _client;
     private readonly string _serverId;
     private readonly Action<string> _toast;
+    private readonly List<ModRowVm> _allInstalledRows = new();
+    private ModUpdateInfo[] _pendingUpdates = Array.Empty<ModUpdateInfo>();
+
     public ObservableCollection<ModRowVm> Rows { get; } = new();
     public ObservableCollection<SearchRowVm> SearchRows { get; } = new();
 
@@ -31,7 +34,6 @@ public partial class ModsWindow : Window
         Loaded += async (_, _) =>
         {
             await ReloadAsync();
-            // Pre-load popular mods so the Browse tab isn't empty on first open
             await SearchAsync("");
         };
     }
@@ -41,6 +43,7 @@ public partial class ModsWindow : Window
     private async Task ReloadAsync()
     {
         StatusText.Text = "Loading installed mods…";
+        _allInstalledRows.Clear();
         Rows.Clear();
         try
         {
@@ -52,9 +55,16 @@ public partial class ModsWindow : Window
                 EmptyText.Visibility = Visibility.Collapsed;
                 return;
             }
-            foreach (var m in resp.Mods) Rows.Add(new ModRowVm(m));
+
+            foreach (var m in resp.Mods)
+            {
+                var update = _pendingUpdates.FirstOrDefault(u =>
+                    string.Equals(u.ModId, m.ModId, StringComparison.OrdinalIgnoreCase));
+                _allInstalledRows.Add(new ModRowVm(m, update));
+            }
+
+            ApplyInstalledFilter();
             StatusText.Text = $"{resp.Mods.Length} mod(s) installed. Restart the server for changes to take effect.";
-            EmptyText.Visibility = resp.Mods.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
         catch (Exception ex)
         {
@@ -62,8 +72,34 @@ public partial class ModsWindow : Window
         }
     }
 
+    private void ApplyInstalledFilter()
+    {
+        var updatesOnly = UpdatesOnlyCheckbox?.IsChecked == true;
+        Rows.Clear();
+        foreach (var row in _allInstalledRows.Where(r => !updatesOnly || r.UpdateAvailable))
+            Rows.Add(row);
+
+        if (_allInstalledRows.Count == 0)
+        {
+            EmptyText.Text = "No mods installed yet. Use the Browse tab to find one.";
+            EmptyText.Visibility = Visibility.Visible;
+        }
+        else if (updatesOnly && Rows.Count == 0)
+        {
+            EmptyText.Text = _pendingUpdates.Length == 0
+                ? "No updates found. Run 'Check for updates' to refresh marketplace versions."
+                : "No installed mods match the update filter.";
+            EmptyText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            EmptyText.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private async void Refresh_Click(object sender, RoutedEventArgs e) => await ReloadAsync();
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void UpdatesOnlyChanged(object sender, RoutedEventArgs e) => ApplyInstalledFilter();
 
     private async void Install_Click(object sender, RoutedEventArgs e)
     {
@@ -89,11 +125,10 @@ public partial class ModsWindow : Window
     }
 
     // ---- update check ----
-    private ModUpdateInfo[] _pendingUpdates = Array.Empty<ModUpdateInfo>();
 
     private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
     {
-        UpdatesSummary.Text = "Checking…";
+        UpdatesSummary.Text = "Checking marketplace versions…";
         UpdateAllBtn.IsEnabled = false;
         try
         {
@@ -102,20 +137,61 @@ public partial class ModsWindow : Window
             if (!resp.Supported)
             {
                 UpdatesSummary.Text = "Updates not supported: " + (resp.UnsupportedReason ?? "n/a");
+                _pendingUpdates = Array.Empty<ModUpdateInfo>();
+                await ReloadAsync();
                 return;
             }
+
             if (_pendingUpdates.Length == 0)
             {
                 UpdatesSummary.Text = "All mods are up to date.";
+                await ReloadAsync();
                 return;
             }
-            UpdatesSummary.Text = $"{_pendingUpdates.Length} update(s) available: " +
-                string.Join(", ", _pendingUpdates.Select(u => $"{u.DisplayName} → {u.LatestVersion}"));
+
+            UpdatesSummary.Text = $"{_pendingUpdates.Length} update(s) available. Use Update on a single mod or Update all.";
             UpdateAllBtn.IsEnabled = true;
+            await ReloadAsync();
         }
         catch (Exception ex)
         {
             UpdatesSummary.Text = "Check failed: " + ex.Message;
+        }
+    }
+
+    private async void UpdateOne_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not ModRowVm row || !row.UpdateAvailable ||
+            string.IsNullOrWhiteSpace(row.UpdateDownloadUrl)) return;
+
+        btn.IsEnabled = false;
+        UpdatesSummary.Text = $"Updating {row.DisplayName} → {row.LatestVersion}…";
+        try
+        {
+            var result = await _client.UpdateModAsync(_serverId, row.ModId, row.UpdateDownloadUrl, row.DisplayName);
+            if (!result.Ok)
+            {
+                UpdatesSummary.Text = $"Update failed for {row.DisplayName}: {result.Error}";
+                return;
+            }
+
+            _toast($"Updated '{row.DisplayName}' to {row.LatestVersion}.");
+            _pendingUpdates = _pendingUpdates
+                .Where(u => !string.Equals(u.ModId, row.ModId, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            UpdateAllBtn.IsEnabled = _pendingUpdates.Length > 0;
+            UpdatesSummary.Text = _pendingUpdates.Length == 0
+                ? "All mods are up to date."
+                : $"{_pendingUpdates.Length} update(s) still available.";
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            UpdatesSummary.Text = $"Update failed for {row.DisplayName}: {ex.Message}";
+        }
+        finally
+        {
+            btn.IsEnabled = true;
         }
     }
 
@@ -124,10 +200,11 @@ public partial class ModsWindow : Window
         if (_pendingUpdates.Length == 0) return;
         UpdateAllBtn.IsEnabled = false;
         var total = _pendingUpdates.Length;
-        var done = 0; var failed = 0;
+        var done = 0;
+        var failed = 0;
         foreach (var u in _pendingUpdates)
         {
-            UpdatesSummary.Text = $"Updating {u.DisplayName} ({done + 1}/{total})…";
+            UpdatesSummary.Text = $"Updating {u.DisplayName} ({done + failed + 1}/{total})…";
             try
             {
                 var r = await _client.UpdateModAsync(_serverId, u.ModId, u.LatestDownloadUrl, u.DisplayName);
@@ -135,6 +212,7 @@ public partial class ModsWindow : Window
             }
             catch { failed++; }
         }
+
         UpdatesSummary.Text = $"Updated {done}, failed {failed}. Restart the server for changes to take effect.";
         _pendingUpdates = Array.Empty<ModUpdateInfo>();
         await ReloadAsync();
@@ -148,43 +226,58 @@ public partial class ModsWindow : Window
     }
 
     private async void Search_Click(object sender, RoutedEventArgs e) => await SearchAsync(SearchBox.Text);
-    private async void ShowAllChanged(object sender, RoutedEventArgs e) => await SearchAsync(SearchBox.Text);
+    private async void BrowseFilterChanged(object sender, RoutedEventArgs e) => await SearchAsync(SearchBox.Text);
 
     private async Task SearchAsync(string query)
     {
         SearchRows.Clear();
         SearchEmptyText.Visibility = Visibility.Collapsed;
-        var serverSideOnly = ShowAllCheckbox?.IsChecked != true; // unchecked = filter on
-        var modeLabel = serverSideOnly ? "server-side only" : "all mods";
+        var serverSideOnly = ShowAllCheckbox?.IsChecked != true;
+        var showDeprecated = ShowDeprecatedCheckbox?.IsChecked == true;
+        var modeLabel = serverSideOnly ? "server-side only" : "all compatibility types";
         StatusText.Text = string.IsNullOrEmpty(query)
             ? $"Loading popular mods ({modeLabel})…"
             : $"Searching for \"{query}\" ({modeLabel})…";
+
         try
         {
-            var resp = await _client.SearchModsAsync(_serverId, query, limit: 30, serverSideOnly: serverSideOnly);
-            SearchSourceText.Text = resp.Source is null
-                ? (resp.UnsupportedReason ?? "")
-                : $"Source: {resp.Source} · {resp.Results.Length} {modeLabel} (top by downloads)";
+            // Fetch more than the visible page so client-side deprecated filtering does not
+            // accidentally leave a short list when popular results contain deprecated packages.
+            var resp = await _client.SearchModsAsync(_serverId, query, limit: 100, serverSideOnly: serverSideOnly);
             if (!resp.Supported)
             {
+                SearchSourceText.Text = resp.UnsupportedReason ?? "";
                 SearchEmptyText.Text = resp.UnsupportedReason ?? "Search not available for this server.";
                 SearchEmptyText.Visibility = Visibility.Visible;
                 StatusText.Text = "";
                 return;
             }
-            foreach (var r in resp.Results) SearchRows.Add(new SearchRowVm(r));
-            if (resp.Results.Length == 0)
+
+            var results = resp.Results
+                .Where(r => showDeprecated || !r.Deprecated)
+                .Take(50)
+                .ToArray();
+
+            foreach (var r in results) SearchRows.Add(new SearchRowVm(r));
+
+            var deprecatedLabel = showDeprecated ? "deprecated shown" : "deprecated hidden";
+            SearchSourceText.Text = resp.Source is null
+                ? $"{results.Length} result(s) · {deprecatedLabel}"
+                : $"Source: {resp.Source} · {results.Length} shown · {modeLabel} · {deprecatedLabel} · sorted by downloads";
+
+            if (results.Length == 0)
             {
                 SearchEmptyText.Text = serverSideOnly
-                    ? "No server-side-only mods match. Try a different query, or tick 'Also show mods that require client install'."
-                    : "No results.";
+                    ? "No matching server-side mods. Try another query, enable client-required mods, or show deprecated packages."
+                    : "No matching mods. Try another query or show deprecated packages.";
                 SearchEmptyText.Visibility = Visibility.Visible;
             }
             else
             {
                 SearchEmptyText.Visibility = Visibility.Collapsed;
             }
-            StatusText.Text = $"{resp.Results.Length} mod(s) shown. Click Install on any server-side mod to add it without any client setup.";
+
+            StatusText.Text = $"{results.Length} mod(s) shown. Deprecated packages are {(showDeprecated ? "visible" : "hidden by default")}.";
         }
         catch (Exception ex)
         {
@@ -195,6 +288,14 @@ public partial class ModsWindow : Window
     private async void SearchInstall_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not Button btn || btn.Tag is not SearchRowVm row) return;
+        if (row.Deprecated)
+        {
+            var confirm = MessageBox.Show(this,
+                $"'{row.Name}' is marked DEPRECATED by the marketplace.\n\nIt may be abandoned, incompatible or replaced. Install it anyway?",
+                "Deprecated mod", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (confirm != MessageBoxResult.Yes) return;
+        }
+
         StatusText.Text = $"Installing {row.Name}…";
         await InstallFromUrlAsync(row.DownloadUrl, displayName: row.Name);
     }
@@ -228,19 +329,28 @@ public partial class ModsWindow : Window
 
     public sealed class ModRowVm
     {
-        public ModRowVm(ModInfo info)
+        public ModRowVm(ModInfo info, ModUpdateInfo? update)
         {
             ModId = info.ModId;
             DisplayName = info.DisplayName;
             Version = info.Version;
             SizeKb = info.SizeBytes / 1024;
             InstalledAtLabel = info.InstalledAt is { } at ? at.ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "(unknown)";
+            UpdateAvailable = update is not null;
+            LatestVersion = update?.LatestVersion;
+            UpdateDownloadUrl = update?.LatestDownloadUrl;
+            UpdateLabel = update is null ? "" : $"UPDATE → {update.LatestVersion}";
         }
+
         public string ModId { get; }
         public string DisplayName { get; }
         public string? Version { get; }
         public long SizeKb { get; }
         public string InstalledAtLabel { get; }
+        public bool UpdateAvailable { get; }
+        public string? LatestVersion { get; }
+        public string? UpdateDownloadUrl { get; }
+        public string UpdateLabel { get; }
     }
 
     public sealed class SearchRowVm
@@ -255,18 +365,19 @@ public partial class ModsWindow : Window
             PackageUrl = r.PackageUrl;
             RatingScore = r.RatingScore;
             ServerSideOnly = r.ServerSideOnly;
-            ClientRequired = !r.ServerSideOnly; // for the warning badge binding
-            // Truncate description for the card
+            ClientRequired = !r.ServerSideOnly;
+            Deprecated = r.Deprecated;
             var d = (r.Description ?? "").Replace("\n", " ").Trim();
             DescriptionShort = d.Length > 180 ? d[..180] + "…" : d;
             DownloadsLabel = r.Downloads switch
             {
                 >= 1_000_000 => $"{r.Downloads / 1_000_000.0:0.#}M",
-                >= 1_000     => $"{r.Downloads / 1_000.0:0.#}k",
-                _            => r.Downloads.ToString()
+                >= 1_000 => $"{r.Downloads / 1_000.0:0.#}k",
+                _ => r.Downloads.ToString()
             };
             CategoriesLabel = string.Join(", ", r.Categories.Take(3));
         }
+
         public string Name { get; }
         public string Owner { get; }
         public string Version { get; }
@@ -279,5 +390,6 @@ public partial class ModsWindow : Window
         public string CategoriesLabel { get; }
         public bool ServerSideOnly { get; }
         public bool ClientRequired { get; }
+        public bool Deprecated { get; }
     }
 }
