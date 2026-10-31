@@ -1,33 +1,32 @@
 # GameServerControl — Windows installer / updater (one-liner friendly).
 #
 # Run from an elevated PowerShell:
-#   iwr https://raw.githubusercontent.com/tyrus2244/GameServerControl/main/deploy/windows/install.ps1 | iex
+#   iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1 | iex
 #
 # What it does (idempotent — re-run to update):
 #   1. Ensures .NET 8 Desktop Runtime is present (downloads + installs if missing).
-#   2. Hits the GitHub Releases API for the *latest* release.
+#   2. Hits the GitHub Releases API for the latest release from this fork.
 #   3. Downloads GameServerControl-Agent-windows.zip + GameServerControl-Client-windows.zip.
 #   4. Stops the GameServerControlAgent service if it's running.
 #   5. Extracts agent to C:\GameServerControl\Agent, client to C:\GameServerControl\Client.
 #   6. Preserves existing appsettings.json + servers.json + tokens.json (treats them as user data).
-#   7. Registers + starts the Windows service.
-#   8. Creates / refreshes a desktop shortcut pointing at the new client exe.
-#   9. Tails the agent's stdout long enough to grab the auto-generated API token.
+#   7. Creates appsettings.json from the shipped example on first install.
+#   8. Ensures a private SteamCMD is available and stores Agent:SteamCmdPath.
+#   9. Registers + starts the Windows service.
+#  10. Creates / refreshes a desktop shortcut pointing at the new client exe.
+#  11. Prints the persisted API token from appsettings.json.
 #
 # Override variables (set before piping into iex):
-#   $env:GSC_REPO       — owner/name (default: tyrus2244/GameServerControl)
+#   $env:GSC_REPO       — owner/name (default: Nereziel/GameServerControl)
 #   $env:GSC_INSTALL    — install root (default: C:\GameServerControl)
-#   $env:GSC_VERSION    — pin a specific tag like v1.0.0 (default: latest)
+#   $env:GSC_VERSION    — pin a specific tag like v1.0.7 (default: latest)
 
 #Requires -RunAsAdministrator
-# NOTE: #Requires only blocks .ps1 files run directly. When this script is piped through `iex`
-# (the recommended install flow), the directive is treated as a comment and ignored. We do an
-# explicit elevation check below to handle that case correctly.
 
 $ErrorActionPreference = 'Stop'
-$ProgressPreference    = 'SilentlyContinue'   # quiet IWR progress bars
+$ProgressPreference    = 'SilentlyContinue'
 
-# ---- Elevation check (must run before anything that needs Admin) ----
+# ---- Elevation check ----
 $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isElevated) {
     Write-Host ""
@@ -37,7 +36,7 @@ if (-not $isElevated) {
     Write-Host "  Right-click Start -> 'Terminal (Admin)' or 'PowerShell (Admin)'," -ForegroundColor Yellow
     Write-Host "  then re-run the install command:" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host '    iwr https://raw.githubusercontent.com/tyrus2244/GameServerControl/main/deploy/windows/install.ps1 | iex' -ForegroundColor Gray
+    Write-Host '    iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1 | iex' -ForegroundColor Gray
     Write-Host ""
     Write-Host "  Why: registering a Windows service (sc.exe create) requires elevation." -ForegroundColor Yellow
     Write-Host "===============================================================" -ForegroundColor Red
@@ -45,7 +44,7 @@ if (-not $isElevated) {
 }
 
 # ---- Configuration ----
-$repo       = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'tyrus2244/GameServerControl' }
+$repo       = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl' }
 $installRt  = if ($env:GSC_INSTALL) { $env:GSC_INSTALL } else { 'C:\GameServerControl' }
 $agentDir   = Join-Path $installRt 'Agent'
 $clientDir  = Join-Path $installRt 'Client'
@@ -60,10 +59,16 @@ function Write-Warn2($msg){ Write-Host "    !! $msg" -ForegroundColor Yellow }
 Write-Host ""
 Write-Host "GameServerControl installer (Windows)"
 Write-Host "-------------------------------------"
+Write-Host "Repository: $repo"
 
 # ---- .NET 8 Desktop Runtime check ----
 Write-Step ".NET 8 Desktop Runtime"
-$hasDesktop = & dotnet --list-runtimes 2>$null | Select-String 'Microsoft.WindowsDesktop.App 8\.'
+$dotnetCmd = Get-Command dotnet -ErrorAction SilentlyContinue
+$hasDesktop = if ($dotnetCmd) {
+    & $dotnetCmd.Source --list-runtimes 2>$null | Select-String 'Microsoft.WindowsDesktop.App 8\.'
+} else {
+    $null
+}
 if (-not $hasDesktop) {
     Write-Warn2 "Missing — downloading Microsoft's bootstrapper…"
     $dotnetUrl = 'https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe'
@@ -87,7 +92,11 @@ $apiUrl = if ($pinnedTag) {
     "https://api.github.com/repos/$repo/releases/latest"
 }
 $headers = @{ 'User-Agent' = 'gsc-installer' }
-$release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+try {
+    $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+} catch {
+    throw "Could not resolve a GitHub release from $repo. Create a release first, or set GSC_VERSION to an existing tag. $($_.Exception.Message)"
+}
 Write-Ok "Tag: $($release.tag_name)  ·  Published: $($release.published_at)"
 
 function Get-AssetUrl($name) {
@@ -113,7 +122,6 @@ $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if ($svc -and $svc.Status -eq 'Running') {
     Write-Step "Stopping existing $svcName service"
     Stop-Service -Name $svcName -Force
-    # Give it a moment to release file handles.
     Start-Sleep -Seconds 2
     Write-Ok "Stopped."
 }
@@ -130,12 +138,52 @@ foreach ($f in $preserve) {
 if (Test-Path $agentDir) { Remove-Item $agentDir -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
 Expand-Archive -Path $agentZip -DestinationPath $agentDir -Force
-# Restore user data on top of fresh install
 foreach ($f in $preserve) {
     $src = Join-Path $backupDir $f
     if (Test-Path $src) { Copy-Item $src (Join-Path $agentDir $f) -Force }
 }
+
+# Fresh install: the release intentionally ships a template, not a credential-bearing config.
+$appSettings = Join-Path $agentDir 'appsettings.json'
+$appSettingsExample = Join-Path $agentDir 'appsettings.json.example'
+if (-not (Test-Path $appSettings)) {
+    if (Test-Path $appSettingsExample) {
+        Copy-Item $appSettingsExample $appSettings -Force
+        Write-Ok "Created appsettings.json from template."
+    } else {
+        throw "Fresh install is missing appsettings.json.example; release artifact is incomplete."
+    }
+}
 Write-Ok "Agent unpacked."
+
+# ---- Private SteamCMD ----
+# Server creation already knows how to bootstrap SteamCMD itself, but the legacy update path
+# reads Agent:SteamCmdPath. Install a private copy up front so updates also work immediately,
+# including for servers discovered on disk rather than installed through GSC.
+Write-Step "SteamCMD"
+$steamCmdDir = Join-Path $agentDir 'SteamCMD'
+$steamCmdExe = Join-Path $steamCmdDir 'steamcmd.exe'
+if (-not (Test-Path $steamCmdExe)) {
+    New-Item -ItemType Directory -Force -Path $steamCmdDir | Out-Null
+    $steamZip = Join-Path $tmpRoot 'steamcmd.zip'
+    Invoke-WebRequest -Uri 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip' -OutFile $steamZip
+    Expand-Archive -Path $steamZip -DestinationPath $steamCmdDir -Force
+    if (-not (Test-Path $steamCmdExe)) { throw "SteamCMD extraction completed but steamcmd.exe is missing: $steamCmdExe" }
+    Write-Ok "SteamCMD installed to $steamCmdExe"
+} else {
+    Write-Ok "SteamCMD already present."
+}
+
+try {
+    $cfgObj = Get-Content -LiteralPath $appSettings -Raw | ConvertFrom-Json
+    if (-not $cfgObj.Agent) { throw "Agent section missing in appsettings.json" }
+    $cfgObj.Agent | Add-Member -NotePropertyName 'SteamCmdPath' -NotePropertyValue $steamCmdExe -Force
+    $cfgObj.Agent | Add-Member -NotePropertyName 'Repo' -NotePropertyValue $repo -Force
+    $cfgObj | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $appSettings -Encoding UTF8
+    Write-Ok "Configured Agent:SteamCmdPath."
+} catch {
+    throw "Failed to update $appSettings with SteamCMD path: $_"
+}
 
 Write-Step "Installing client to $clientDir"
 if (Test-Path $clientDir) { Remove-Item $clientDir -Recurse -Force }
@@ -144,13 +192,10 @@ Expand-Archive -Path $clientZip -DestinationPath $clientDir -Force
 Write-Ok "Client unpacked."
 
 # ---- Register Windows service ----
-# We invoke sc.exe and capture both stdout and exit code. On any failure we surface the actual
-# sc.exe error message rather than letting Get-Service blow up downstream with a useless trace.
 $svcExePath = Join-Path $agentDir 'GameServerControl.Agent.exe'
+if (-not (Test-Path $svcExePath)) { throw "Agent executable missing after extraction: $svcExePath" }
 $existing   = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 
-# NOTE: parameter name is intentionally NOT `$Args` — that shadows PowerShell's automatic
-# variable and breaks splatting (the function sees an empty array, sc.exe prints help, we throw).
 function Invoke-Sc {
     param([string[]]$ScArgs, [string]$Label)
     $out = & sc.exe @ScArgs 2>&1
@@ -170,7 +215,6 @@ if ($existing) {
         'binPath=', "`"$svcExePath`"",
         'start=', 'auto',
         'DisplayName=', 'GameServerControl Agent') -Label 'sc.exe create' | Out-Null
-    # description is non-critical — log a warning instead of failing the whole install.
     try { Invoke-Sc -ScArgs @('description', $svcName, "Self-hosted dashboard for game-server processes (start/stop/backup/update/RCON). github.com/$repo") -Label 'sc.exe description' | Out-Null }
     catch { Write-Warn2 "Couldn't set service description: $_" }
     Write-Ok "Service registered."
@@ -178,21 +222,15 @@ if ($existing) {
 
 Write-Step "Starting $svcName"
 try { Invoke-Sc -ScArgs @('start', $svcName) -Label 'sc.exe start' | Out-Null }
-catch {
-    # Service might already be Running (sc.exe returns 1056 for that), or might fail to start
-    # because of a config error in appsettings.json. Tolerate "already running"; surface anything
-    # else as a warning rather than crashing the install (the agent might already be up).
-    Write-Warn2 "$_"
-}
+catch { Write-Warn2 "$_" }
 Start-Sleep -Seconds 3
 
-# Re-check existence + status. SilentlyContinue here so we can give a clean error message ourselves.
 $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
 if (-not $svc) {
-    throw "Service '$svcName' is still not registered. The sc.exe create above probably failed. Check that you're running as Administrator (Get-Process powershell shows your PID; right-click PowerShell -> Run as administrator)."
+    throw "Service '$svcName' is still not registered. Check that PowerShell is elevated."
 }
 if ($svc.Status -ne 'Running') {
-    Write-Warn2 "Service registered but not running (status: $($svc.Status)). Check the Application Event Log under source 'GameServerControl' for the boot error."
+    Write-Warn2 "Service registered but not running (status: $($svc.Status)). Check the Application Event Log and agent configuration."
 } else {
     Write-Ok "Service running."
 }
@@ -207,9 +245,9 @@ $lnkPaths = @(
 )
 $sh = New-Object -ComObject WScript.Shell
 $clientExe = Join-Path $clientDir 'GameServerControl.exe'
-# Drop the shortcut on the user's desktop. If the public one already exists we refresh it too.
+if (-not (Test-Path $clientExe)) { throw "Client executable missing after extraction: $clientExe" }
 foreach ($lp in $lnkPaths) {
-    if ($lp -like "*\Public\*" -and -not (Test-Path $lp)) { continue }   # don't create public unless it already exists
+    if ($lp -like "*\Public\*" -and -not (Test-Path $lp)) { continue }
     $lnk = $sh.CreateShortcut($lp)
     $lnk.TargetPath       = $clientExe
     $lnk.WorkingDirectory = $clientDir
@@ -218,7 +256,6 @@ foreach ($lp in $lnkPaths) {
     $lnk.Save()
     Write-Ok "Shortcut: $lp"
 }
-# Force-create the user desktop shortcut if it didn't exist
 $userLnk = Join-Path $userDesktop 'GameServerControl.lnk'
 if (-not (Test-Path $userLnk)) {
     $lnk = $sh.CreateShortcut($userLnk)
@@ -229,34 +266,30 @@ if (-not (Test-Path $userLnk)) {
     $lnk.Save()
     Write-Ok "Shortcut: $userLnk"
 }
-
-# Bust icon cache so the new logo shows up right away
 Get-Item "$env:LOCALAPPDATA\IconCache.db" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
-# ---- Try to surface the API token from the service's recent log ----
-Write-Step "Looking for the API token in recent Event Log entries"
+# ---- Surface persisted API token ----
+Write-Step "Reading the persisted API token"
 try {
-    $entries = Get-WinEvent -LogName Application -MaxEvents 50 -ErrorAction Stop |
-        Where-Object { $_.ProviderName -like '*GameServerControl*' -or $_.Message -match 'GENERATED NEW AGENT API TOKEN' }
-    $tokenEntry = $entries | Where-Object { $_.Message -match 'GENERATED NEW AGENT API TOKEN' } | Select-Object -First 1
-    if ($tokenEntry) {
+    $cfg = Get-Content -LiteralPath $appSettings -Raw | ConvertFrom-Json
+    $apiToken = [string]$cfg.Agent.ApiToken
+    if ($apiToken -and $apiToken -ne 'REPLACE_WITH_32_CHARS+' -and $apiToken.Length -ge 16) {
         Write-Host ""
-        Write-Host "   ----- AGENT API TOKEN (copy into the client/web UI) -----" -ForegroundColor Yellow
-        Write-Host $tokenEntry.Message
-        Write-Host "   ----------------------------------------------------------" -ForegroundColor Yellow
+        Write-Host "   ----- AGENT API TOKEN (keep this private) -----" -ForegroundColor Yellow
+        Write-Host "   $apiToken"
+        Write-Host "   -----------------------------------------------" -ForegroundColor Yellow
     } else {
-        Write-Skip "No token in Event Log. The agent reuses any existing appsettings.json token."
-        Write-Skip "If this is a fresh install, check: $(Join-Path $agentDir 'appsettings.json')"
+        Write-Warn2 "API token is still a placeholder. Check whether the agent service started successfully, then inspect $appSettings"
     }
 } catch {
-    Write-Skip "Event Log not readable; check appsettings.json directly."
+    Write-Warn2 "Could not read API token from $appSettings : $_"
 }
 
 Write-Host ""
 Write-Host "Installed $($release.tag_name)."
 Write-Host ""
 Write-Host "  Service: $svcName"
-Write-Host "  Web UI:  https://localhost:5099/"
+Write-Host "  Web UI:  http://localhost:5099/"
 Write-Host "  Client:  desktop shortcut"
 Write-Host "  Config:  $agentDir\appsettings.json"
 Write-Host ""

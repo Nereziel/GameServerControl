@@ -7,23 +7,23 @@
     }
   },
   "Agent": {
-    "//": "Bind the agent to a private interface. Tailscale IP recommended. Never use 0.0.0.0 on a public-facing NIC without HTTPS + a reverse proxy.",
+    "_BindHelp": "Bind the agent to a private interface. Loopback is safest by default; use a Tailscale IP only when you need direct Tailnet access.",
     "Bind": "http://127.0.0.1:5099",
 
-    "//BindHttps": "Set this to also listen with HTTPS, e.g. https://100.x.y.z:5443. CertPassword is required if you do.",
+    "_BindHttpsHelp": "Optional second HTTPS listener, e.g. https://100.x.y.z:5443. A self-signed certificate is generated when enabled.",
     "BindHttps": "",
     "CertPassword": "",
 
-    "//": "Leave ApiToken as the placeholder below — the agent generates a strong random token on first boot and writes it back here.",
+    "_TokenHelp": "Leave ApiToken as the placeholder below. The agent generates a strong random token on first boot and persists it here.",
     "ApiToken": "REPLACE_WITH_32_CHARS+",
 
+    "Repo": "Nereziel/GameServerControl",
     "ServersJsonPath": "servers.json",
 
-    "//AuditLogPath": "Override audit log directory. Defaults to <agent>/Logs/audit/",
+    "_AuditHelp": "Override audit log directory. Empty defaults to <agent>/Logs/audit/.",
     "AuditLogPath": "",
 
     "GuestCredentials": {
-      "//": "Per-VM PowerShell-Direct credentials. Only used for Hyper-V hosting mode.",
       "default": {
         "Username": "Administrator",
         "Password": "CHANGE_ME"

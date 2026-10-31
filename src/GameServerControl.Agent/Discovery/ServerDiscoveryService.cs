@@ -44,7 +44,7 @@ public sealed class ServerDiscoveryService
     {
         new("windrose",      "Windrose",                 "4129620",  @"WindroseServer.exe",                                       "WindroseServer.sh"),
         new("valheim",       "Valheim",                  "896660",   "valheim_server.exe",                                        "start_server_xterm.sh"),
-        new("dragonwilds",   "RuneScape: Dragonwilds",  "4019830",  "RSDragonwildsServer.exe",                                   "RSDragonwildsServer.sh"),
+        new("dragonwilds",   "RuneScape: Dragonwilds",  "4019830",  "RSDragonwilds.exe",                                         "RSDragonwildsServer.sh"),
         new("satisfactory",  "Satisfactory",             "1690800",  "FactoryServer.exe",                                         "FactoryServer.sh"),
         new("palworld",      "Palworld",                 "2394010",  @"PalServer.exe",                                            "PalServer.sh"),
         new("ark-asa",       "ARK: Survival Ascended",   "2430930",  @"ShooterGame\Binaries\Win64\ArkAscendedServer.exe",         "ShooterGame/Binaries/Linux/ArkAscendedServer"),
