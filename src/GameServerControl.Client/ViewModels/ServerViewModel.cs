@@ -25,9 +25,7 @@ public sealed partial class ServerViewModel : ObservableObject
     private readonly Callbacks _cb;
 
     public ServerDef Def { get; private set; }
-    /// <summary>Which agent owns this server — empty for legacy single-agent flows.</summary>
     public string AgentId { get; }
-    /// <summary>Display name of the owning agent (e.g. "Home server"). Shown on the card.</summary>
     public string AgentNickname { get; }
     public bool HasMultipleAgents { get; set; }
 
@@ -46,44 +44,35 @@ public sealed partial class ServerViewModel : ObservableObject
         AgentNickname = agentNickname;
     }
 
-    [RelayCommand]
-    private void Edit() => _cb.Edit(this);
-
-    [RelayCommand]
-    private void Delete() => _cb.Delete(this);
-
-    [RelayCommand]
-    private void Configure() => _cb.Configure(this);
-
-    [RelayCommand]
-    private void Console() => _cb.Console(this);
-
-    [RelayCommand]
-    private void Log() => _cb.Log(this);
-
-    [RelayCommand]
-    private void Mods() => _cb.Mods?.Invoke(this);
-
-    [RelayCommand]
-    private void Backups() => _cb.Backups?.Invoke(this);
-
-    [RelayCommand]
-    private void Schedule() => _cb.Schedule?.Invoke(this);
-
-    [RelayCommand]
-    private void Stats() => _cb.Stats?.Invoke(this);
-
-    [RelayCommand]
-    private void Players() => _cb.Players?.Invoke(this);
-
-    // The maintainer's donate URL. Kept here as a single named constant so MainViewModel.DonateCommand
-    // (the bottom-right footer link) and any future feature can reuse it without scattering the URL
-    // across multiple files. Per-card donate buttons were removed — this is just the source of truth.
-    public const string DonateUrl = "https://paypal.me/TKECLIPSE";
-
-    public bool HasRcon => Def.RconPort is > 0;
+    public GameProfile? Profile => GameProfiles.FindFor(Def);
+    public GameCapabilities Capabilities => Profile?.Capabilities ?? new GameCapabilities(
+        ManagedConfig: Def.GameType == GameServerControl.Shared.GameType.Custom,
+        Rcon: Def.GameType == GameServerControl.Shared.GameType.Custom,
+        LiveLog: !string.IsNullOrWhiteSpace(Def.LogPathInGuest));
+    public string GameLabel => Profile?.Label ?? GameType;
+    public string GameIcon => Profile?.Icon ?? "🖥";
+    public bool SupportsManagedConfig => Capabilities.ManagedConfig;
+    public bool SupportsMods => Capabilities.Mods;
+    public bool SupportsRcon => Capabilities.Rcon;
+    public bool SupportsPlayerManagement => Capabilities.PlayerManagement;
+    public bool SupportsLiveLog => Capabilities.LiveLog;
+    public bool HasRcon => SupportsRcon && Def.RconPort is > 0 && !string.IsNullOrWhiteSpace(Def.RconPassword);
+    public bool HasPlayers => HasRcon && SupportsPlayerManagement;
     public bool HasScheduledTask => !string.IsNullOrWhiteSpace(Def.ScheduledTaskName);
-    public bool HasLogPath => !string.IsNullOrWhiteSpace(Def.LogPathInGuest);
+    public bool HasLogPath => SupportsLiveLog && !string.IsNullOrWhiteSpace(Def.LogPathInGuest);
+
+    [RelayCommand] private void Edit() => _cb.Edit(this);
+    [RelayCommand] private void Delete() => _cb.Delete(this);
+    [RelayCommand] private void Configure() => _cb.Configure(this);
+    [RelayCommand] private void Console() => _cb.Console(this);
+    [RelayCommand] private void Log() => _cb.Log(this);
+    [RelayCommand] private void Mods() => _cb.Mods?.Invoke(this);
+    [RelayCommand] private void Backups() => _cb.Backups?.Invoke(this);
+    [RelayCommand] private void Schedule() => _cb.Schedule?.Invoke(this);
+    [RelayCommand] private void Stats() => _cb.Stats?.Invoke(this);
+    [RelayCommand] private void Players() => _cb.Players?.Invoke(this);
+
+    public const string DonateUrl = "https://paypal.me/TKECLIPSE";
 
     [ObservableProperty] private bool isAutostartEnabled;
     [ObservableProperty] private bool isAutostartLoading;
@@ -98,7 +87,7 @@ public sealed partial class ServerViewModel : ObservableObject
             var s = await c.GetAutostartAsync(Id);
             if (s.Supported && s.Enabled is bool b) IsAutostartEnabled = b;
         }
-        catch { /* tolerate */ }
+        catch { }
         finally { IsAutostartLoading = false; }
     }
 
@@ -136,10 +125,6 @@ public sealed partial class ServerViewModel : ObservableObject
     [ObservableProperty] private long? memoryMB;
     [ObservableProperty] private string? inviteCode;
 
-    // Legacy property — kept so any leftover binding doesn't error. Returns empty string;
-    // the dashboard card no longer renders a per-game icon column.
-    public string GameIcon => "";
-
     public bool HasInviteCode => !string.IsNullOrEmpty(InviteCode);
     public bool HasCpuRam => CpuPercent is not null || MemoryMB is not null;
     public string CpuRamText
@@ -153,6 +138,8 @@ public sealed partial class ServerViewModel : ObservableObject
     }
 
     public bool IsOn => ProcessState == ProcessState.Running;
+    public bool IsBareMetal => Def.HostingMode == HostingMode.BareMetal;
+    public string HostingLabel => IsBareMetal ? "This machine" : ("Hyper-V: " + VmName);
 
     public string VmBadge => VmState switch
     {
@@ -162,24 +149,19 @@ public sealed partial class ServerViewModel : ObservableObject
         VmState.Stopping => "VM STOPPING",
         VmState.Saved => "VM SAVED",
         VmState.Paused => "VM PAUSED",
-        VmState.NotApplicable => "BARE METAL",
+        VmState.NotApplicable => "LOCAL",
         _ => "VM ?"
     };
 
-    public bool IsBareMetal => Def.HostingMode == GameServerControl.Shared.HostingMode.BareMetal;
-    public string HostingLabel => IsBareMetal ? "Bare metal" : ("VM: " + VmName);
-
     public string ProcBadge => ProcessState switch
     {
-        ProcessState.Running => "GAME UP" + (PidInGuest is int p ? $" · pid {p}" : ""),
-        ProcessState.NotRunning => "GAME DOWN",
-        ProcessState.Starting => "GAME STARTING",
-        ProcessState.Stopping => "GAME STOPPING",
-        _ => "GAME ?"
+        ProcessState.Running => "RUNNING" + (PidInGuest is int p ? $" · pid {p}" : ""),
+        ProcessState.NotRunning => "STOPPED",
+        ProcessState.Starting => "STARTING",
+        ProcessState.Stopping => "STOPPING",
+        _ => "UNKNOWN"
     };
 
-    // Matched to Dark.xaml: Good = GitHub green, Bad = slate grey, Unknown = muted text-dim,
-    // transitional = info blue. Status reads instantly without competing with the brand red.
     public string VmBadgeColor => VmState == VmState.Running ? "#3FB950" :
         VmState == VmState.Off ? "#6E7681" :
         VmState == VmState.Unknown ? "#8B939F" : "#58A6FF";
@@ -198,10 +180,8 @@ public sealed partial class ServerViewModel : ObservableObject
         LastError = s.LastError;
         CpuPercent = s.CpuPercent;
         MemoryMB = s.MemoryMB;
-        if (s.Metadata is not null && s.Metadata.TryGetValue("InviteCode", out var inv))
-            InviteCode = inv;
-        else if (s.Metadata is not null)
-            InviteCode = null;
+        if (s.Metadata is not null && s.Metadata.TryGetValue("InviteCode", out var inv)) InviteCode = inv;
+        else if (s.Metadata is not null) InviteCode = null;
         OnPropertyChanged(nameof(IsOn));
         OnPropertyChanged(nameof(VmBadge));
         OnPropertyChanged(nameof(ProcBadge));
@@ -212,23 +192,12 @@ public sealed partial class ServerViewModel : ObservableObject
         OnPropertyChanged(nameof(CpuRamText));
     }
 
-    [RelayCommand]
-    private Task Start() => Invoke(ServerActionKind.Start, "Starting…");
-
-    [RelayCommand]
-    private Task Stop() => Invoke(ServerActionKind.Stop, "Stopping…");
-
-    [RelayCommand]
-    private Task Restart() => Invoke(ServerActionKind.Restart, "Restarting…");
-
-    [RelayCommand]
-    private Task Backup() => Invoke(ServerActionKind.Backup, "Creating checkpoint…");
-
-    [RelayCommand]
-    private Task Update() => Invoke(ServerActionKind.Update, "Running SteamCMD update…");
-
-    [RelayCommand]
-    private Task ApplyConfig() => Invoke(ServerActionKind.ApplyConfig, "Applying config (restart)…");
+    [RelayCommand] private Task Start() => Invoke(ServerActionKind.Start, "Starting…");
+    [RelayCommand] private Task Stop() => Invoke(ServerActionKind.Stop, "Stopping…");
+    [RelayCommand] private Task Restart() => Invoke(ServerActionKind.Restart, "Restarting…");
+    [RelayCommand] private Task Backup() => Invoke(ServerActionKind.Backup, "Creating backup…");
+    [RelayCommand] private Task Update() => Invoke(ServerActionKind.Update, "Running SteamCMD update…");
+    [RelayCommand] private Task ApplyConfig() => Invoke(ServerActionKind.ApplyConfig, "Applying config (restart)…");
 
     public async Task ToggleAsync(bool desired)
     {
@@ -247,7 +216,6 @@ public sealed partial class ServerViewModel : ObservableObject
         {
             var r = await client.ActionAsync(Id, kind);
             _toast($"[{Name}] {(r.Success ? "OK" : "FAIL")}: {r.Message}");
-            // Start/Stop now also flip the scheduled task's enabled state — refresh so the UI checkbox follows.
             if (HasScheduledTask && kind is ServerActionKind.Start or ServerActionKind.Stop or ServerActionKind.Restart)
                 await LoadAutostartAsync();
         }
@@ -255,9 +223,6 @@ public sealed partial class ServerViewModel : ObservableObject
         {
             _toast($"[{Name}] ERROR: {ex.Message}");
         }
-        finally
-        {
-            IsBusy = false;
-        }
+        finally { IsBusy = false; }
     }
 }
