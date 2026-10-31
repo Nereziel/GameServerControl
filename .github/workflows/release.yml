@@ -1,6 +1,6 @@
 name: Release
 
-# Builds Windows + Linux release artifacts and attaches them to a GitHub Release.
+# Builds self-contained Windows + Linux release artifacts and attaches them to a GitHub Release.
 # The in-app updater + one-line installers both fetch from /releases/latest, so the
 # asset names below are load-bearing — don't rename without updating the installers.
 on:
@@ -10,11 +10,11 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v1.0.7)'
+        description: 'Tag to build (e.g. v1.0.8)'
         required: true
 
 permissions:
-  contents: write   # needed to create releases + upload assets
+  contents: write
 
 jobs:
   build-windows:
@@ -32,11 +32,11 @@ jobs:
       - name: Restore
         run: dotnet restore
 
-      - name: Publish agent (win-x64)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained false -o publish/Agent-windows
+      - name: Publish agent (win-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
 
-      - name: Publish client (win-x64)
-        run: dotnet publish src/GameServerControl.Client -c Release -r win-x64 --self-contained false -o publish/Client-windows
+      - name: Publish client (win-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Client -c Release -r win-x64 --self-contained true -o publish/Client-windows
 
       - name: Zip agent
         run: Compress-Archive -Path publish/Agent-windows/* -DestinationPath GameServerControl-Agent-windows.zip
@@ -67,16 +67,15 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish agent (linux-x64)
-        run: |
-          dotnet restore src/GameServerControl.Agent
-          dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained false -o publish/Agent-linux
+      - name: Publish agent (linux-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained true -o publish/Agent-linux
 
       - name: Stage deploy artifacts
         run: |
           cp deploy/linux/gameservercontrol-agent.service publish/Agent-linux/
           cp deploy/linux/install-from-release.sh publish/Agent-linux/
           chmod +x publish/Agent-linux/install-from-release.sh
+          chmod +x publish/Agent-linux/GameServerControl.Agent
 
       - name: Tarball agent
         run: tar -czf GameServerControl-Agent-linux.tar.gz -C publish/Agent-linux .
@@ -135,6 +134,8 @@ jobs:
             GameServerControl-Install-Windows.ps1
             GameServerControl-Install-Linux.sh
           body: |
+            Self-contained release: no preinstalled .NET runtime is required on target hosts.
+
             Install commands:
 
                 # Windows (admin PowerShell)
