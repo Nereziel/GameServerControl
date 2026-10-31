@@ -1,5 +1,5 @@
 const $=s=>document.querySelector(s);
-const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
+const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const jsq=s=>String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
@@ -159,6 +159,16 @@ function parseNetworkPorts(text){
   return result;
 }
 function effectiveNetworkPorts(d){const g=profileFor(d);return d.networkPorts??g?.ports??[]}
+function rangesOverlap(a,b){const ae=a.endPort==null?Number(a.port):Number(a.endPort),be=b.endPort==null?Number(b.port):Number(b.endPort);return Number(a.port)<=be&&Number(b.port)<=ae}
+function findNetworkConflict(ports){
+  for(const s of SERVERS){
+    if(s.hostingMode==='Vm')continue;
+    for(const a of ports||[])for(const b of effectiveNetworkPorts(s)){
+      if(String(a.protocol).toLowerCase()===String(b.protocol).toLowerCase()&&rangesOverlap(a,b))return {server:s,ours:a,theirs:b};
+    }
+  }
+  return null;
+}
 function resetNetworkDefaults(id){const d=SERVERS.find(x=>x.id===id),g=d?profileFor(d):null,ta=$('#networkPorts');if(ta)ta.value=(g?.ports||[]).map(formatNetworkPort).join('\n')}
 function openNetwork(id){
   const d=SERVERS.find(x=>x.id===id);if(!d)return;const g=profileFor(d),ports=effectiveNetworkPorts(d),isVm=d.hostingMode==='Vm',isExe=/\.exe$/i.test(d.guestExePath||''),looksWindows=/^[A-Za-z]:[\\/]/.test(d.guestExePath||'');
@@ -200,6 +210,15 @@ function installNetworkUiHooks(){
       if(body&&g?.ports?.length){const box=document.createElement('div');box.className='callout info';box.innerHTML='<b>Default network ports:</b><br>'+g.ports.map(formatNetworkPort).map(esc).join('<br>')+'<br><span class="tiny muted">GameServerControl checks these against other BareMetal servers before registration.</span>';body.appendChild(box)}
     };
     wrappedCreate.__networkWrapped=true;window.openCreateSettings=wrappedCreate;
+  }
+  if(typeof startInstall==='function'&&!startInstall.__networkWrapped){
+    const originalStart=startInstall;
+    const wrappedStart=async function(key){
+      const g=GAMES.find(x=>x.key===key),conflict=findNetworkConflict(g?.ports||[]);
+      if(conflict){toast(`Port conflict with ${conflict.server.name}: ${formatNetworkPort(conflict.ours)} overlaps ${formatNetworkPort(conflict.theirs)}. Change that server's Network settings first.`,'err');return}
+      return await originalStart(key);
+    };
+    wrappedStart.__networkWrapped=true;window.startInstall=wrappedStart;
   }
 }
 window.addEventListener('DOMContentLoaded',installNetworkUiHooks);
