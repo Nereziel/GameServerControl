@@ -7,13 +7,15 @@ interface Env {
 
 const API_PREFIX = "/api/";
 const ALLOWED_METHODS = new Set(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]);
+const WRITE_METHODS = new Set(["POST", "PUT", "DELETE", "PATCH"]);
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store"
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff"
     }
   });
 }
@@ -40,11 +42,24 @@ function tokenFor(env: Env, tokenName: string): string {
   throw new Error("Unknown agent token binding");
 }
 
+function hasValidBrowserOrigin(request: Request, requestUrl: URL): boolean {
+  if (!WRITE_METHODS.has(request.method)) return true;
+
+  // This public Worker is a browser administration UI, not a third-party API.
+  // Requiring its own Origin for state-changing requests blocks cross-site form/fetch
+  // attempts even when a user already has a valid Cloudflare Access session.
+  const origin = request.headers.get("origin");
+  return origin === requestUrl.origin;
+}
+
 async function proxyApi(request: Request, env: Env): Promise<Response> {
   if (!ALLOWED_METHODS.has(request.method))
     return json({ error: "Method not allowed" }, 405);
 
   const incoming = new URL(request.url);
+  if (!hasValidBrowserOrigin(request, incoming))
+    return json({ error: "Invalid request origin" }, 403);
+
   const route = routeApi(incoming.pathname);
   if (!route)
     return json({ error: "Unknown API node. Expected /api/windows/..." }, 404);
@@ -82,6 +97,7 @@ async function proxyApi(request: Request, env: Env): Promise<Response> {
     const upstream = await fetch(target.toString(), init);
     const responseHeaders = new Headers(upstream.headers);
     responseHeaders.set("cache-control", "no-store");
+    responseHeaders.set("x-content-type-options", "nosniff");
     responseHeaders.delete("set-cookie");
     responseHeaders.delete("www-authenticate");
 
