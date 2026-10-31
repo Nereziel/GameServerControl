@@ -46,8 +46,8 @@ public sealed partial class ServerViewModel : ObservableObject
 
     public GameProfile? Profile => GameProfiles.FindFor(Def);
     public GameCapabilities Capabilities => Profile?.Capabilities ?? new GameCapabilities(
-        ManagedConfig: Def.GameType == GameType.Custom,
-        Rcon: Def.GameType == GameType.Custom,
+        ManagedConfig: Def.GameType == GameServerControl.Shared.GameType.Custom,
+        Rcon: Def.GameType == GameServerControl.Shared.GameType.Custom,
         LiveLog: !string.IsNullOrWhiteSpace(Def.LogPathInGuest));
     public string GameLabel => Profile?.Label ?? GameType;
     public string GameIcon => Profile?.Icon ?? "🖥";
