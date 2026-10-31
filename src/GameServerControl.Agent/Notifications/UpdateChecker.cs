@@ -28,7 +28,7 @@ public sealed class UpdateChecker : IHostedService, IDisposable
     public UpdateChecker(IConfiguration cfg, ILogger<UpdateChecker> logger)
     {
         _logger = logger;
-        _repo = cfg["Agent:Repo"] ?? "tyrus2244/GameServerControl";
+        _repo = cfg["Agent:Repo"] ?? "Nereziel/GameServerControl";
         _runningVersion = typeof(UpdateChecker).Assembly
             .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? typeof(UpdateChecker).Assembly.GetName().Version?.ToString(3)
@@ -58,7 +58,6 @@ public sealed class UpdateChecker : IHostedService, IDisposable
 
     private async Task PollLoop(CancellationToken ct)
     {
-        // Initial delay so we don't hammer GitHub on every restart loop.
         try { await Task.Delay(InitialDelay, ct); } catch { return; }
         while (!ct.IsCancellationRequested)
         {
@@ -105,7 +104,6 @@ public sealed class UpdateChecker : IHostedService, IDisposable
     private static string NormalizeTag(string tag) =>
         tag.StartsWith("v", StringComparison.OrdinalIgnoreCase) ? tag.Substring(1) : tag;
 
-    // Numeric-segment compare. Falls back to ordinal string compare for prerelease tags.
     private static int CompareVersions(string a, string b)
     {
         var aParts = a.Split('.');
