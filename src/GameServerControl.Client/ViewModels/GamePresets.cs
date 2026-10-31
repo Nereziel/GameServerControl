@@ -25,7 +25,7 @@ public static class GamePresets
             new[]{ "-nographics", "-batchmode", "-name", "MyServer", "-port", "2456", "-world", "MyWorld", "-password", "secret" },
             new[]{ @"C:\Users\Administrator\AppData\LocalLow\IronGate\Valheim" }),
 
-        new("dragonwilds", "RuneScape: Dragonwilds", GameType.SteamGeneric, "4019830", "RSDragonwildsServer.exe", @"C:\DragonwildsServer",
+        new("dragonwilds", "RuneScape: Dragonwilds", GameType.SteamGeneric, "4019830", "RSDragonwilds.exe", @"C:\DragonwildsServer",
             new[]{ "-log", "-NewConsole" },
             new[]{ @"C:\DragonwildsServer\RSDragonwilds\Saved\Savegames" }),
 
