@@ -14,10 +14,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
 
@@ -36,14 +36,14 @@ jobs:
         run: dotnet publish src/GameServerControl.Client -c Release -r win-x64 --self-contained false -o publish/Client-windows
 
       - name: Upload Windows agent
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: GameServerControl-Agent-windows
           path: publish/Agent-windows
           if-no-files-found: error
 
       - name: Upload Windows client
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: GameServerController-windows
           path: publish/Client-windows
@@ -55,10 +55,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
 
@@ -85,7 +85,7 @@ jobs:
           chmod +x publish/Agent-linux/install.sh
 
       - name: Upload Linux agent
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: GameServerControl-Agent-linux
           path: publish/Agent-linux
