@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GameServerControl — Linux installer / updater that downloads pre-built release tarballs.
+# GameServerControl — Linux installer / updater for self-contained release tarballs.
 #
 # Run as root (or via sudo):
 #   curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/linux/install-from-release.sh | sudo bash
@@ -8,7 +8,7 @@
 #   GSC_REPO       — owner/name (default: Nereziel/GameServerControl)
 #   GSC_INSTALL    — install dir (default: /opt/gameservercontrol/agent)
 #   GSC_USER       — service user (default: gsc)
-#   GSC_VERSION    — pin a specific tag like v1.0.7 (default: latest)
+#   GSC_VERSION    — pin a tag like v1.0.8 (default: latest)
 
 set -euo pipefail
 
@@ -29,26 +29,14 @@ echo "GameServerControl installer (Linux)"
 echo "-----------------------------------"
 echo "Repository: $REPO"
 
-if [[ $EUID -ne 0 ]]; then
-    fail "Run as root (sudo)."
-fi
+[[ $EUID -eq 0 ]] || fail "Run as root (sudo)."
 
 step "Checking prerequisites"
 for tool in curl tar systemctl; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool not found in PATH."
 done
 ok "curl, tar, systemctl all present."
-
-step ".NET 8 ASP.NET runtime"
-if command -v dotnet >/dev/null 2>&1 && dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.AspNetCore.App 8\.'; then
-    ok "Already present."
-else
-    warn "Missing — installing via Microsoft's dotnet-install.sh script."
-    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
-    bash /tmp/dotnet-install.sh --runtime aspnetcore --channel 8.0 --install-dir /usr/share/dotnet
-    ln -sf /usr/share/dotnet/dotnet /usr/local/bin/dotnet
-    ok ".NET 8 runtime installed at /usr/share/dotnet."
-fi
+ok "Self-contained release — system .NET runtime is not required."
 
 step "Resolving release from GitHub"
 if [[ -n "$VERSION" ]]; then
@@ -58,22 +46,21 @@ else
 fi
 release_json="$(curl -fsSL -H "User-Agent: gsc-installer" "$api_url")"
 tag="$(echo "$release_json" | grep -oP '"tag_name":\s*"\K[^"]+' | head -1)"
-[[ -n "$tag" ]] || fail "Could not resolve release tag. Is the repo public + does a release exist?"
+[[ -n "$tag" ]] || fail "Could not resolve release tag."
 ok "Tag: $tag"
 
 tar_url="$(echo "$release_json" | grep -oP '"browser_download_url":\s*"\Khttps://[^"]+GameServerControl-Agent-linux\.tar\.gz' | head -1)"
-[[ -n "$tar_url" ]] || fail "Release $tag is missing GameServerControl-Agent-linux.tar.gz asset."
+[[ -n "$tar_url" ]] || fail "Release $tag is missing GameServerControl-Agent-linux.tar.gz."
 
 step "Downloading agent tarball"
 tmp_dir="$(mktemp -d)"
-trap "rm -rf $tmp_dir" EXIT
+trap 'rm -rf "$tmp_dir"' EXIT
 curl -fsSL "$tar_url" -o "$tmp_dir/agent.tar.gz"
-ok "Downloaded to $tmp_dir/agent.tar.gz"
+ok "Downloaded."
 
 if systemctl is-active --quiet "$UNIT_NAME"; then
     step "Stopping existing $UNIT_NAME"
     systemctl stop "$UNIT_NAME"
-    sleep 1
     ok "Stopped."
 fi
 
@@ -99,16 +86,14 @@ done
 
 if [[ ! -f "$INSTALL_DIR/appsettings.json" ]] && [[ -f "$INSTALL_DIR/appsettings.json.example" ]]; then
     cp "$INSTALL_DIR/appsettings.json.example" "$INSTALL_DIR/appsettings.json"
-    ok "Wrote default appsettings.json (token generates on first boot)."
+    ok "Wrote default appsettings.json."
 fi
 [[ -f "$INSTALL_DIR/appsettings.json" ]] || fail "Release is missing appsettings.json.example."
 [[ -f "$INSTALL_DIR/servers.json" ]] || echo '{"Servers":[]}' > "$INSTALL_DIR/servers.json"
+[[ -f "$INSTALL_DIR/GameServerControl.Agent" ]] || fail "Self-contained agent executable is missing."
+chmod +x "$INSTALL_DIR/GameServerControl.Agent"
+ok "Agent unpacked."
 
-chmod +x "$INSTALL_DIR/GameServerControl.Agent" 2>/dev/null || true
-ok "Unpacked."
-
-# Keep a private SteamCMD next to the agent and expose a stable command name for the
-# orchestrator's update path. Server creation can use the same copy.
 step "SteamCMD"
 steamcmd_dir="$INSTALL_DIR/SteamCMD"
 steamcmd_sh="$steamcmd_dir/steamcmd.sh"
@@ -133,11 +118,8 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
 step "Installing systemd unit"
 unit_src="$INSTALL_DIR/$UNIT_NAME"
-if [[ -f "$unit_src" ]]; then
-    cp "$unit_src" "/etc/systemd/system/$UNIT_NAME"
-else
-    fail "Tarball missing $UNIT_NAME — bad release artifact."
-fi
+[[ -f "$unit_src" ]] || fail "Tarball missing $UNIT_NAME."
+cp "$unit_src" "/etc/systemd/system/$UNIT_NAME"
 systemctl daemon-reload
 systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
 systemctl start "$UNIT_NAME"
@@ -161,7 +143,6 @@ fi
 
 echo ""
 echo "Installed $tag."
-echo ""
 echo "  Service: systemctl status $UNIT_NAME"
 echo "  Logs:    journalctl -u $UNIT_NAME -f"
 echo "  Web UI:  http://<this-host>:5099/"
