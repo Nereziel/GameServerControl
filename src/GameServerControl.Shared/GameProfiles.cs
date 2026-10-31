@@ -53,9 +53,8 @@ public sealed record GameProfile(
 }
 
 /// <summary>
-/// Single source of truth for user-facing game capabilities and safe defaults.
-/// Both the Agent API and WPF client consume these profiles so unsupported settings
-/// (for example RCON on Valheim) are not presented to users.
+/// User-facing game capabilities and safe defaults. Unsupported features are deliberately
+/// absent from a profile so UIs do not expose backend implementation details to operators.
 /// </summary>
 public static class GameProfiles
 {
@@ -75,7 +74,7 @@ public static class GameProfiles
                    "-savedir", @"{root}\data", "-logFile", @"{root}\logs\valheim.log" },
             new[]{ @"{root}\data" }, @"{root}\logs\valheim.log",
             new GameCapabilities(ManagedConfig: true, Mods: true, LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
-            Notes: "World data and permission files are kept in the server folder via -savedir."),
+            Notes: "World data, admin lists and logs stay under the server folder."),
 
         new("dragonwilds", "RuneScape: Dragonwilds", "🐉", GameType.SteamGeneric, "4019830", "Dragonwilds", "RSDragonwilds.exe",
             new[]{ "-log", "-NewConsole" },
@@ -96,17 +95,19 @@ public static class GameProfiles
             new[]{ "-useperfthreads", "-NoAsyncLoadingThread", "-UseMultithreadForDS", "EpicApp=PalServer" },
             new[]{ @"{root}\Pal\Saved" }, null,
             new GameCapabilities(ManagedConfig: true, Mods: true, Rcon: true, PlayerManagement: true, ConsoleMode: GameConsoleMode.Rcon),
-            Notes: "RCON is optional. Enable it in Palworld server settings, then fill port/password."),
+            Notes: "RCON is optional. Enable it in Palworld server settings, then enter its port and password."),
 
         new("satisfactory", "Satisfactory", "⚙", GameType.SteamGeneric, "1690800", "Satisfactory", "FactoryServer.exe",
             new[]{ "-log", "-unattended" },
-            new[]{ @"C:\Users\Administrator\AppData\Local\FactoryGame\Saved\SaveGames" }, null,
-            new GameCapabilities(ManagedConfig: true, Mods: true),
-            Notes: "Satisfactory uses its native Windows save location by default."),
+            new[]{ @"C:\Windows\System32\config\systemprofile\AppData\Local\FactoryGame\Saved\SaveGames\server" },
+            @"{root}\FactoryGame\Saved\Logs\FactoryGame.log",
+            new GameCapabilities(ManagedConfig: true, Mods: true, LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
+            Notes: "Satisfactory does not document a save-root override. The default GameServerControl Windows service runs as LocalSystem, so saves remain in that service profile; logs are install-relative."),
 
         new("zomboid", "Project Zomboid", "🧟", GameType.SteamGeneric, "380870", "ProjectZomboid", "StartServer64.bat",
-            Array.Empty<string>(), new[]{ @"C:\Users\Administrator\Zomboid" }, null, Basic,
-            Notes: "Project Zomboid uses the Windows user profile by default."),
+            new[]{ @"-cachedir={root}\data", "-servername", "GameServerControl" },
+            new[]{ @"{root}\data" }, null, Basic,
+            Notes: "-cachedir keeps configuration, saves and logs under the server folder."),
 
         new("vrising", "V Rising", "🩸", GameType.SteamGeneric, "1829350", "VRising", "VRisingServer.exe",
             new[]{ "-persistentDataPath", @"{root}\data", "-serverName", "My V Rising Server", "-saveName", "world1", "-logFile", @"{root}\logs\VRisingServer.log" },
@@ -128,22 +129,22 @@ public static class GameProfiles
         new("rust", "Rust", "🔧", GameType.SteamGeneric, "258550", "Rust", "RustDedicated.exe",
             new[]{ "-batchmode", "+server.port", "28015", "+rcon.port", "28016", "+rcon.password", "change-me", "+server.hostname", "My Rust Server" },
             new[]{ @"{root}\server" }, null, Basic,
-            Notes: "The game supports RCON, but GameServerControl does not yet have a Rust RCON handler, so RCON controls stay hidden."),
+            Notes: "Rust supports RCON, but GameServerControl hides it until a Rust RCON handler is implemented."),
 
         new("7dtd", "7 Days to Die", "🧟", GameType.SteamGeneric, "294420", "SevenDaysToDie", "7DaysToDieServer.exe",
-            new[]{ "-quit", "-batchmode", "-nographics", "-configfile=serverconfig.xml" },
-            new[]{ @"C:\Users\Administrator\AppData\Roaming\7DaysToDie\Saves" }, null, Basic,
-            Notes: "Uses the game's native Windows save location until managed user-data relocation is implemented."),
+            new[]{ "-quit", "-batchmode", "-nographics", "-configfile=serverconfig.xml", @"-UserDataFolder={root}\data" },
+            new[]{ @"{root}\data" }, null, Basic,
+            Notes: "The supported -UserDataFolder override keeps generated worlds and saves under the server folder."),
 
         new("terraria", "Terraria", "🌳", GameType.SteamGeneric, "105600", "Terraria", "TerrariaServer.exe",
-            new[]{ "-config", "serverconfig.txt" },
-            new[]{ @"C:\Users\Administrator\Documents\My Games\Terraria\Worlds" }, null, Basic,
-            Notes: "World location is controlled by Terraria's server config."),
+            new[]{ "-world", @"{root}\worlds\World.wld", "-autocreate", "2", "-worldname", "World", "-port", "7777", "-maxplayers", "8" },
+            new[]{ @"{root}\worlds" }, null, Basic,
+            Notes: "Creates/loads World.wld under the server folder instead of the Windows Documents profile."),
 
         new("dst", "Don't Starve Together", "❄", GameType.SteamGeneric, "343050", "DST", @"bin\dontstarve_dedicated_server_nullrenderer.exe",
-            new[]{ "-console", "-cluster", "MyCluster", "-shard", "Master" },
-            new[]{ @"C:\Users\Administrator\Documents\Klei\DoNotStarveTogether" }, null, Basic,
-            Notes: "Uses Klei's native user-profile storage by default."),
+            new[]{ "-console", "-persistent_storage_root", @"{root}\data", "-conf_dir", "DST", "-cluster", "MyCluster", "-shard", "Master" },
+            new[]{ @"{root}\data\DST\MyCluster" }, null, Basic,
+            Notes: "Klei's -persistent_storage_root override keeps the cluster under the server folder."),
 
         new("minecraft", "Minecraft (Java)", "⛏", GameType.Minecraft, null, "Minecraft", "server.jar",
             new[]{ "java", "-Xmx4G", "-Xms4G", "-jar", "server.jar", "nogui" },
