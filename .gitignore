@@ -31,6 +31,15 @@ artifacts/
 *.snupkg
 **/Properties/launchSettings.json
 
+# Node / Cloudflare Worker
+node_modules/
+worker/.wrangler/
+worker/.wrangler-dry-run/
+worker/.dev.vars
+worker/.dev.vars.*
+worker/.env
+worker/.env.*
+
 # Sensitive — never commit
 appsettings.json
 appsettings.*.json
