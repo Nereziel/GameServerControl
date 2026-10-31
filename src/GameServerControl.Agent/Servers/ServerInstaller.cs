@@ -17,7 +17,6 @@ public sealed class ServerInstaller
     private readonly IHubContext<StatusHub> _hub;
     private readonly ILogger<ServerInstaller> _logger;
 
-    // jobId → final progress snapshot, so a UI joining mid-install can grab the latest.
     private readonly ConcurrentDictionary<string, InstallProgress> _jobs = new();
 
     public ServerInstaller(SteamCmdManager steamCmd, ServerStore store,
@@ -31,13 +30,10 @@ public sealed class ServerInstaller
 
     public InstallProgress? Get(string jobId) => _jobs.TryGetValue(jobId, out var p) ? p : null;
 
-    /// <summary>Kicks off an install async; returns a job ID. Caller validates the request.</summary>
     public string StartJob(InstallServerRequest req)
     {
         var jobId = Guid.NewGuid().ToString("N")[..12];
         _jobs[jobId] = new InstallProgress(jobId, "queued", "Queued.", null, false, false);
-        // Fire-and-forget — exceptions are caught inside RunAsync. The Task is intentionally
-        // not awaited; we rely on SignalR for completion signaling.
         _ = Task.Run(() => RunAsync(jobId, req, CancellationToken.None));
         return jobId;
     }
@@ -53,7 +49,6 @@ public sealed class ServerInstaller
                 req.SteamAppId,
                 (line, pct) =>
                 {
-                    // Fire-and-forget — slow SignalR shouldn't block steamcmd parsing.
                     _ = BroadcastAsync(new InstallProgress(jobId, "steamcmd", line, pct, false, false));
                 },
                 ct);
@@ -61,13 +56,32 @@ public sealed class ServerInstaller
             if (!ok)
             {
                 await BroadcastAsync(new InstallProgress(jobId, "failed",
-                    $"SteamCMD exited with code {exitCode}. Most common cause: not enough disk space, or Steam was rate-limiting you. Try again in a minute.",
+                    $"SteamCMD exited with code {exitCode}. Check disk space, Steam rate limiting, and the SteamCMD output above.",
                     null, true, false));
                 return;
             }
 
-            // Register the server. The ServerDef's GuestExePath should already be the full path
-            // the wizard composed from the install location + preset's relative exe path.
+            // SteamCMD exit 0 only means the depot operation completed. Verify the preset points
+            // at a file that really exists before claiming the server is ready. This catches stale
+            // executable names immediately (for example when a game changes its dedicated binary).
+            var expectedExe = req.ServerDef.GuestExePath;
+            if (!File.Exists(expectedExe))
+            {
+                await BroadcastAsync(new InstallProgress(jobId, "failed",
+                    $"SteamCMD finished, but the expected server executable was not found: {expectedExe}. " +
+                    "The game files remain installed; update the preset/executable path and use discovery or add the server manually.",
+                    null, true, false));
+                return;
+            }
+
+            if (!string.Equals(req.ServerDef.SteamAppId, req.SteamAppId, StringComparison.Ordinal))
+            {
+                await BroadcastAsync(new InstallProgress(jobId, "failed",
+                    $"Steam App ID mismatch: install request used {req.SteamAppId}, but ServerDef contains {req.ServerDef.SteamAppId ?? "(none)"}.",
+                    null, true, false));
+                return;
+            }
+
             await BroadcastAsync(new InstallProgress(jobId, "register", "Registering server…", 99, false, false));
             try
             {
@@ -75,8 +89,6 @@ public sealed class ServerInstaller
             }
             catch (Exception ex)
             {
-                // SteamCMD already finished, so the files are on disk — the user can manually
-                // add the server from the dashboard. Surface this as a soft failure.
                 await BroadcastAsync(new InstallProgress(jobId, "failed",
                     $"SteamCMD finished but registration failed: {ex.Message}. The game files ARE installed at {req.InstallPath}; you can add the server manually.",
                     null, true, false));
