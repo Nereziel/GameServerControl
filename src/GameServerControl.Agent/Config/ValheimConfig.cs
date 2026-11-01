@@ -56,8 +56,15 @@ public sealed class ValheimConfig : IGameConfig
     public async Task<Dictionary<string, string>> ReadAsync(ServerDef def, CancellationToken ct)
     {
         var dict = ReadLaunchArgs(def.StartArgs ?? Array.Empty<string>());
-        var saveDir = ResolveSaveDir(def, dict);
+        // Reflect Valheim's real engine defaults even when the corresponding switch is absent.
+        dict.TryAdd("port", "2456");
+        dict.TryAdd("public", "1");
+        dict.TryAdd("saveinterval", "1800");
+        dict.TryAdd("backups", "4");
+        dict.TryAdd("backupshort", "7200");
+        dict.TryAdd("backuplong", "43200");
 
+        var saveDir = ResolveSaveDir(def, dict);
         foreach (var (key, fileName) in AccessFiles)
         {
             var text = await ReadAccessFileAsync(def, Path.Combine(saveDir, fileName), ct);
@@ -75,7 +82,7 @@ public sealed class ValheimConfig : IGameConfig
         foreach (var key in new[]
         {
             "name", "password", "port", "world", "savedir", "saveinterval", "backups",
-            "backupshort", "backuplong", "public", "instanceid", "preset"
+            "backupshort", "backuplong", "public", "instanceid"
         })
         {
             if (!values.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value)) continue;
@@ -83,12 +90,18 @@ public sealed class ValheimConfig : IGameConfig
             managed.Add(value.Trim());
         }
 
+        if (values.TryGetValue("preset", out var preset) && !string.IsNullOrWhiteSpace(preset))
+        {
+            managed.Add("-preset");
+            managed.Add(preset.Trim().ToLowerInvariant());
+        }
+
         foreach (var key in new[] { "combat", "deathpenalty", "resources", "raids", "portals" })
         {
             if (!values.TryGetValue("modifier:" + key, out var value) || string.IsNullOrWhiteSpace(value)) continue;
             managed.Add("-modifier");
             managed.Add(key);
-            managed.Add(value.Trim());
+            managed.Add(NormalizeModifierValue(key, value));
         }
 
         foreach (var flag in SetKeyFlags.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
@@ -140,6 +153,23 @@ public sealed class ValheimConfig : IGameConfig
         }
     }
 
+    private static string NormalizeModifierValue(string key, string value)
+    {
+        var normalized = value.Trim();
+        // Older GameServerControl schema labels used internal-looking names. Accept them so
+        // existing browser state/server definitions migrate cleanly to Iron Gate's CLI values.
+        if (key.Equals("deathpenalty", StringComparison.OrdinalIgnoreCase) &&
+            normalized.Equals("CasualMode", StringComparison.OrdinalIgnoreCase))
+            normalized = "casual";
+        if (key.Equals("portals", StringComparison.OrdinalIgnoreCase))
+        {
+            if (normalized.Equals("CasualPortals", StringComparison.OrdinalIgnoreCase)) normalized = "casual";
+            else if (normalized.Equals("HardPortals", StringComparison.OrdinalIgnoreCase)) normalized = "hard";
+            else if (normalized.Equals("VeryHardPortals", StringComparison.OrdinalIgnoreCase)) normalized = "veryhard";
+        }
+        return normalized.ToLowerInvariant();
+    }
+
     private static Dictionary<string, string> ReadLaunchArgs(string[] args)
     {
         var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -178,9 +208,7 @@ public sealed class ValheimConfig : IGameConfig
             }
 
             if (KeyValueArgs.Contains(bare) && i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
-            {
                 dict[bare] = args[++i];
-            }
         }
         return dict;
     }
