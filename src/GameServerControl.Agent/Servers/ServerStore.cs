@@ -97,6 +97,10 @@ public sealed class ServerStore
             throw new ArgumentException("Id must be lowercase letters, digits, and hyphens (e.g. 'valheim-2').");
         if (string.IsNullOrWhiteSpace(def.Name))
             throw new ArgumentException("Name is required.");
+
+        var profile = GameProfiles.FindFor(def);
+        if (def.HostingMode == HostingMode.Vm && profile is not null && !profile.Capabilities.HyperV)
+            throw new ArgumentException($"{profile.Label} is supported only in BareMetal hosting mode.");
         if (def.HostingMode == HostingMode.Vm && string.IsNullOrWhiteSpace(def.VmName))
             throw new ArgumentException("VmName is required when HostingMode is Vm.");
         if (string.IsNullOrWhiteSpace(def.GuestExePath))
