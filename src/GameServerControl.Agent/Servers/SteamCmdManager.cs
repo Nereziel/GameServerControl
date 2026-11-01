@@ -8,7 +8,9 @@ namespace GameServerControl.Agent.Servers;
 
 /// <summary>
 /// Resolves steamcmd in order: Agent:SteamCmdPath config, PATH, private cache under the
-/// agent dir. Downloads the official Valve archive if none of those exist.
+/// agent dir. Downloads the official Valve archive if none of those exist. The private cache is
+/// also exposed on the Agent process PATH so legacy/update call-sites that execute "steamcmd"
+/// use the exact same managed installation after an Agent restart.
 /// </summary>
 public sealed class SteamCmdManager
 {
@@ -21,9 +23,11 @@ public sealed class SteamCmdManager
     {
         _cfg = cfg;
         _logger = logger;
+        PrepareExistingPrivateCache();
     }
 
     private string ExeName => OperatingSystem.IsWindows() ? "steamcmd.exe" : "steamcmd.sh";
+    private string CommandAliasName => OperatingSystem.IsWindows() ? "steamcmd.exe" : "steamcmd";
 
     private string DistributionUrl => OperatingSystem.IsWindows()
         ? "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip"
@@ -44,7 +48,11 @@ public sealed class SteamCmdManager
             if (onPath is not null) return onPath;
 
             var cached = Path.Combine(PrivateCacheDir, ExeName);
-            if (File.Exists(cached)) return cached;
+            if (File.Exists(cached))
+            {
+                PreparePrivateCacheCommand(cached);
+                return cached;
+            }
 
             _logger.LogInformation("steamcmd not found — downloading from {Url}", DistributionUrl);
             Directory.CreateDirectory(PrivateCacheDir);
@@ -69,15 +77,58 @@ public sealed class SteamCmdManager
 
             if (!File.Exists(cached))
                 throw new FileNotFoundException("Extracted steamcmd archive but binary missing. Check " + PrivateCacheDir);
+
+            PreparePrivateCacheCommand(cached);
             _logger.LogInformation("steamcmd installed at {Path}", cached);
             return cached;
         }
         finally { _gate.Release(); }
     }
 
+    private void PrepareExistingPrivateCache()
+    {
+        try
+        {
+            var cached = Path.Combine(PrivateCacheDir, ExeName);
+            if (File.Exists(cached)) PreparePrivateCacheCommand(cached);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not expose existing private SteamCMD cache on PATH");
+        }
+    }
+
+    private void PreparePrivateCacheCommand(string cached)
+    {
+        Directory.CreateDirectory(PrivateCacheDir);
+        if (!OperatingSystem.IsWindows())
+        {
+            var alias = Path.Combine(PrivateCacheDir, CommandAliasName);
+            try
+            {
+                if (!File.Exists(alias))
+                {
+                    File.WriteAllText(alias, "#!/bin/sh\nexec \"$(dirname \"$0\")/steamcmd.sh\" \"$@\"\n", new UTF8Encoding(false));
+                    var mode = File.GetUnixFileMode(alias);
+                    File.SetUnixFileMode(alias, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not create SteamCMD command alias {Alias}", alias);
+            }
+        }
+
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var separator = OperatingSystem.IsWindows() ? ';' : ':';
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        if (!path.Split(separator, StringSplitOptions.RemoveEmptyEntries).Contains(PrivateCacheDir, comparer))
+            Environment.SetEnvironmentVariable("PATH", PrivateCacheDir + separator + path);
+    }
+
     private static string? WhichSteamCmd()
     {
-        var candidates = OperatingSystem.IsWindows() ? new[] { "steamcmd.exe", "steamcmd" } : new[] { "steamcmd.sh", "steamcmd" };
+        var candidates = OperatingSystem.IsWindows() ? new[] { "steamcmd.exe", "steamcmd" } : new[] { "steamcmd", "steamcmd.sh" };
         var pathEnv = Environment.GetEnvironmentVariable("PATH") ?? "";
         var sep = OperatingSystem.IsWindows() ? ';' : ':';
         foreach (var dir in pathEnv.Split(sep, StringSplitOptions.RemoveEmptyEntries))
@@ -106,11 +157,6 @@ public sealed class SteamCmdManager
         await p.WaitForExitAsync(ct);
     }
 
-    /// <summary>
-    /// SteamCMD uses carriage-return progress updates while downloading. DataReceived/ReadLine
-    /// only emits on newline, which made the dashboard look frozen until installation completed.
-    /// This pump treats both CR and LF as record boundaries so progress reaches the browser live.
-    /// </summary>
     private static async Task PumpOutputAsync(StreamReader reader, Action<string> onRecord, CancellationToken ct)
     {
         var buffer = new char[2048];
@@ -137,8 +183,7 @@ public sealed class SteamCmdManager
             }
         }
 
-        if (current.Length > 0)
-            onRecord(current.ToString());
+        if (current.Length > 0) onRecord(current.ToString());
     }
 
     /// <summary>
@@ -162,8 +207,7 @@ public sealed class SteamCmdManager
         for (var attempt = 1; attempt <= maxAttempts; attempt++)
         {
             var args = $"+force_install_dir \"{installDir}\" +login anonymous +app_update {appId} validate +quit";
-            if (attempt > 1)
-                onLine($"Retrying SteamCMD install (attempt {attempt}/{maxAttempts})…", null);
+            if (attempt > 1) onLine($"Retrying SteamCMD install (attempt {attempt}/{maxAttempts})…", null);
 
             var psi = new ProcessStartInfo
             {
@@ -194,36 +238,23 @@ public sealed class SteamCmdManager
                 var emit = true;
                 lock (stateGate)
                 {
-                    if (line.Contains($"Success! App '{appId}'", StringComparison.OrdinalIgnoreCase))
-                        sawSuccess = true;
-
+                    if (line.Contains($"Success! App '{appId}'", StringComparison.OrdinalIgnoreCase)) sawSuccess = true;
                     if (line.Contains("Update state", StringComparison.OrdinalIgnoreCase) ||
                         line.Contains("downloading", StringComparison.OrdinalIgnoreCase) ||
-                        line.Contains("verifying", StringComparison.OrdinalIgnoreCase))
-                        sawAppUpdateActivity = true;
-
+                        line.Contains("verifying", StringComparison.OrdinalIgnoreCase)) sawAppUpdateActivity = true;
                     if (line.Contains("ERROR!", StringComparison.OrdinalIgnoreCase) ||
                         line.Contains("No subscription", StringComparison.OrdinalIgnoreCase) ||
                         line.Contains("Disk write failure", StringComparison.OrdinalIgnoreCase) ||
-                        line.Contains("Missing file permissions", StringComparison.OrdinalIgnoreCase))
-                        sawHardError = true;
+                        line.Contains("Missing file permissions", StringComparison.OrdinalIgnoreCase)) sawHardError = true;
 
                     var m = progressRegex.Match(line);
                     if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var v))
                         pct = (int)Math.Clamp(v, 0, 100);
 
-                    // SteamCMD can redraw an identical status several times a second. Keep the live
-                    // feed useful without filling the bounded install log with exact duplicates.
                     var now = DateTime.UtcNow;
-                    if (string.Equals(lastRecord, line, StringComparison.Ordinal) && now - lastRecordAt < TimeSpan.FromSeconds(1))
-                        emit = false;
-                    else
-                    {
-                        lastRecord = line;
-                        lastRecordAt = now;
-                    }
+                    if (string.Equals(lastRecord, line, StringComparison.Ordinal) && now - lastRecordAt < TimeSpan.FromSeconds(1)) emit = false;
+                    else { lastRecord = line; lastRecordAt = now; }
                 }
-
                 if (emit) onLine(line, pct);
             }
 
@@ -261,8 +292,7 @@ public sealed class SteamCmdManager
                 return (true, lastExitCode);
             }
 
-            if (hardError)
-                return (false, lastExitCode);
+            if (hardError) return (false, lastExitCode);
 
             if (attempt < maxAttempts && (lastExitCode == 7 || !activity))
             {
@@ -275,8 +305,6 @@ public sealed class SteamCmdManager
                 continue;
             }
 
-            // On the final attempt allow exit 0 through to the caller's on-disk executable check.
-            // Some SteamCMD builds omit the Success! line even though the depot operation completed.
             return (lastExitCode == 0, lastExitCode);
         }
 
