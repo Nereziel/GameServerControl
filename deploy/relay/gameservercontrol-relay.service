@@ -1,0 +1,35 @@
+[Unit]
+Description=GameServerControl public game-port relay
+After=network-online.target tailscaled.service ufw.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gsc-relay
+Group=gsc-relay
+EnvironmentFile=/etc/gameservercontrol-relay.env
+WorkingDirectory=/opt/gameservercontrol/relay
+ExecStart=/opt/gameservercontrol/relay/GameServerControl.Relay
+Restart=on-failure
+RestartSec=3
+
+# iptables/netfilter changes need CAP_NET_ADMIN; ping/raw helpers may need CAP_NET_RAW.
+# The service remains an unprivileged user and does not receive full root privileges.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+ReadWritePaths=/var/lib/gameservercontrol-relay
+
+[Install]
+WantedBy=multi-user.target
