@@ -2,60 +2,59 @@ using System.IO.Compression;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using GameServerControl.Agent.Hyperv;
+using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Mods;
 
 /// <summary>
-/// Manages server-side BepInEx plugin DLLs for Valheim (and any other BepInEx-based
-/// dedicated server that ships with a BepInEx folder under the install root).
-///
-/// Layout on disk:
-///   &lt;install&gt;/BepInEx/plugins/         ← .dll files + per-mod folders go here
-///   &lt;install&gt;/BepInEx/.gsc-mods.json   ← our metadata sidecar: who, when, where from
-///
-/// Install flow: HTTP GET the URL → save zip to temp → look for "plugins/" subdir inside
-/// the zip (Thunderstore convention) and copy its contents into &lt;install&gt;/BepInEx/plugins.
-/// If the zip has no plugins/ subdir but does have top-level .dll files, those get copied
-/// instead — handles raw GitHub-release zips of single-DLL mods.
-///
-/// Uninstall: removes the file or folder named by ModId and updates the sidecar.
+/// Bare-metal Valheim BepInEx/Thunderstore manager. The first mod installation bootstraps the
+/// current BepInExPack_Valheim into the server root, then installs plugins under BepInEx/plugins.
+/// Hyper-V is deliberately rejected until guest-native mod transport is implemented; writing a
+/// guest path on the host would be unsafe and misleading.
 /// </summary>
 public sealed class ValheimBepInExModManager : IModManager
 {
+    private const string BepInExOwner = "denikson";
+    private const string BepInExPackage = "BepInExPack_Valheim";
+
     private readonly ILogger<ValheimBepInExModManager> _logger;
     private readonly HttpClient _http;
     private readonly ThunderstoreClient _thunderstore;
+    private readonly ServerStore _store;
+    private readonly LocalProcessService _local;
+    private readonly SemaphoreSlim _bootstrapGate = new(1, 1);
 
-    public ValheimBepInExModManager(ILogger<ValheimBepInExModManager> logger, ThunderstoreClient thunderstore)
+    public ValheimBepInExModManager(
+        ILogger<ValheimBepInExModManager> logger,
+        ThunderstoreClient thunderstore,
+        ServerStore store,
+        LocalProcessService local)
     {
         _logger = logger;
         _thunderstore = thunderstore;
+        _store = store;
+        _local = local;
         _http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         _http.DefaultRequestHeaders.UserAgent.ParseAdd("GameServerControl-ModInstaller/1.0");
     }
 
-    public string? MarketplaceSource(ServerDef def) => "valheim.thunderstore.io";
+    public string? MarketplaceSource(ServerDef def) =>
+        def.HostingMode == HostingMode.BareMetal ? "valheim.thunderstore.io" : null;
 
-    public Task<ModSearchResult[]> SearchAsync(ServerDef def, string query, int limit, bool serverSideOnly, CancellationToken ct)
-        => _thunderstore.SearchAsync("valheim", query, limit, serverSideOnly, ct);
+    public Task<ModSearchResult[]> SearchAsync(ServerDef def, string query, int limit, bool serverSideOnly, CancellationToken ct) =>
+        def.HostingMode == HostingMode.BareMetal
+            ? _thunderstore.SearchAsync("valheim", query, limit, serverSideOnly, ct)
+            : Task.FromResult(Array.Empty<ModSearchResult>());
 
-    public bool Supports(ServerDef def)
-    {
-        // Any server whose install dir has a BepInEx folder is fair game. Catches Valheim
-        // out-of-the-box and any other BepInEx-using game the user adds.
-        if (string.IsNullOrEmpty(def.GuestWorkingDir)) return false;
-        return Directory.Exists(Path.Combine(def.GuestWorkingDir, "BepInEx"))
-            || def.SteamAppId == "896660"; // Valheim — match even if BepInEx not yet installed (let install work)
-    }
+    public bool Supports(ServerDef def) =>
+        def.HostingMode == HostingMode.BareMetal &&
+        def.SteamAppId == "896660" &&
+        !string.IsNullOrWhiteSpace(def.GuestWorkingDir);
 
-    public string ModsFolder(ServerDef def) =>
-        Path.Combine(def.GuestWorkingDir, "BepInEx", "plugins");
-
-    private static string MetadataPath(ServerDef def) =>
-        Path.Combine(def.GuestWorkingDir, "BepInEx", ".gsc-mods.json");
-
-    // ---- list ----
+    public string ModsFolder(ServerDef def) => Path.Combine(def.GuestWorkingDir, "BepInEx", "plugins");
+    private static string MetadataPath(ServerDef def) => Path.Combine(def.GuestWorkingDir, "BepInEx", ".gsc-mods.json");
 
     public Task<ModInfo[]> ListAsync(ServerDef def, CancellationToken ct)
     {
@@ -66,24 +65,17 @@ public sealed class ValheimBepInExModManager : IModManager
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var result = new List<ModInfo>();
 
-        // Top-level DLLs (single-file mods)
         foreach (var dll in Directory.EnumerateFiles(dir, "*.dll", SearchOption.TopDirectoryOnly))
         {
             var id = Path.GetFileName(dll);
             seen.Add(id);
             var info = new FileInfo(dll);
             var sidecar = meta.GetValueOrDefault(id);
-            result.Add(new ModInfo(
-                ModId: id,
-                DisplayName: sidecar?.DisplayName ?? Path.GetFileNameWithoutExtension(dll),
-                Version: sidecar?.Version,
-                Source: sidecar?.Source,
-                InstalledAt: sidecar?.InstalledAt ?? info.CreationTimeUtc,
-                SizeBytes: info.Length,
-                Files: new[] { Path.GetRelativePath(def.GuestWorkingDir, dll) }));
+            result.Add(new ModInfo(id, sidecar?.DisplayName ?? Path.GetFileNameWithoutExtension(dll), sidecar?.Version,
+                sidecar?.Source, sidecar?.InstalledAt ?? info.CreationTimeUtc, info.Length,
+                new[] { Path.GetRelativePath(def.GuestWorkingDir, dll) }));
         }
 
-        // Subfolders (multi-file mods)
         foreach (var sub in Directory.EnumerateDirectories(dir))
         {
             var id = Path.GetFileName(sub);
@@ -91,39 +83,44 @@ public sealed class ValheimBepInExModManager : IModManager
             var sidecar = meta.GetValueOrDefault(id);
             long size = 0;
             try { size = new DirectoryInfo(sub).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length); }
-            catch { /* ignore */ }
-            result.Add(new ModInfo(
-                ModId: id,
-                DisplayName: sidecar?.DisplayName ?? id,
-                Version: sidecar?.Version,
-                Source: sidecar?.Source,
-                InstalledAt: sidecar?.InstalledAt ?? Directory.GetCreationTimeUtc(sub),
-                SizeBytes: size,
-                Files: sidecar?.Files));
+            catch { }
+            result.Add(new ModInfo(id, sidecar?.DisplayName ?? id, sidecar?.Version, sidecar?.Source,
+                sidecar?.InstalledAt ?? Directory.GetCreationTimeUtc(sub), size, sidecar?.Files));
         }
 
         return Task.FromResult(result.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
-    // ---- install ----
-
     public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
     {
+        if (!Supports(def))
+            return new ModInstallResult(false, null, "Valheim mod management is currently supported only for BareMetal servers.");
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
             return new ModInstallResult(false, null, "URL must be an http(s) link to a zip.");
 
+        var (lookupOk, runningPid) = await _local.FindProcessAsync(def.GuestExePath, ct);
+        if (lookupOk && runningPid is not null)
+            return new ModInstallResult(false, null, "Stop the Valheim server before installing or updating mods.");
+
+        var bootstrap = await EnsureBepInExAsync(def, ct);
+        if (!bootstrap.Ok) return new ModInstallResult(false, null, bootstrap.Error);
+        def = bootstrap.Def;
+
+        var parsedRequested = ThunderstoreClient.ParseDownloadUrl(url);
+        if (parsedRequested is { owner: var owner, name: var name } &&
+            owner.Equals(BepInExOwner, StringComparison.OrdinalIgnoreCase) &&
+            name.Equals(BepInExPackage, StringComparison.OrdinalIgnoreCase))
+            return new ModInstallResult(true, null, null);
+
         var modsDir = ModsFolder(def);
         Directory.CreateDirectory(modsDir);
-
         var tmpRoot = Path.Combine(Path.GetTempPath(), "gsc-mod-" + Guid.NewGuid().ToString("n")[..8]);
-        Directory.CreateDirectory(tmpRoot);
         var zipPath = Path.Combine(tmpRoot, "download.zip");
         var extractPath = Path.Combine(tmpRoot, "extract");
+        Directory.CreateDirectory(tmpRoot);
 
         try
         {
-            // 1) Download
-            _logger.LogInformation("Downloading mod from {Url}", url);
             using (var resp = await _http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct))
             {
                 if (!resp.IsSuccessStatusCode)
@@ -132,134 +129,192 @@ public sealed class ValheimBepInExModManager : IModManager
                 await resp.Content.CopyToAsync(fs, ct);
             }
 
-            // 2) Validate it's a zip
             try { ZipFile.ExtractToDirectory(zipPath, extractPath, overwriteFiles: true); }
             catch (Exception ex) { return new ModInstallResult(false, null, "Not a valid zip: " + ex.Message); }
 
-            // 3) Decide what to copy. Thunderstore convention: top-level "plugins/" folder with .dll files.
-            //    Fallbacks: top-level .dll files, or a single top-level folder containing the mod.
             var (sourceDir, copyDlls) = LocateModPayload(extractPath);
             if (sourceDir is null && copyDlls is null)
                 return new ModInstallResult(false, null,
-                    "Could not find any plugin DLLs in the zip. Expected a top-level 'plugins/' folder, or top-level .dll files.");
+                    "Could not find plugin DLLs. Expected a Thunderstore plugins/ folder, top-level DLLs, or one DLL-containing folder.");
 
-            // 4) Pick the ModId (display name → folder name, or DLL name)
             string modId;
             var installedFiles = new List<string>();
             if (sourceDir is not null)
             {
-                // Whole folder → make a per-mod subfolder under plugins/ so uninstall is trivial.
                 modId = SanitizeFolderName(displayName ?? Path.GetFileName(sourceDir.TrimEnd('\\', '/')) ?? "mod");
                 var destDir = Path.Combine(modsDir, modId);
-                if (Directory.Exists(destDir))
-                {
-                    // Allow upgrade in place
-                    try { Directory.Delete(destDir, recursive: true); } catch { /* ignore */ }
-                }
+                if (Directory.Exists(destDir)) Directory.Delete(destDir, recursive: true);
                 CopyDirectory(sourceDir, destDir);
-                foreach (var f in Directory.EnumerateFiles(destDir, "*", SearchOption.AllDirectories))
-                    installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, f));
+                installedFiles.AddRange(Directory.EnumerateFiles(destDir, "*", SearchOption.AllDirectories)
+                    .Select(f => Path.GetRelativePath(def.GuestWorkingDir, f)));
             }
             else
             {
-                // Single-file mod: copy .dll(s) into plugins/ at the top level.
                 foreach (var dll in copyDlls!)
                 {
                     var dst = Path.Combine(modsDir, Path.GetFileName(dll));
                     File.Copy(dll, dst, overwrite: true);
                     installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
                 }
-                modId = Path.GetFileName(copyDlls[0]);
+                modId = Path.GetFileName(copyDlls![0]);
             }
 
-            // 5) Try to extract a version + dependencies from a Thunderstore manifest.json if present
             string? version = null;
             string? finalName = displayName;
             string[] dependencies = Array.Empty<string>();
-            var manifest = Path.Combine(extractPath, "manifest.json");
-            if (File.Exists(manifest))
+            var manifest = Directory.EnumerateFiles(extractPath, "manifest.json", SearchOption.AllDirectories).FirstOrDefault();
+            if (manifest is not null)
             {
                 try
                 {
                     var json = JsonNode.Parse(await File.ReadAllTextAsync(manifest, ct));
                     version = json?["version_number"]?.ToString();
                     finalName ??= json?["name"]?.ToString();
-                    // dependencies: ["Owner-Name-Version", …]
                     if (json?["dependencies"] is JsonArray deps)
-                        dependencies = deps
-                            .Select(d => d?.ToString() ?? "")
-                            .Where(s => !string.IsNullOrWhiteSpace(s))
-                            .ToArray();
+                        dependencies = deps.Select(d => d?.ToString() ?? "").Where(s => s.Length > 0).ToArray();
                 }
-                catch { /* tolerate broken manifests */ }
+                catch { }
             }
             finalName ??= modId;
 
-            // 6) Persist metadata
-            var info = new ModInfo(
-                ModId: modId,
-                DisplayName: finalName,
-                Version: version,
-                Source: url,
-                InstalledAt: DateTimeOffset.UtcNow,
-                SizeBytes: installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(),
-                Files: installedFiles.ToArray());
+            var info = new ModInfo(modId, finalName, version, url, DateTimeOffset.UtcNow,
+                installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(), installedFiles.ToArray());
             UpdateMetadata(def, m => m[modId] = ToSidecar(info));
 
-            // 7) Resolve and install Thunderstore dependencies. We chase deps one level deep here;
-            // the recursive InstallFromUrlAsync call will handle any transitive deps each pulls in.
-            // Cycle/duplicate protection: if the dep's manifest folder is already on disk under plugins/, skip.
             foreach (var dep in dependencies)
             {
                 ct.ThrowIfCancellationRequested();
-                // dep format: "Owner-Name-Version"; the version is the *required minimum*, but in
-                // practice authors specify the version they tested with. We install the *latest*
-                // published, which is what nearly every mod manager does (Thunderstore CLI included).
                 var parts = dep.Split('-');
                 if (parts.Length < 3) continue;
                 var depOwner = parts[0];
-                // Name can contain dashes — everything except first and last token belongs to it.
                 var depName = string.Join('-', parts.Skip(1).Take(parts.Length - 2));
-                var depKey = SanitizeFolderName(depName);
-                if (Directory.Exists(Path.Combine(modsDir, depKey)) ||
-                    File.Exists(Path.Combine(modsDir, depKey + ".dll")))
-                {
-                    _logger.LogDebug("Dependency {Dep} already installed — skipping", dep);
+                if (depOwner.Equals(BepInExOwner, StringComparison.OrdinalIgnoreCase) &&
+                    depName.Equals(BepInExPackage, StringComparison.OrdinalIgnoreCase))
                     continue;
-                }
+
+                var depKey = SanitizeFolderName(depName);
+                if (Directory.Exists(Path.Combine(modsDir, depKey)) || File.Exists(Path.Combine(modsDir, depKey + ".dll")))
+                    continue;
+
                 var pkg = await _thunderstore.FindPackageAsync("valheim", depOwner, depName, ct);
                 var dlUrl = pkg?.Versions?.FirstOrDefault()?.DownloadUrl;
-                if (string.IsNullOrEmpty(dlUrl))
+                if (string.IsNullOrWhiteSpace(dlUrl))
                 {
-                    _logger.LogWarning("Dependency {Dep} not found in Thunderstore — skipping", dep);
+                    _logger.LogWarning("Dependency {Dep} not found in Thunderstore", dep);
                     continue;
                 }
-                _logger.LogInformation("Installing dependency {Dep}", dep);
-                try { await InstallFromUrlAsync(def, dlUrl, depName, ct); }
-                catch (Exception ex) { _logger.LogWarning(ex, "Dependency install failed for {Dep}", dep); }
+                var depResult = await InstallFromUrlAsync(def, dlUrl, depName, ct);
+                if (!depResult.Ok) _logger.LogWarning("Dependency {Dep} failed: {Error}", dep, depResult.Error);
             }
 
             return new ModInstallResult(true, info, null);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Mod install failed for {Url}", url);
+            _logger.LogError(ex, "Valheim mod install failed for {Url}", url);
             return new ModInstallResult(false, null, ex.Message);
         }
         finally
         {
-            try { Directory.Delete(tmpRoot, recursive: true); } catch { /* ignore */ }
+            try { Directory.Delete(tmpRoot, recursive: true); } catch { }
         }
     }
 
-    // ---- uninstall ----
+    private async Task<(bool Ok, string? Error, ServerDef Def)> EnsureBepInExAsync(ServerDef def, CancellationToken ct)
+    {
+        if (BepInExReady(def)) return (true, null, def);
+
+        await _bootstrapGate.WaitAsync(ct);
+        try
+        {
+            if (BepInExReady(def)) return (true, null, def);
+
+            var pkg = await _thunderstore.FindPackageAsync("valheim", BepInExOwner, BepInExPackage, ct);
+            var latest = pkg?.Versions?.FirstOrDefault();
+            if (latest is null || string.IsNullOrWhiteSpace(latest.DownloadUrl))
+                return (false, "Could not resolve the current BepInExPack_Valheim from Thunderstore.", def);
+
+            var tmpRoot = Path.Combine(Path.GetTempPath(), "gsc-bepinex-" + Guid.NewGuid().ToString("n")[..8]);
+            var zipPath = Path.Combine(tmpRoot, "bepinex.zip");
+            var extractPath = Path.Combine(tmpRoot, "extract");
+            Directory.CreateDirectory(tmpRoot);
+            try
+            {
+                using (var resp = await _http.GetAsync(latest.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct))
+                {
+                    if (!resp.IsSuccessStatusCode)
+                        return (false, $"BepInEx download returned HTTP {(int)resp.StatusCode}.", def);
+                    await using var fs = File.Create(zipPath);
+                    await resp.Content.CopyToAsync(fs, ct);
+                }
+                ZipFile.ExtractToDirectory(zipPath, extractPath, overwriteFiles: true);
+
+                var packRoot = Directory.EnumerateDirectories(extractPath, BepInExPackage, SearchOption.AllDirectories).FirstOrDefault();
+                if (packRoot is null)
+                    return (false, "BepInEx archive did not contain BepInExPack_Valheim.", def);
+
+                CopyDirectory(packRoot, def.GuestWorkingDir);
+                Directory.CreateDirectory(ModsFolder(def));
+
+                if (!OperatingSystem.IsWindows())
+                {
+                    var script = Path.Combine(def.GuestWorkingDir, "start_server_bepinex.sh");
+                    await File.WriteAllTextAsync(script, LinuxBepInExLauncher(), ct);
+                    try
+                    {
+                        var mode = File.GetUnixFileMode(script);
+                        File.SetUnixFileMode(script, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute);
+                    }
+                    catch (Exception ex) { _logger.LogWarning(ex, "Could not chmod {Script}", script); }
+
+                    def = _store.Update(def.Id, def with { GuestExePath = script });
+                }
+
+                _logger.LogInformation("Installed BepInExPack_Valheim {Version} for {ServerId}", latest.VersionNumber, def.Id);
+                return BepInExReady(def)
+                    ? (true, null, def)
+                    : (false, "BepInEx files were copied but the loader could not be verified.", def);
+            }
+            finally
+            {
+                try { Directory.Delete(tmpRoot, recursive: true); } catch { }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "BepInEx bootstrap failed for {ServerId}", def.Id);
+            return (false, ex.Message, def);
+        }
+        finally { _bootstrapGate.Release(); }
+    }
+
+    private static bool BepInExReady(ServerDef def)
+    {
+        var core = Path.Combine(def.GuestWorkingDir, "BepInEx", "core");
+        if (!Directory.Exists(core) || !Directory.EnumerateFiles(core, "BepInEx*.dll", SearchOption.TopDirectoryOnly).Any()) return false;
+        if (OperatingSystem.IsWindows()) return File.Exists(Path.Combine(def.GuestWorkingDir, "winhttp.dll"));
+        return File.Exists(Path.Combine(def.GuestWorkingDir, "doorstop_libs", "libdoorstop_x64.so")) &&
+               File.Exists(Path.Combine(def.GuestWorkingDir, "start_server_bepinex.sh"));
+    }
+
+    private static string LinuxBepInExLauncher() => """
+#!/bin/sh
+set -e
+cd "$(dirname "$0")"
+export DOORSTOP_ENABLE=TRUE
+export DOORSTOP_INVOKE_DLL_PATH=./BepInEx/core/BepInEx.Preloader.dll
+export LD_LIBRARY_PATH="./doorstop_libs:${LD_LIBRARY_PATH:-}"
+export LD_PRELOAD="libdoorstop_x64.so:${LD_PRELOAD:-}"
+export SteamAppId=892970
+exec ./valheim_server.x86_64 "$@"
+""";
 
     public Task<bool> UninstallAsync(ServerDef def, string modId, CancellationToken ct)
     {
+        if (!Supports(def)) return Task.FromResult(false);
         var modsDir = ModsFolder(def);
         if (!Directory.Exists(modsDir)) return Task.FromResult(false);
 
-        // First try the metadata: if we recorded specific files, delete only those.
         var meta = LoadMetadata(def);
         var ok = false;
         if (meta.TryGetValue(modId, out var sidecar) && sidecar.Files is { Length: > 0 } files)
@@ -267,94 +322,65 @@ public sealed class ValheimBepInExModManager : IModManager
             foreach (var rel in files)
             {
                 var abs = Path.Combine(def.GuestWorkingDir, rel);
-                try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { /* ignore */ }
+                try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { }
             }
-            // Clean up the per-mod folder if it ended up empty
             var modFolder = Path.Combine(modsDir, modId);
             if (Directory.Exists(modFolder) && !Directory.EnumerateFileSystemEntries(modFolder).Any())
-            {
-                try { Directory.Delete(modFolder); } catch { /* ignore */ }
-            }
+                try { Directory.Delete(modFolder); } catch { }
             UpdateMetadata(def, m => m.Remove(modId));
             return Task.FromResult(ok);
         }
 
-        // No metadata (manually-installed mod): delete by name match.
-        var dllPath = Path.Combine(modsDir, modId);
-        if (File.Exists(dllPath))
-        {
-            try { File.Delete(dllPath); ok = true; } catch { /* ignore */ }
-        }
-        var folderPath = Path.Combine(modsDir, modId);
-        if (Directory.Exists(folderPath))
-        {
-            try { Directory.Delete(folderPath, recursive: true); ok = true; } catch { /* ignore */ }
-        }
+        var path = Path.Combine(modsDir, modId);
+        if (File.Exists(path)) try { File.Delete(path); ok = true; } catch { }
+        if (Directory.Exists(path)) try { Directory.Delete(path, recursive: true); ok = true; } catch { }
         return Task.FromResult(ok);
     }
 
-    // ---- update check ----
-
     public async Task<ModUpdateInfo[]> CheckUpdatesAsync(ServerDef def, CancellationToken ct)
     {
+        if (!Supports(def)) return Array.Empty<ModUpdateInfo>();
         var installed = await ListAsync(def, ct);
         var updates = new List<ModUpdateInfo>();
-        foreach (var m in installed)
+        foreach (var mod in installed)
         {
-            if (string.IsNullOrEmpty(m.Source)) continue;
-            // Source URL points back to a Thunderstore download. Parse it to find the canonical package.
-            var parsed = ThunderstoreClient.ParseDownloadUrl(m.Source);
+            if (string.IsNullOrWhiteSpace(mod.Source)) continue;
+            var parsed = ThunderstoreClient.ParseDownloadUrl(mod.Source);
             if (parsed is null) continue;
-            var (owner, name) = parsed.Value;
-            var pkg = await _thunderstore.FindPackageAsync("valheim", owner, name, ct);
+            var pkg = await _thunderstore.FindPackageAsync("valheim", parsed.Value.owner, parsed.Value.name, ct);
             var latest = pkg?.Versions?.FirstOrDefault();
             if (latest?.VersionNumber is null || latest.DownloadUrl is null) continue;
-            // We treat any version-string mismatch as "update available". That's pragmatic and correct
-            // when authors do semver, and safe when they don't (worst case: false positive the user can ignore).
-            if (!string.Equals(latest.VersionNumber, m.Version, StringComparison.OrdinalIgnoreCase))
-            {
-                updates.Add(new ModUpdateInfo(
-                    ModId: m.ModId,
-                    DisplayName: m.DisplayName,
-                    InstalledVersion: m.Version,
-                    LatestVersion: latest.VersionNumber,
-                    LatestDownloadUrl: latest.DownloadUrl));
-            }
+            if (!string.Equals(latest.VersionNumber, mod.Version, StringComparison.OrdinalIgnoreCase))
+                updates.Add(new ModUpdateInfo(mod.ModId, mod.DisplayName, mod.Version, latest.VersionNumber, latest.DownloadUrl));
         }
         return updates.ToArray();
     }
 
-    // ---- helpers ----
-
-    /// <summary>Decide what part of an extracted zip to copy into plugins/.</summary>
     private static (string? folder, string[]? loose) LocateModPayload(string extractRoot)
     {
-        // Preference 1: top-level "plugins/" folder (Thunderstore standard)
-        var plugins = Path.Combine(extractRoot, "plugins");
-        if (Directory.Exists(plugins) && Directory.EnumerateFiles(plugins, "*.dll", SearchOption.AllDirectories).Any())
-            return (plugins, null);
+        var plugins = Directory.EnumerateDirectories(extractRoot, "plugins", SearchOption.AllDirectories)
+            .FirstOrDefault(p => Directory.EnumerateFiles(p, "*.dll", SearchOption.AllDirectories).Any());
+        if (plugins is not null) return (plugins, null);
 
-        // Preference 2: top-level .dll files (simple GitHub-release zips)
         var topDlls = Directory.GetFiles(extractRoot, "*.dll", SearchOption.TopDirectoryOnly);
         if (topDlls.Length > 0) return (null, topDlls);
 
-        // Preference 3: single top-level subfolder containing .dlls (some uploaders structure it this way)
         var subfolders = Directory.GetDirectories(extractRoot);
         if (subfolders.Length == 1 && Directory.EnumerateFiles(subfolders[0], "*.dll", SearchOption.AllDirectories).Any())
             return (subfolders[0], null);
-
         return (null, null);
     }
 
     private static void CopyDirectory(string source, string dest)
     {
         Directory.CreateDirectory(dest);
-        foreach (var f in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        foreach (var dir in Directory.EnumerateDirectories(source, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Combine(dest, Path.GetRelativePath(source, dir)));
+        foreach (var file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
         {
-            var rel = Path.GetRelativePath(source, f);
-            var dst = Path.Combine(dest, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-            File.Copy(f, dst, overwrite: true);
+            var target = Path.Combine(dest, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
         }
     }
 
@@ -365,12 +391,8 @@ public sealed class ValheimBepInExModManager : IModManager
         return string.IsNullOrWhiteSpace(clean) ? "mod" : clean;
     }
 
-    // ---- metadata sidecar ----
-
     private sealed record SidecarEntry(string? DisplayName, string? Version, string? Source, DateTimeOffset? InstalledAt, string[]? Files);
-
-    private static SidecarEntry ToSidecar(ModInfo info) =>
-        new(info.DisplayName, info.Version, info.Source, info.InstalledAt, info.Files);
+    private static SidecarEntry ToSidecar(ModInfo info) => new(info.DisplayName, info.Version, info.Source, info.InstalledAt, info.Files);
 
     private Dictionary<string, SidecarEntry> LoadMetadata(ServerDef def)
     {
@@ -398,9 +420,6 @@ public sealed class ValheimBepInExModManager : IModManager
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Mod sidecar write failed at {Path}", path);
-        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Mod sidecar write failed at {Path}", path); }
     }
 }
