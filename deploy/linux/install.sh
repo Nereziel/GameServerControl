@@ -9,12 +9,16 @@ set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/gameservercontrol/agent}"
 SERVICE_USER="${SERVICE_USER:-gsc}"
+GAME_ROOT="${GAME_ROOT:-/srv/gameservers}"
+BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/gameservercontrol/backups}"
 UNIT_NAME="gameservercontrol-agent.service"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 echo "=== GameServerControl Agent — Linux install ==="
 echo "Install dir : $INSTALL_DIR"
 echo "Service user: $SERVICE_USER"
+echo "Game root   : $GAME_ROOT"
+echo "Backup root : $BACKUP_ROOT"
 echo
 
 if [[ $EUID -ne 0 ]]; then
@@ -53,9 +57,11 @@ echo "=== Installing into $INSTALL_DIR ==="
 mkdir -p "$(dirname "$INSTALL_DIR")"
 rm -rf "$INSTALL_DIR"
 mv "$INSTALL_DIR.tmp" "$INSTALL_DIR"
-
-# Make the .NET entry-point executable.
 chmod +x "$INSTALL_DIR/GameServerControl.Agent" 2>/dev/null || true
+
+# Managed roots match GameProfile.DefaultInstallPath + the systemd BackupRoot override.
+mkdir -p "$GAME_ROOT" "$BACKUP_ROOT"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$GAME_ROOT" "$(dirname "$BACKUP_ROOT")"
 
 # 6) Default config if absent
 if [[ ! -f "$INSTALL_DIR/appsettings.json" ]]; then
@@ -68,9 +74,13 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 
-# 7) Install systemd unit
+# 7) Install systemd unit. The shipped unit grants write access to /srv/gameservers and the
+# default backup root. Custom GAME_ROOT/BACKUP_ROOT values require a matching systemd override.
 echo "=== Installing systemd unit ==="
 cp "$REPO_ROOT/deploy/linux/$UNIT_NAME" "/etc/systemd/system/$UNIT_NAME"
+if [[ "$GAME_ROOT" != "/srv/gameservers" || "$BACKUP_ROOT" != "/var/lib/gameservercontrol/backups" ]]; then
+  echo "WARNING: custom GAME_ROOT/BACKUP_ROOT selected. Add them to ReadWritePaths and set Agent__BackupRoot in a systemd override."
+fi
 systemctl daemon-reload
 systemctl enable "$UNIT_NAME"
 systemctl start "$UNIT_NAME"
@@ -88,4 +98,6 @@ echo "=== Done ==="
 echo "Service status: systemctl status $UNIT_NAME"
 echo "Logs:           journalctl -u $UNIT_NAME -f"
 echo "Web UI:         http://<this-host>:5099/"
+echo "Games:          $GAME_ROOT"
+echo "Backups:        $BACKUP_ROOT"
 echo "Edit config:    $INSTALL_DIR/appsettings.json"
