@@ -69,13 +69,19 @@ public sealed class DragonwildsDynamicSchema : IDynamicSchemaExtension
                 Description: "Interval between subsequent automatic backups. Official default: 43200 seconds (12 hours).",
                 Default: "43200", Min: 60, Max: 2592000),
             new ConfigField("instanceid", "Crossplay instance ID", ConfigFieldType.Text,
-                Description: "Optional unique ID for multiple Valheim servers using the same port/MAC address so PlayFab assigns distinct server identities.")
+                Description: "Optional unique ID for multiple Valheim servers using the same port/MAC address so PlayFab assigns distinct server identities."),
+            new ConfigField("adminlist", "Administrators", ConfigFieldType.Multiline,
+                Description: "One case-sensitive Platform User ID per line. These users may use Valheim's in-game server admin commands."),
+            new ConfigField("bannedlist", "Banned players", ConfigFieldType.Multiline,
+                Description: "One case-sensitive Platform User ID per line. Stored in bannedlist.txt under the configured save directory."),
+            new ConfigField("permittedlist", "Permitted players", ConfigFieldType.Multiline,
+                Description: "One case-sensitive Platform User ID per line. Warning: once this list contains anyone, everybody not listed is blocked from joining.")
         }
         .Where(f => !curatedKeys.Contains(f.Key))
         .ToArray();
 
         return new DynamicSchemaResult(
-            new ConfigSection("Valheim advanced dedicated-server settings", fields),
+            new ConfigSection("Valheim advanced server access & backups", fields),
             values);
     }
 }
