@@ -1,5 +1,5 @@
 const $=s=>document.querySelector(s);
-const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
+const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const jsq=s=>String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
