@@ -476,7 +476,7 @@ async function renderServerConsole(def, body) {
     terminal.textContent = rconReady ? 'RCON ready. Type a command below.' : 'RCON is not configured for this server.';
     return;
   }
-  if (def.hostingMode === 'Vm') {
+  if (isStdin && def.hostingMode === 'Vm') {
     terminal.textContent = 'Live process console is currently available only for servers running on this machine.';
     const input = $('#swConsoleInput'), send = $('#swConsoleSend');
     if (input) input.disabled = true;
