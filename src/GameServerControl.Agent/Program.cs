@@ -3,6 +3,7 @@ using GameServerControl.Agent.Config;
 using GameServerControl.Agent.Hubs;
 using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Logs;
+using GameServerControl.Agent.Networking;
 using GameServerControl.Agent.Notifications;
 using GameServerControl.Agent.Rcon;
 using GameServerControl.Agent.Servers;
@@ -50,6 +51,7 @@ builder.Services.AddSingleton<GuestProcessService>();
 builder.Services.AddSingleton<LocalProcessService>();
 builder.Services.AddSingleton<ServerRegistry>();
 builder.Services.AddSingleton<ServerStore>();
+builder.Services.AddSingleton<PublicRelayManager>();
 builder.Services.AddSingleton<StatusTracker>();
 builder.Services.AddSingleton<ServerOrchestrator>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
@@ -205,8 +207,37 @@ api.MapPut("/servers/{id}", (string id, ServerDef def, ServerStore store) =>
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
-api.MapDelete("/servers/{id}", (string id, ServerStore store) =>
-    store.Delete(id) ? Results.NoContent() : Results.NotFound());
+api.MapDelete("/servers/{id}", async (string id, ServerStore store, PublicRelayManager relay, CancellationToken ct) =>
+{
+    if (!store.Delete(id)) return Results.NotFound();
+    await relay.RemoveServerAsync(id, ct);
+    return Results.NoContent();
+});
+
+api.MapGet("/servers/{id}/relay", async (string id, PublicRelayManager relay, CancellationToken ct) =>
+{
+    try { return Results.Ok(await relay.GetStatusAsync(id, ct)); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+});
+api.MapPut("/servers/{id}/relay", async (string id, PublicRelayServerSettings settings,
+    ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, CancellationToken ct) =>
+{
+    var def = reg.Get(id);
+    if (def is null) return Results.NotFound();
+    try
+    {
+        var running = tracker.Get(id).ProcessState == ProcessState.Running;
+        return Results.Ok(await relay.SaveAsync(id, settings, running, ct));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+api.MapDelete("/servers/{id}/relay", async (string id, ServerRegistry reg, PublicRelayManager relay, CancellationToken ct) =>
+{
+    if (reg.Get(id) is null) return Results.NotFound();
+    await relay.RemoveServerAsync(id, ct);
+    return Results.NoContent();
+});
 
 api.MapGet("/servers/{id}/config", async (
     string id,
@@ -382,9 +413,39 @@ api.MapGet("/servers/{id}/status", async (string id, ServerOrchestrator orch, Ca
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
 api.MapGet("/status", (StatusTracker tracker) => Results.Ok(tracker.Snapshot()));
-api.MapPost("/servers/{id}/start", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.StartAsync(id, ct)));
-api.MapPost("/servers/{id}/stop", async (string id, bool? stopVm, bool? force, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.StopAsync(id, stopVm ?? true, force ?? false, ct)));
-api.MapPost("/servers/{id}/restart", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.RestartAsync(id, ct)));
+api.MapPost("/servers/{id}/start", async (string id, ServerOrchestrator orch, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, CancellationToken ct) =>
+{
+    var result = await orch.StartAsync(id, ct);
+    var def = reg.Get(id);
+    if (result.Success && def is not null)
+    {
+        try { await relay.EnsureForServerAsync(def, tracker.Get(id).ProcessState == ProcessState.Running, ct); }
+        catch (Exception ex) { result = result with { Message = result.Message + " Public relay warning: " + ex.Message }; }
+    }
+    return Results.Ok(result);
+});
+api.MapPost("/servers/{id}/stop", async (string id, bool? stopVm, bool? force, ServerOrchestrator orch, ServerRegistry reg, PublicRelayManager relay, CancellationToken ct) =>
+{
+    var result = await orch.StopAsync(id, stopVm ?? true, force ?? false, ct);
+    var def = reg.Get(id);
+    if (def is not null)
+    {
+        try { await relay.EnsureForServerAsync(def, false, ct); }
+        catch (Exception ex) { result = result with { Message = result.Message + " Public relay warning: " + ex.Message }; }
+    }
+    return Results.Ok(result);
+});
+api.MapPost("/servers/{id}/restart", async (string id, ServerOrchestrator orch, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, CancellationToken ct) =>
+{
+    var result = await orch.RestartAsync(id, ct);
+    var def = reg.Get(id);
+    if (result.Success && def is not null)
+    {
+        try { await relay.EnsureForServerAsync(def, tracker.Get(id).ProcessState == ProcessState.Running, ct); }
+        catch (Exception ex) { result = result with { Message = result.Message + " Public relay warning: " + ex.Message }; }
+    }
+    return Results.Ok(result);
+});
 api.MapPost("/servers/{id}/backup", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.BackupAsync(id, ct)));
 api.MapPost("/servers/{id}/update", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.UpdateAsync(id, ct)));
 api.MapPost("/servers/{id}/apply", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.ApplyConfigAsync(id, ct)));
@@ -456,12 +517,18 @@ _ = Task.Run(async () =>
 {
     var orch = app.Services.GetRequiredService<ServerOrchestrator>();
     var reg = app.Services.GetRequiredService<ServerRegistry>();
+    var relay = app.Services.GetRequiredService<PublicRelayManager>();
     var log = app.Services.GetRequiredService<ILogger<Program>>();
     while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
     {
         foreach (var s in reg.All)
         {
-            try { await orch.RefreshStatusAsync(s.Id, app.Lifetime.ApplicationStopping); }
+            try
+            {
+                var status = await orch.RefreshStatusAsync(s.Id, app.Lifetime.ApplicationStopping);
+                try { await relay.EnsureForServerAsync(s, status.ProcessState == ProcessState.Running, app.Lifetime.ApplicationStopping); }
+                catch (Exception ex) { log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
+            }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { log.LogDebug(ex, "Status refresh failed for {Id}", s.Id); }
         }
