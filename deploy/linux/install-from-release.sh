@@ -67,7 +67,7 @@ fi
 step "Installing into $INSTALL_DIR"
 preserve_dir="$tmp_dir/preserved"
 mkdir -p "$preserve_dir"
-for f in appsettings.json servers.json tokens.json; do
+for f in appsettings.json servers.json tokens.json public-relay.json; do
     if [[ -f "$INSTALL_DIR/$f" ]]; then
         cp "$INSTALL_DIR/$f" "$preserve_dir/$f"
         skip "Preserving $f"
@@ -78,7 +78,7 @@ mkdir -p "$INSTALL_DIR"
 find "$INSTALL_DIR" -mindepth 1 -delete
 tar -xzf "$tmp_dir/agent.tar.gz" -C "$INSTALL_DIR"
 
-for f in appsettings.json servers.json tokens.json; do
+for f in appsettings.json servers.json tokens.json public-relay.json; do
     if [[ -f "$preserve_dir/$f" ]]; then
         cp "$preserve_dir/$f" "$INSTALL_DIR/$f"
     fi
