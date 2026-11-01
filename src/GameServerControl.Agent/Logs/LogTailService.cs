@@ -38,13 +38,20 @@ public sealed class LogTailService : IDisposable
             return false;
         }
 
-        return _active.GetOrAdd(serverId, _ =>
+        var path = def.LogPathInGuest!;
+        var handle = _active.GetOrAdd(serverId, _ =>
         {
             var cts = new CancellationTokenSource();
-            var handle = new TailHandle(cts);
-            handle.Task = Task.Run(() => TailLoop(serverId, def.LogPathInGuest!, cts.Token));
-            return handle;
-        }).Cts.IsCancellationRequested == false;
+            var created = new TailHandle(cts);
+            created.Task = Task.Run(() => TailLoop(serverId, path, cts.Token));
+            return created;
+        });
+
+        // A tail loop intentionally starts at EOF so it never floods clients with an
+        // entire historical log. When the UI is opened, send a small bounded backlog
+        // separately so the console is immediately useful even if the server is idle.
+        _ = Task.Run(() => EmitRecentAsync(serverId, path, 100, CancellationToken.None));
+        return handle.Cts.IsCancellationRequested == false;
     }
 
     public bool Stop(string serverId)
@@ -64,7 +71,7 @@ public sealed class LogTailService : IDisposable
         try { if (File.Exists(path)) position = new FileInfo(path).Length; }
         catch (Exception ex) { _logger.LogDebug(ex, "stat failed for {Path}", path); }
 
-        await EmitAsync(serverId, $"[log tail started — {path}]");
+        await EmitAsync(serverId, $"[live log started — {path}]");
 
         while (!ct.IsCancellationRequested)
         {
@@ -108,7 +115,57 @@ public sealed class LogTailService : IDisposable
             try { await Task.Delay(700, ct); } catch (OperationCanceledException) { break; }
         }
 
-        await EmitAsync(serverId, "[log tail stopped]");
+        await EmitAsync(serverId, "[live log stopped]");
+    }
+
+    private async Task EmitRecentAsync(string serverId, string path, int maxLines, CancellationToken ct)
+    {
+        try
+        {
+            if (!File.Exists(path)) return;
+
+            const int maxBytes = 256 * 1024;
+            await using var fs = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                64 * 1024,
+                useAsync: true);
+
+            var length = fs.Length;
+            var toRead = (int)Math.Min(length, maxBytes);
+            if (toRead <= 0) return;
+
+            fs.Seek(-toRead, SeekOrigin.End);
+            var buffer = new byte[toRead];
+            var total = 0;
+            while (total < toRead)
+            {
+                var n = await fs.ReadAsync(buffer.AsMemory(total, toRead - total), ct);
+                if (n == 0) break;
+                total += n;
+            }
+
+            var text = Encoding.UTF8.GetString(buffer, 0, total).Replace("\r\n", "\n");
+            var lines = text.Split('\n');
+            var skipPartialFirstLine = length > toRead ? 1 : 0;
+            var recent = lines
+                .Skip(skipPartialFirstLine)
+                .Where(line => !string.IsNullOrEmpty(line))
+                .TakeLast(Math.Clamp(maxLines, 1, 500))
+                .ToArray();
+
+            if (recent.Length == 0) return;
+            await EmitAsync(serverId, $"[recent log — last {recent.Length} lines]");
+            foreach (var line in recent)
+                await EmitAsync(serverId, line);
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "recent log read failed for {Path}", path);
+        }
     }
 
     private async Task EmitAsync(string serverId, string text)

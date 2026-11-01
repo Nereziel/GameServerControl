@@ -143,10 +143,10 @@ public static class GameProfiles
             new[]{ @"{root}\WS\Saved" }, null, Basic, Installable: true, EstimatedSize: "~20 GB"),
 
         new("rust", "Rust", "🔧", GameType.SteamGeneric, "258550", "Rust", "RustDedicated.exe",
-            new[]{ "-batchmode", "+server.port", "28015", "+rcon.port", "28016", "+rcon.password", "change-me", "+server.hostname", "My Rust Server" },
+            new[]{ "-batchmode", "+server.port", "28015", "+server.hostname", "My Rust Server" },
             new[]{ @"{root}\server" }, null, Basic,
-            Notes: "Rust supports RCON, but GameServerControl hides it until a Rust RCON handler is implemented.", Installable: true, EstimatedSize: "~8 GB",
-            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 28015), new NetworkPort("RCON", NetworkProtocol.Tcp, 28016) }),
+            Notes: "Rust supports RCON, but GameServerControl leaves it disabled until a Rust RCON handler is implemented.", Installable: true, EstimatedSize: "~8 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 28015) }),
 
         new("7dtd", "7 Days to Die", "🧟", GameType.SteamGeneric, "294420", "SevenDaysToDie", "7DaysToDieServer.exe",
             new[]{ "-quit", "-batchmode", "-nographics", "-configfile=serverconfig.xml", @"-UserDataFolder={root}\data" },
