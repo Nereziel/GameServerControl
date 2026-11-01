@@ -31,6 +31,34 @@ if [[ ! -f "$SOURCE_DIR/$UNIT_NAME" ]]; then
   exit 1
 fi
 
+has_icu() {
+  if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -qE 'libicu(uc|i18n)\.so'; then
+    return 0
+  fi
+  find /usr/lib /lib -type f -name 'libicuuc.so*' -print -quit 2>/dev/null | grep -q .
+}
+
+if ! has_icu; then
+  echo "ICU runtime not found; installing the .NET globalization dependency."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y libicu-dev
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y libicu
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y libicu
+  elif command -v apk >/dev/null 2>&1; then
+    apk add --no-cache icu-libs
+  else
+    echo "ICU is required by the self-contained .NET Relay. Install libicu (or icu-libs) with your package manager and rerun this installer." >&2
+    exit 1
+  fi
+  if ! has_icu; then
+    echo "ICU installation completed but libicu could not be detected. Install libicu manually and rerun this installer." >&2
+    exit 1
+  fi
+fi
+
 TAILSCALE_IP="${TAILSCALE_IP:-$(tailscale ip -4 | head -n1)}"
 PUBLIC_INTERFACE="${PUBLIC_INTERFACE:-$(ip -4 route show default | awk '/default/ {print $5; exit}')}"
 TAILSCALE_INTERFACE="${TAILSCALE_INTERFACE:-tailscale0}"
