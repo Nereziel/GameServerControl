@@ -84,6 +84,7 @@ public sealed class ServerStore
 
     private static ServerDef Normalize(ServerDef def)
     {
+        def = CuratedNetwork.Normalize(def);
         if (def.NetworkPorts is not null) return def;
         var defaults = GameProfiles.FindFor(def)?.DefaultPorts;
         return def with { NetworkPorts = defaults?.ToArray() ?? Array.Empty<NetworkPort>() };
@@ -176,7 +177,7 @@ public sealed class ServerStore
         if (!File.Exists(_path)) return new List<ServerDef>();
         var json = File.ReadAllText(_path);
         var doc = JsonSerializer.Deserialize<ServersFile>(json, JsonOpts);
-        return doc?.Servers?.ToList() ?? new List<ServerDef>();
+        return (doc?.Servers ?? Array.Empty<ServerDef>()).Select(Normalize).ToList();
     }
 
     private void SaveAll(List<ServerDef> list)
