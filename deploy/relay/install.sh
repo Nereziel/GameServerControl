@@ -5,6 +5,7 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/gameservercontrol/relay}"
 STATE_DIR="${STATE_DIR:-/var/lib/gameservercontrol-relay}"
 SERVICE_USER="${SERVICE_USER:-gsc-relay}"
 UNIT_NAME="gameservercontrol-relay.service"
+ENV_FILE="/etc/gameservercontrol-relay.env"
 API_PORT="${API_PORT:-5100}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR}"
@@ -25,6 +26,10 @@ if [[ ! -x "$SOURCE_DIR/GameServerControl.Relay" ]]; then
   echo "GameServerControl.Relay binary not found in $SOURCE_DIR." >&2
   exit 1
 fi
+if [[ ! -f "$SOURCE_DIR/$UNIT_NAME" ]]; then
+  echo "$UNIT_NAME not found in $SOURCE_DIR." >&2
+  exit 1
+fi
 
 TAILSCALE_IP="${TAILSCALE_IP:-$(tailscale ip -4 | head -n1)}"
 PUBLIC_INTERFACE="${PUBLIC_INTERFACE:-$(ip -4 route show default | awk '/default/ {print $5; exit}')}"
@@ -34,12 +39,20 @@ if [[ -z "$TAILSCALE_IP" || -z "$PUBLIC_INTERFACE" ]]; then
   exit 1
 fi
 
+# Updates must not silently rotate the Relay API token because the Agent stores it.
+if [[ -z "${RELAY_TOKEN:-}" && -f "$ENV_FILE" ]]; then
+  RELAY_TOKEN="$(sed -n 's/^Relay__ApiToken=//p' "$ENV_FILE" | head -n1)"
+fi
 if [[ -z "${RELAY_TOKEN:-}" ]]; then
   if command -v openssl >/dev/null 2>&1; then
     RELAY_TOKEN="$(openssl rand -hex 32)"
   else
     RELAY_TOKEN="$(head -c 48 /dev/urandom | base64 | tr -d '\n')"
   fi
+fi
+if [[ ${#RELAY_TOKEN} -lt 24 ]]; then
+  echo "Relay API token must contain at least 24 characters." >&2
+  exit 1
 fi
 
 if ! id "$SERVICE_USER" >/dev/null 2>&1; then
@@ -53,7 +66,7 @@ chmod +x "$INSTALL_DIR/GameServerControl.Relay"
 chown -R root:root "$INSTALL_DIR"
 chown -R "$SERVICE_USER:$SERVICE_USER" "$STATE_DIR"
 
-cat >/etc/gameservercontrol-relay.env <<EOF
+cat >"$ENV_FILE" <<EOF
 Relay__Bind=http://${TAILSCALE_IP}:${API_PORT}
 Relay__ApiToken=${RELAY_TOKEN}
 Relay__PublicInterface=${PUBLIC_INTERFACE}
@@ -61,16 +74,16 @@ Relay__TailscaleInterface=${TAILSCALE_INTERFACE}
 Relay__StatePath=${STATE_DIR}/routes.json
 Relay__IptablesPath=$(command -v iptables)
 EOF
-chmod 600 /etc/gameservercontrol-relay.env
+chmod 600 "$ENV_FILE"
 
 cat >/etc/sysctl.d/99-gameservercontrol-relay.conf <<'EOF'
 net.ipv4.ip_forward = 1
 EOF
 sysctl -p /etc/sysctl.d/99-gameservercontrol-relay.conf >/dev/null
 
-cp "$SCRIPT_DIR/$UNIT_NAME" "/etc/systemd/system/$UNIT_NAME"
+cp "$SOURCE_DIR/$UNIT_NAME" "/etc/systemd/system/$UNIT_NAME"
 systemctl daemon-reload
-systemctl enable "$UNIT_NAME"
+systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
 systemctl restart "$UNIT_NAME"
 
 echo
