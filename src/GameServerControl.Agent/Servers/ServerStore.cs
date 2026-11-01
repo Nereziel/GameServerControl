@@ -49,7 +49,6 @@ public sealed class ServerStore
 
     public ServerDef Update(string id, ServerDef def)
     {
-        // Force the URL id onto the def so the caller can't accidentally rename via PUT body.
         var normalized = Normalize(def with { Id = id });
         Validate(normalized);
         lock (_lock)
@@ -78,7 +77,6 @@ public sealed class ServerStore
             _registry.Reload();
         }
 
-        // Defensive cleanup in case the server was deleted while running or after an unclean Agent shutdown.
         if (!WindowsFirewall.RemoveProgramRules(id, out var firewallError))
             _logger.LogWarning("Could not remove Windows Firewall rules for {Id}: {Error}", id, firewallError);
         return true;
@@ -110,6 +108,12 @@ public sealed class ServerStore
         for (var i = 0; i < ports.Length; i++)
         {
             ValidatePort(ports[i]);
+            if (def.HostingMode == HostingMode.BareMetal &&
+                profile?.Key is "valheim" or "dragonwilds" && ports[i].Port < 1024)
+            {
+                throw new ArgumentException(
+                    $"{profile.Label} ports must be 1024 or higher. The Linux Agent runs as an unprivileged service user and cannot bind privileged ports by default.");
+            }
             for (var j = i + 1; j < ports.Length; j++)
             {
                 if (ports[i].Protocol == ports[j].Protocol && Overlaps(ports[i], ports[j]))
@@ -120,7 +124,6 @@ public sealed class ServerStore
 
     private static void ValidatePortConflicts(ServerDef candidate, IEnumerable<ServerDef> all, string? excludeId)
     {
-        // Different Hyper-V guests have separate network stacks/IPs, so equal port numbers are not a host collision.
         if (candidate.HostingMode != HostingMode.BareMetal) return;
         var candidatePorts = EffectivePorts(candidate);
         if (candidatePorts.Length == 0) return;
@@ -182,7 +185,6 @@ public sealed class ServerStore
         var json = JsonSerializer.Serialize(doc, JsonOpts);
         var tmp = _path + ".tmp";
         File.WriteAllText(tmp, json);
-        // Atomic swap so a crash mid-write never leaves a corrupt servers.json.
         if (File.Exists(_path))
             File.Replace(tmp, _path, _path + ".bak");
         else
