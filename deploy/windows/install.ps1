@@ -187,30 +187,39 @@ try {
 
 # This helper lives outside Agent so the service can replace its own directory safely.
 # When called from Tray, a non-elevated parent waits for the elevated installer and then
-# starts the new Tray binary again at normal user integrity.
+# starts the new Tray binary again at normal user integrity. If the Tray itself was already
+# elevated, the elevated helper restarts it directly after the update instead.
 $updateHelper = Join-Path $installRt 'Update-GameServerControl.ps1'
 $updateHelperContent = @'
-param([switch]$Silent, [switch]$FromTray)
+param([switch]$Silent, [switch]$FromTray, [switch]$ElevatedChild)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 
+function Start-TrayAgain {
+    $trayExe = Join-Path (Split-Path $PSCommandPath -Parent) 'Tray\GameServerControl.Tray.exe'
+    if (Test-Path $trayExe) {
+        Start-Sleep -Milliseconds 500
+        Start-Process -FilePath $trayExe -ArgumentList '--url', 'http://localhost:5099/'
+    }
+}
+
 if (-not $isElevated) {
-    $flags = @()
+    $flags = @('-ElevatedChild')
     if ($Silent) { $flags += '-Silent' }
     if ($FromTray) { $flags += '-FromTray' }
     $flagText = $flags -join ' '
     try {
         $p = Start-Process powershell.exe -Verb RunAs -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $flagText"
-    } catch { exit 1 }
+    } catch {
+        if ($FromTray) { Start-TrayAgain }
+        exit 1
+    }
     $p.WaitForExit()
 
     if ($FromTray) {
-        $trayExe = Join-Path (Split-Path $PSCommandPath -Parent) 'Tray\GameServerControl.Tray.exe'
-        if (Test-Path $trayExe) {
-            Start-Process -FilePath $trayExe -ArgumentList '--url', 'http://localhost:5099/'
-        }
+        Start-TrayAgain
     } elseif (-not $Silent) {
         Write-Host ''
         Read-Host 'Update finished. Press Enter to close'
@@ -224,6 +233,13 @@ $repo = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl'
 $env:GSC_REPO = $repo
 $installer = "https://raw.githubusercontent.com/$repo/main/deploy/windows/install.ps1"
 Invoke-WebRequest -Uri $installer -UseBasicParsing | Invoke-Expression
+
+# A tray started from an elevated installer can launch this helper already elevated. In that
+# case there is no non-elevated parent waiting to restart it, so restart it here. When an
+# ordinary non-elevated parent exists, it owns the restart and this child stays out of the way.
+if ($FromTray -and -not $ElevatedChild) {
+    Start-TrayAgain
+}
 '@
 Set-Content -LiteralPath $updateHelper -Value $updateHelperContent -Encoding UTF8
 Write-Ok "Updater helper: $updateHelper"
@@ -277,7 +293,7 @@ IconIndex=0
                 Write-Ok 'Tray helper started.'
             } catch { Write-Warn2 "Could not start tray helper now: $_" }
         } else {
-            Write-Skip 'Tray update: non-elevated updater parent will restart the tray helper.'
+            Write-Skip 'Tray update: updater helper will restart the tray helper.'
         }
     }
 
