@@ -75,6 +75,7 @@ jobs:
         run: |
           bash -n deploy/linux/install-from-release.sh
           bash -n deploy/linux/install.sh
+          bash -n deploy/relay/install-from-release.sh
           bash -n deploy/relay/install.sh
 
       - name: Validate Web UI JavaScript
@@ -112,7 +113,8 @@ jobs:
           chmod +x publish/Agent-linux/GameServerControl.Agent
           cp deploy/relay/gameservercontrol-relay.service publish/Relay-linux/
           cp deploy/relay/install.sh publish/Relay-linux/
-          chmod +x publish/Relay-linux/install.sh
+          cp deploy/relay/install-from-release.sh publish/Relay-linux/
+          chmod +x publish/Relay-linux/install.sh publish/Relay-linux/install-from-release.sh
           chmod +x publish/Relay-linux/GameServerControl.Relay
 
       - name: Upload Linux agent
