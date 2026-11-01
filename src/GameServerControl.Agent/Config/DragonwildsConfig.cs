@@ -6,17 +6,13 @@ using GameServerControl.Shared;
 namespace GameServerControl.Agent.Config;
 
 /// <summary>
-/// Reads and writes RuneScape: Dragonwilds DedicatedServer.ini plus the launch port.
+/// Reads and writes RuneScape: Dragonwilds DedicatedServer.ini plus the two official launch ports.
 /// Dragonwilds rewrites DedicatedServer.ini while running, so writes are rejected until the
-/// server is stopped. Unknown INI keys (ServerGuid/admin state/etc.) are preserved unchanged.
+/// server is stopped. Unknown INI keys (ServerGuid/future game settings/etc.) are preserved.
 /// </summary>
 public sealed class DragonwildsConfig : IGameConfig
 {
     private const string Section = "[/Script/Dominion.DedicatedServerSettings]";
-    private static readonly HashSet<string> PlatformPolicies = new(StringComparer.Ordinal)
-    {
-        "Crossplay", "PC", "PlayStation", "Xbox", "Nintendo"
-    };
 
     private readonly GuestProcessService _guest;
     private readonly LocalProcessService _local;
@@ -51,8 +47,7 @@ public sealed class DragonwildsConfig : IGameConfig
         if (def.HostingMode == HostingMode.Vm || OperatingSystem.IsWindows())
             return new[] { Path.Combine(root, "WindowsServer", "DedicatedServer.ini") };
 
-        // Current Linux builds/providers commonly use LinuxServer; Jagex's original guide names Linux.
-        // Supporting both makes upgrades safe without moving an operator's existing config.
+        // Jagex's how-to guide names Linux; their current container changed to LinuxServer.
         return new[]
         {
             Path.Combine(root, "LinuxServer", "DedicatedServer.ini"),
@@ -80,8 +75,10 @@ public sealed class DragonwildsConfig : IGameConfig
         }
 
         var values = Parse(content);
-        values["Port"] = ReadPort(def).ToString();
-        if (!values.ContainsKey("PlatformPolicy")) values["PlatformPolicy"] = "Crossplay";
+        values["Port"] = ReadLaunchPort(def, "Port", 7777).ToString();
+        var gamePort = int.Parse(values["Port"]);
+        values["BeaconPort"] = ReadLaunchPort(def, "BeaconPort", Math.Min(65535, gamePort + 1111)).ToString();
+        values["Administrators"] = ParseAdministratorList(values.TryGetValue("AdministratorList", out var admins) ? admins : "");
         return values;
     }
 
@@ -95,22 +92,31 @@ public sealed class DragonwildsConfig : IGameConfig
             : await ReadViaPsDirectAsync(def, path, ct) ?? "";
 
         var merged = Parse(current);
-        foreach (var (key, value) in values) merged[key] = value ?? "";
-        if (!merged.ContainsKey("PlatformPolicy")) merged["PlatformPolicy"] = "Crossplay";
+        foreach (var (key, value) in values)
+        {
+            if (key is "Port" or "BeaconPort" or "Administrators") continue;
+            merged[key] = value ?? "";
+        }
+        if (values.TryGetValue("Administrators", out var administrators))
+            merged["AdministratorList"] = FormatAdministratorList(administrators);
 
         Require(merged, "OwnerId", "Owner Player ID is required by the current Jagex dedicated-server guide.");
         Require(merged, "ServerName", "Server name is required.");
         Require(merged, "DefaultWorldName", "Default world name is required.");
         Require(merged, "AdminPassword", "Admin password is required.");
 
-        var platformPolicy = merged["PlatformPolicy"].Trim();
-        if (!PlatformPolicies.Contains(platformPolicy))
-            throw new ArgumentException("Platform policy must be one of: Crossplay, PC, PlayStation, Xbox, Nintendo.");
-        merged["PlatformPolicy"] = platformPolicy;
-
-        var portRaw = merged.TryGetValue("Port", out var configuredPort) ? configuredPort : ReadPort(def).ToString();
+        var portRaw = values.TryGetValue("Port", out var configuredPort)
+            ? configuredPort : ReadLaunchPort(def, "Port", 7777).ToString();
         if (!int.TryParse(portRaw, out var port) || port is < 1 or > 65535)
-            throw new ArgumentException("Dragonwilds port must be between 1 and 65535.");
+            throw new ArgumentException("Dragonwilds game port must be between 1 and 65535.");
+
+        var defaultBeacon = port <= 64424 ? port + 1111 : 8888;
+        var beaconRaw = values.TryGetValue("BeaconPort", out var configuredBeacon)
+            ? configuredBeacon : ReadLaunchPort(def, "BeaconPort", defaultBeacon).ToString();
+        if (!int.TryParse(beaconRaw, out var beaconPort) || beaconPort is < 1 or > 65535)
+            throw new ArgumentException("Dragonwilds beacon port must be between 1 and 65535.");
+        if (port == beaconPort)
+            throw new ArgumentException("Dragonwilds game and beacon ports must be different.");
 
         var lines = current.Replace("\r\n", "\n").Split('\n').ToList();
         if (!lines.Any(l => l.Trim().Equals(Section, StringComparison.OrdinalIgnoreCase)))
@@ -119,7 +125,10 @@ public sealed class DragonwildsConfig : IGameConfig
             lines.Add(Section);
         }
 
-        foreach (var key in new[] { "OwnerId", "ServerName", "DefaultWorldName", "AdminPassword", "WorldPassword", "PlatformPolicy" })
+        foreach (var key in new[]
+        {
+            "OwnerId", "ServerName", "DefaultWorldName", "AdminPassword", "WorldPassword", "AdministratorList"
+        })
         {
             if (!merged.TryGetValue(key, out var value)) continue;
             SetKey(lines, key, value ?? "");
@@ -128,12 +137,16 @@ public sealed class DragonwildsConfig : IGameConfig
         var output = string.Join("\r\n", lines).TrimEnd('\r', '\n') + "\r\n";
         var updatedDef = def with
         {
-            StartArgs = WritePort(def.StartArgs ?? Array.Empty<string>(), port),
-            NetworkPorts = new[] { new NetworkPort("Game", NetworkProtocol.Udp, port) }
+            StartArgs = WriteLaunchPorts(def.StartArgs ?? Array.Empty<string>(), port, beaconPort),
+            NetworkPorts = new[]
+            {
+                new NetworkPort("Game", NetworkProtocol.Udp, port),
+                new NetworkPort("Beacon", NetworkProtocol.Udp, beaconPort)
+            }
         };
 
-        // Validate/persist the port reservation before touching the game config. Roll back the
-        // ServerDef if the file write itself fails so the two sources of truth never drift.
+        // Validate/persist both reservations before touching the game config. Roll back the
+        // ServerDef if the file write itself fails so config/network metadata cannot drift.
         _store.Update(def.Id, updatedDef);
         var writeOk = def.HostingMode == HostingMode.BareMetal
             ? await WriteLocalAsync(path, output, ct)
@@ -184,36 +197,58 @@ public sealed class DragonwildsConfig : IGameConfig
             throw new ArgumentException(message);
     }
 
-    private static int ReadPort(ServerDef def)
+    private static int ReadLaunchPort(ServerDef def, string switchName, int fallback)
     {
         var args = def.StartArgs ?? Array.Empty<string>();
         for (var i = 0; i < args.Length; i++)
         {
             var arg = args[i];
-            if (arg.StartsWith("-Port=", StringComparison.OrdinalIgnoreCase) && int.TryParse(arg[6..], out var inline))
+            var prefix = "-" + switchName + "=";
+            if (arg.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && int.TryParse(arg[prefix.Length..], out var inline))
                 return inline;
-            if (arg.Equals("-Port", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && int.TryParse(args[i + 1], out var separate))
+            if (arg.Equals("-" + switchName, StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length && int.TryParse(args[i + 1], out var separate))
                 return separate;
         }
-        return def.NetworkPorts?.FirstOrDefault(p => p.Protocol == NetworkProtocol.Udp)?.Port ?? 7777;
+
+        var named = def.NetworkPorts?.FirstOrDefault(p => p.Protocol == NetworkProtocol.Udp && p.Name.Equals(switchName == "Port" ? "Game" : "Beacon", StringComparison.OrdinalIgnoreCase));
+        return named?.Port ?? fallback;
     }
 
-    private static string[] WritePort(string[] existing, int port)
+    private static string[] WriteLaunchPorts(string[] existing, int port, int beaconPort)
     {
         var result = new List<string>();
         for (var i = 0; i < existing.Length; i++)
         {
             var arg = existing[i];
-            if (arg.StartsWith("-Port=", StringComparison.OrdinalIgnoreCase)) continue;
-            if (arg.Equals("-Port", StringComparison.OrdinalIgnoreCase))
+            var isPort = arg.StartsWith("-Port=", StringComparison.OrdinalIgnoreCase) || arg.Equals("-Port", StringComparison.OrdinalIgnoreCase);
+            var isBeacon = arg.StartsWith("-BeaconPort=", StringComparison.OrdinalIgnoreCase) || arg.Equals("-BeaconPort", StringComparison.OrdinalIgnoreCase);
+            if (isPort || isBeacon)
             {
-                if (i + 1 < existing.Length && !existing[i + 1].StartsWith("-", StringComparison.Ordinal)) i++;
+                if (!arg.Contains('=') && i + 1 < existing.Length && !existing[i + 1].StartsWith("-", StringComparison.Ordinal)) i++;
                 continue;
             }
             result.Add(arg);
         }
         result.Add($"-Port={port}");
+        result.Add($"-BeaconPort={beaconPort}");
         return result.ToArray();
+    }
+
+    private static string ParseAdministratorList(string value)
+    {
+        var raw = (value ?? "").Trim();
+        if (raw.StartsWith('(') && raw.EndsWith(')') && raw.Length >= 2) raw = raw[1..^1];
+        return string.Join("\n", raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    }
+
+    private static string FormatAdministratorList(string value)
+    {
+        var ids = (value ?? "").Replace("\r\n", "\n").Split('\n')
+            .Select(x => x.Trim())
+            .Where(x => x.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return "(" + string.Join(',', ids) + ")";
     }
 
     private static Dictionary<string, string> Parse(string content)
