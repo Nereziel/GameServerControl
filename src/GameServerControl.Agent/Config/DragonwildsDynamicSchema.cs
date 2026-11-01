@@ -45,11 +45,11 @@ public sealed class DragonwildsDynamicSchema : IDynamicSchemaExtension
             new ConfigField("Administrators", "Permanent administrators", ConfigFieldType.Multiline,
                 Description: "One Dragonwilds user ID per line. GameServerControl stores these in Jagex's AdministratorList=(...) setting."),
             new ConfigField("Port", "Game port", ConfigFieldType.Integer,
-                Description: "Main UDP game port. Jagex default: 7777.",
-                Default: "7777", Min: 1, Max: 65535),
+                Description: "Main UDP game port. Jagex default: 7777. GameServerControl uses ports 1024+ so the unprivileged Linux Agent can bind them without extra capabilities.",
+                Default: "7777", Min: 1024, Max: 65535),
             new ConfigField("BeaconPort", "Beacon port", ConfigFieldType.Integer,
                 Description: "Separate UDP beacon/discovery port. Jagex's current default is 8888 (game port + 1111). Both ports must be allowed/forwarded.",
-                Default: "8888", Min: 1, Max: 65535)
+                Default: "8888", Min: 1024, Max: 65535)
         }
         .Where(f => !curatedKeys.Contains(f.Key))
         .ToArray();
