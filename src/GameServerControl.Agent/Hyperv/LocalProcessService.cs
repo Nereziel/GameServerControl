@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using GameServerControl.Agent.Hubs;
+using GameServerControl.Agent.Networking;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 using Microsoft.AspNetCore.SignalR;
@@ -18,6 +19,7 @@ public sealed record LocalConsoleState(
 /// on the agent host instead of dispatching through PowerShell Direct into a VM guest.
 /// For profiles explicitly marked as <see cref="GameConsoleMode.Stdin"/>, the process is
 /// launched with redirected stdin/stdout/stderr and its console is kept attached to the Agent.
+/// Windows program firewall rules are synchronized with the actual process lifecycle.
 /// </summary>
 public sealed class LocalProcessService
 {
@@ -30,6 +32,7 @@ public sealed class LocalProcessService
     private readonly ServerRegistry _registry;
     private readonly IHubContext<StatusHub> _hub;
     private readonly ConcurrentDictionary<string, ConsoleSession> _consoleSessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, bool> _firewallStates = new(StringComparer.OrdinalIgnoreCase);
 
     public LocalProcessService(
         ILogger<LocalProcessService> logger,
@@ -45,12 +48,15 @@ public sealed class LocalProcessService
 
     public Task<(bool Ok, int? Pid, string Error)> StartProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default)
     {
+        var def = FindServerForExe(exePath);
         try
         {
             if (!File.Exists(exePath))
                 return Task.FromResult<(bool, int?, string)>((false, null, $"EXE not found: {exePath}"));
 
-            var def = FindServerForExe(exePath);
+            if (!SetFirewallState(def, open: true, out var firewallError))
+                return Task.FromResult<(bool, int?, string)>((false, null, "Could not prepare Windows Firewall: " + firewallError));
+
             var interactive = def is not null
                 && def.HostingMode == HostingMode.BareMetal
                 && string.IsNullOrWhiteSpace(def.ScheduledTaskName)
@@ -71,7 +77,11 @@ public sealed class LocalProcessService
                 psi.ArgumentList.Add(a);
 
             var p = Process.Start(psi);
-            if (p is null) return Task.FromResult<(bool, int?, string)>((false, null, "Process.Start returned null"));
+            if (p is null)
+            {
+                SetFirewallState(def, open: false, out _);
+                return Task.FromResult<(bool, int?, string)>((false, null, "Process.Start returned null"));
+            }
 
             if (interactive && def is not null)
                 AttachInteractiveConsole(def, p);
@@ -80,6 +90,7 @@ public sealed class LocalProcessService
         }
         catch (Exception ex)
         {
+            SetFirewallState(def, open: false, out _);
             _logger.LogError(ex, "StartProcess failed for {Exe}", exePath);
             return Task.FromResult<(bool, int?, string)>((false, null, ex.Message));
         }
@@ -105,6 +116,9 @@ public sealed class LocalProcessService
             var code = "?";
             try { code = process.ExitCode.ToString(); } catch { }
             _ = RecordAndBroadcastAsync(session, "process", $"[process exited with code {code}]");
+            if (_consoleSessions.TryGetValue(def.Id, out var current) && ReferenceEquals(current, session))
+                _consoleSessions.TryRemove(def.Id, out _);
+            SetFirewallState(def, open: false, out _);
         };
 
         process.BeginOutputReadLine();
@@ -183,14 +197,38 @@ public sealed class LocalProcessService
     private ServerDef? FindServerForExe(string exePath)
         => _registry.All.FirstOrDefault(s => s.HostingMode == HostingMode.BareMetal && PathsEqual(s.GuestExePath, exePath));
 
+    private ServerDef? FindServerForScheduledTask(string taskName)
+        => _registry.All.FirstOrDefault(s => s.HostingMode == HostingMode.BareMetal
+            && string.Equals(s.ScheduledTaskName, taskName, StringComparison.OrdinalIgnoreCase));
+
+    private bool SetFirewallState(ServerDef? def, bool open, out string? error)
+    {
+        error = null;
+        if (def is null || !OperatingSystem.IsWindows()) return true;
+        if (_firewallStates.TryGetValue(def.Id, out var current) && current == open) return true;
+
+        var ok = open
+            ? WindowsFirewall.EnsureProgramRules(def, out error)
+            : WindowsFirewall.RemoveProgramRules(def.Id, out error);
+        if (ok)
+            _firewallStates[def.Id] = open;
+        else
+            _logger.LogWarning("Could not {Action} Windows Firewall rules for {Id}: {Error}", open ? "open" : "close", def.Id, error);
+        return ok;
+    }
+
     public Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default)
     {
+        var def = FindServerForExe(exePath);
         try
         {
             var name = Path.GetFileNameWithoutExtension(exePath);
             var candidates = Process.GetProcessesByName(name);
             if (candidates.Length == 0)
+            {
+                SetFirewallState(def, open: false, out _);
                 return Task.FromResult<(bool, int?)>((true, null));
+            }
 
             var unreadable = new List<Process>();
             foreach (var p in candidates)
@@ -198,7 +236,10 @@ public sealed class LocalProcessService
                 try
                 {
                     if (PathsEqual(p.MainModule?.FileName, exePath))
+                    {
+                        SetFirewallState(def, open: true, out _);
                         return Task.FromResult<(bool, int?)>((true, p.Id));
+                    }
                 }
                 catch
                 {
@@ -210,7 +251,10 @@ public sealed class LocalProcessService
             // access, accepting it is the least surprising fallback. With two or more candidates,
             // guessing could stop or report the wrong game-server instance, so return Unknown.
             if (candidates.Length == 1 && unreadable.Count == 1)
+            {
+                SetFirewallState(def, open: true, out _);
                 return Task.FromResult<(bool, int?)>((true, unreadable[0].Id));
+            }
 
             if (candidates.Length > 1)
                 _logger.LogWarning("Ambiguous process lookup for {Exe}: found {Count} processes named {Name} and no exact path match.", exePath, candidates.Length, name);
@@ -226,6 +270,7 @@ public sealed class LocalProcessService
 
     public async Task<bool> StopProcessAsync(string exePath, int? pid, bool force, CancellationToken ct = default)
     {
+        var def = FindServerForExe(exePath);
         try
         {
             Process? p = null;
@@ -258,9 +303,17 @@ public sealed class LocalProcessService
                     _logger.LogWarning("Refusing name-only stop for {Exe}: process lookup is ambiguous or unavailable.", exePath);
                     return false;
                 }
-                if (foundPid is null) return true;
+                if (foundPid is null)
+                {
+                    SetFirewallState(def, open: false, out _);
+                    return true;
+                }
                 try { p = Process.GetProcessById(foundPid.Value); }
-                catch { return true; }
+                catch
+                {
+                    SetFirewallState(def, open: false, out _);
+                    return true;
+                }
             }
 
             if (!force)
@@ -277,7 +330,11 @@ public sealed class LocalProcessService
                     var deadline = DateTime.UtcNow.Add(GracefulStopTimeout);
                     while (DateTime.UtcNow < deadline && !p.HasExited)
                         await Task.Delay(250, ct);
-                    if (p.HasExited) return true;
+                    if (p.HasExited)
+                    {
+                        SetFirewallState(def, open: false, out _);
+                        return true;
+                    }
                     _logger.LogInformation("Graceful stop timed out for pid {Pid} after {Seconds}s; terminating process tree.", p.Id, GracefulStopTimeout.TotalSeconds);
                 }
                 else
@@ -296,6 +353,7 @@ public sealed class LocalProcessService
                 _logger.LogWarning(ex, "Kill failed for pid {Pid}", p.Id);
                 return false;
             }
+            SetFirewallState(def, open: false, out _);
             return true;
         }
         catch (Exception ex)
@@ -308,15 +366,28 @@ public sealed class LocalProcessService
     public async Task<bool> StartScheduledTaskAsync(string taskName, CancellationToken ct = default)
     {
         if (!HasScheduledTaskSupport) return false;
+        var def = FindServerForScheduledTask(taskName);
+        if (!SetFirewallState(def, open: true, out var firewallError))
+        {
+            _logger.LogWarning("Could not prepare firewall before scheduled task {Task}: {Error}", taskName, firewallError);
+            return false;
+        }
+
         var (ok, output) = await RunCommandAsync($"schtasks /run /tn \"{taskName}\"", "", TimeSpan.FromSeconds(15), ct);
-        if (!ok) _logger.LogWarning("schtasks /run for {Task} failed: {Out}", taskName, output);
+        if (!ok)
+        {
+            SetFirewallState(def, open: false, out _);
+            _logger.LogWarning("schtasks /run for {Task} failed: {Out}", taskName, output);
+        }
         return ok;
     }
 
     public async Task<bool> EndScheduledTaskAsync(string taskName, CancellationToken ct = default)
     {
         if (!HasScheduledTaskSupport) return true;
+        var def = FindServerForScheduledTask(taskName);
         var (ok, _) = await RunCommandAsync($"schtasks /end /tn \"{taskName}\"", "", TimeSpan.FromSeconds(15), ct);
+        if (ok) SetFirewallState(def, open: false, out _);
         return ok;
     }
 
