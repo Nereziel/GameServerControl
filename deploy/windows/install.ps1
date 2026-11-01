@@ -92,7 +92,7 @@ if ($svc -and $svc.Status -eq 'Running') {
 }
 
 Write-Step "Installing Agent to $agentDir"
-$preserve = @('appsettings.json', 'servers.json', 'tokens.json')
+$preserve = @('appsettings.json', 'servers.json', 'tokens.json', 'public-relay.json')
 $backupDir = Join-Path $tmpRoot 'preserved'
 New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
 foreach ($f in $preserve) {
