@@ -1,7 +1,8 @@
 name: Release
 
-# Builds self-contained Windows + Linux agent/web releases plus the optional Windows tray helper.
-# The one-line installers and Web UI updater fetch these assets from /releases/latest.
+# Builds self-contained Windows + Linux Agent/Web releases, the Linux VPS Relay,
+# and the optional Windows tray helper. One-line installers fetch these assets
+# from /releases/latest.
 on:
   push:
     tags:
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v1.1.0)'
+        description: 'Existing tag to build (e.g. v1.1.0)'
         required: true
 
 permissions:
@@ -20,8 +21,10 @@ jobs:
     name: Build Windows agent + tray
     runs-on: windows-latest
     steps:
-      - name: Checkout
+      - name: Checkout release ref
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v6
@@ -53,35 +56,54 @@ jobs:
           if-no-files-found: error
 
   build-linux:
-    name: Build Linux agent
+    name: Build Linux agent + relay
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout
+      - name: Checkout release ref
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
 
+      - name: Validate Linux installers
+        run: |
+          bash -n deploy/linux/install-from-release.sh
+          bash -n deploy/relay/install-from-release.sh
+          bash -n deploy/relay/install.sh
+
       - name: Publish agent (linux-x64, self-contained)
         run: dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained true -o publish/Agent-linux
+
+      - name: Publish relay (linux-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Relay -c Release -r linux-x64 --self-contained true -o publish/Relay-linux
 
       - name: Stage deploy artifacts
         run: |
           cp deploy/linux/gameservercontrol-agent.service publish/Agent-linux/
           cp deploy/linux/install-from-release.sh publish/Agent-linux/
-          chmod +x publish/Agent-linux/install-from-release.sh
-          chmod +x publish/Agent-linux/GameServerControl.Agent
+          chmod +x publish/Agent-linux/install-from-release.sh publish/Agent-linux/GameServerControl.Agent
 
-      - name: Tarball agent
-        run: tar -czf GameServerControl-Agent-linux.tar.gz -C publish/Agent-linux .
+          cp deploy/relay/gameservercontrol-relay.service publish/Relay-linux/
+          cp deploy/relay/install.sh publish/Relay-linux/
+          cp deploy/relay/install-from-release.sh publish/Relay-linux/
+          chmod +x publish/Relay-linux/install.sh publish/Relay-linux/install-from-release.sh publish/Relay-linux/GameServerControl.Relay
 
-      - name: Upload artifact
+      - name: Create Linux tarballs
+        run: |
+          tar -czf GameServerControl-Agent-linux.tar.gz -C publish/Agent-linux .
+          tar -czf GameServerControl-Relay-linux.tar.gz -C publish/Relay-linux .
+
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: linux-agent
-          path: GameServerControl-Agent-linux.tar.gz
+          name: linux-packages
+          path: |
+            GameServerControl-Agent-linux.tar.gz
+            GameServerControl-Relay-linux.tar.gz
           if-no-files-found: error
 
   release:
@@ -89,31 +111,34 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [build-windows, build-linux]
     steps:
-      - name: Checkout
+      - name: Checkout release ref
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Download Windows packages
         uses: actions/download-artifact@v8
         with:
           name: windows-packages
 
-      - name: Download Linux agent
+      - name: Download Linux packages
         uses: actions/download-artifact@v8
         with:
-          name: linux-agent
+          name: linux-packages
 
       - name: Stage installer scripts as release assets
         run: |
-          cp deploy/windows/install.ps1            GameServerControl-Install-Windows.ps1
-          cp deploy/linux/install-from-release.sh  GameServerControl-Install-Linux.sh
+          cp deploy/windows/install.ps1                 GameServerControl-Install-Windows.ps1
+          cp deploy/linux/install-from-release.sh       GameServerControl-Install-Linux.sh
+          cp deploy/relay/install-from-release.sh       GameServerControl-Install-Relay.sh
 
       - name: Determine tag
         id: tag
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create release
@@ -128,18 +153,23 @@ jobs:
             GameServerControl-Agent-windows.zip
             GameServerControl-Tray-windows.zip
             GameServerControl-Agent-linux.tar.gz
+            GameServerControl-Relay-linux.tar.gz
             GameServerControl-Install-Windows.ps1
             GameServerControl-Install-Linux.sh
+            GameServerControl-Install-Relay.sh
           body: |
-            GameServerControl uses Agent + API + Web UI for administration. Windows releases also include a small optional tray helper for quick Agent controls and opening the browser dashboard.
+            GameServerControl uses Agent + API + Web UI for administration. The optional Linux Relay exposes game ports from a public VPS through Tailscale to the game host.
             Releases are self-contained; no preinstalled .NET runtime is required on target hosts.
 
             Install commands:
 
-                # Windows (admin PowerShell)
+                # Windows Agent (admin PowerShell)
                 iwr https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/windows/install.ps1 | iex
 
-                # Linux
+                # Linux Agent
                 curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/linux/install-from-release.sh | sudo bash
 
-            Open the dashboard in a browser after installation.
+                # Public Linux VPS Relay
+                curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/relay/install-from-release.sh | sudo bash
+
+            The Relay installer detects the VPS public interface and Tailscale IPv4, enables IPv4 forwarding, installs the systemd service, and prints the Tailscale API URL plus token to configure on the Agent.
