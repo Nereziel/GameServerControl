@@ -1,4 +1,3 @@
-using GameServerControl.Agent.Auth;
 using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
@@ -59,12 +58,12 @@ public sealed class StatusHub : Hub
     }
 
     [Authorize(Policy = "admin")]
-    public async Task SendConsoleInput(string serverId, string command, CancellationToken ct)
+    public async Task SendConsoleInput(string serverId, string command)
     {
         var def = _registry.Get(serverId);
         if (def is null) throw new HubException("Unknown server.");
 
-        var (ok, error) = await _local.SendConsoleInputAsync(def, command, ct);
+        var (ok, error) = await _local.SendConsoleInputAsync(def, command, Context.ConnectionAborted);
         if (!ok) throw new HubException(error);
     }
 }
