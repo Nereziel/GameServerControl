@@ -34,23 +34,53 @@ public sealed record GameProfile(
     string? Notes = null,
     bool Installable = false,
     string? EstimatedSize = null,
-    NetworkPort[]? DefaultPorts = null)
+    NetworkPort[]? DefaultPorts = null,
+    string? LinuxExecutableRelative = null,
+    string[]? LinuxDefaultStartArgs = null,
+    string[]? LinuxSaveDirs = null,
+    string? LinuxLogPath = null)
 {
     public string DefaultWindowsInstallPath => string.IsNullOrWhiteSpace(InstallDirectoryName)
         ? ""
         : $@"C:\GameServers\{InstallDirectoryName}";
 
+    public string DefaultInstallPath => string.IsNullOrWhiteSpace(InstallDirectoryName)
+        ? ""
+        : OperatingSystem.IsWindows()
+            ? DefaultWindowsInstallPath
+            : $"/srv/gameservers/{InstallDirectoryName}";
+
+    public string HostExecutableRelative =>
+        !OperatingSystem.IsWindows() && !string.IsNullOrWhiteSpace(LinuxExecutableRelative)
+            ? LinuxExecutableRelative
+            : ExecutableRelative;
+
+    public string[] HostDefaultStartArgs =>
+        !OperatingSystem.IsWindows() && LinuxDefaultStartArgs is not null
+            ? LinuxDefaultStartArgs
+            : DefaultStartArgs;
+
+    public string[] HostSaveDirs =>
+        !OperatingSystem.IsWindows() && LinuxSaveDirs is not null
+            ? LinuxSaveDirs
+            : SaveDirs;
+
+    public string? HostLogPath =>
+        !OperatingSystem.IsWindows() && LinuxLogPath is not null
+            ? LinuxLogPath
+            : LogPath;
+
     public string BuildExecutablePath(string root)
-        => string.IsNullOrWhiteSpace(root) ? ExecutableRelative : Path.Combine(root, ExecutableRelative);
+        => string.IsNullOrWhiteSpace(root) ? HostExecutableRelative : Path.Combine(root, HostExecutableRelative);
 
     public string[] BuildStartArgs(string root)
-        => DefaultStartArgs.Select(x => Expand(x, root)).ToArray();
+        => HostDefaultStartArgs.Select(x => Expand(x, root)).ToArray();
 
     public string[] BuildSaveDirs(string root)
-        => SaveDirs.Select(x => Expand(x, root)).ToArray();
+        => HostSaveDirs.Select(x => Expand(x, root)).ToArray();
 
     public string? BuildLogPath(string root)
-        => string.IsNullOrWhiteSpace(LogPath) ? null : Expand(LogPath, root);
+        => string.IsNullOrWhiteSpace(HostLogPath) ? null : Expand(HostLogPath, root);
 
     private static string Expand(string value, string root)
         => value.Replace("{root}", root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
@@ -82,7 +112,12 @@ public static class GameProfiles
             new GameCapabilities(ManagedConfig: true, Mods: true, LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
             Notes: "Steam backend uses UDP 2456-2457. Crossplay uses PlayFab relay. World data plus admin/banned/permitted lists stay under the configured save directory.",
             Installable: true, EstimatedSize: "~1 GB",
-            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 2456, 2457) }),
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 2456, 2457) },
+            LinuxExecutableRelative: "valheim_server.x86_64",
+            LinuxDefaultStartArgs: new[]{ "-nographics", "-batchmode", "-name", "MyServer", "-port", "2456", "-world", "MyWorld", "-password", "change-me",
+                                          "-savedir", "{root}/data", "-logFile", "{root}/logs/valheim.log" },
+            LinuxSaveDirs: new[]{ "{root}/data" },
+            LinuxLogPath: "{root}/logs/valheim.log"),
 
         new("dragonwilds", "RuneScape: Dragonwilds", "🐉", GameType.SteamGeneric, "4019830", "Dragonwilds", "RSDragonwilds.exe",
             new[]{ "-log", "-NewConsole", "-Port=7777", "-BeaconPort=8888" },
@@ -90,7 +125,11 @@ public static class GameProfiles
             new GameCapabilities(ManagedConfig: true, LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
             Notes: "Current Jagex server uses UDP 7777 for game traffic and UDP 8888 for beacon/discovery (game port + 1111 by default). Owner ID, server/world name and admin password must be configured before first start.",
             Installable: true, EstimatedSize: "~20 GB disk recommended",
-            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 7777), new NetworkPort("Beacon", NetworkProtocol.Udp, 8888) }),
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 7777), new NetworkPort("Beacon", NetworkProtocol.Udp, 8888) },
+            LinuxExecutableRelative: "RSDragonwildsServer.sh",
+            LinuxDefaultStartArgs: new[]{ "-Port=7777", "-BeaconPort=8888" },
+            LinuxSaveDirs: new[]{ "{root}/RSDragonwilds/Saved/Savegames" },
+            LinuxLogPath: "{root}/RSDragonwilds/Saved/Logs/RSDragonwilds.log"),
 
         new("ark-asa", "ARK: Survival Ascended", "🦖", GameType.SteamGeneric, "2430930", "ArkAscended", @"ShooterGame\Binaries\Win64\ArkAscendedServer.exe",
             new[]{ "TheIsland_WP?listen?MaxPlayers=20?ServerPassword=?ServerAdminPassword=change-me" },
