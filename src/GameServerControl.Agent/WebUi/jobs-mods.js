@@ -24,3 +24,57 @@ async function removeMod(id){if(!confirm('Remove '+id+'?'))return;try{await api(
 async function loadModUpdates(){const pane=$('#modsPane');try{const r=await api(`/api/servers/${MOD_CTX.id}/mods/updates`);if(!r.supported){pane.innerHTML=`<div class="empty">${esc(r.unsupportedReason||'Update checks unavailable.')}</div>`;return}MOD_UPDATES=r.updates||[];if(!MOD_UPDATES.length){pane.innerHTML='<div class="empty">All managed mods are up to date.</div>';return}pane.innerHTML=`<div class="summarybar"><b>${MOD_UPDATES.length} update${MOD_UPDATES.length===1?'':'s'} available</b><div class="spacer"></div><button class="btn primary" onclick="updateAllMods()">Update all</button></div><div class="modlist">${MOD_UPDATES.map(u=>`<div class="modcard"><div class="modname">${esc(u.displayName)}</div><div class="modmeta">${esc(u.installedVersion||'?')} → ${esc(u.latestVersion)}</div><div class="modactions"><button class="btn primary" onclick="updateOneMod('${jsq(u.modId)}')">Update</button></div></div>`).join('')}</div>`}catch(e){pane.innerHTML=`<div class="empty">${esc(e.message)}</div>`}}
 async function updateOneMod(id){const u=MOD_UPDATES.find(x=>x.modId===id);if(!u)return;try{await api(`/api/servers/${MOD_CTX.id}/mods/${encodeURIComponent(id)}/update`,{method:'POST',body:JSON.stringify({url:u.latestDownloadUrl,displayName:u.displayName})});toast('Updated '+u.displayName,'ok');await loadModUpdates()}catch(e){toast('Update failed: '+e.message,'err')}}
 async function updateAllMods(){if(!MOD_UPDATES.length)return;for(const u of [...MOD_UPDATES]){try{await api(`/api/servers/${MOD_CTX.id}/mods/${encodeURIComponent(u.modId)}/update`,{method:'POST',body:JSON.stringify({url:u.latestDownloadUrl,displayName:u.displayName})});toast('Updated '+u.displayName,'ok')}catch(e){toast('Update failed for '+u.displayName+': '+e.message,'err');return}}await loadModUpdates()}
+
+/* Public VPS relay controls. The relay mirrors the manual DNAT + MASQUERADE + FORWARD setup
+   but keeps its rules in GSC_RELAY_* chains instead of rewriting /etc/ufw/before.rules. */
+function relayProto(v){return String(v||'').toLowerCase()}
+function relayWidth(p){return Number(p.targetEndPort??p.targetPort)-Number(p.targetPort)}
+function relayDisplayRange(start,end){return Number(start)===Number(end??start)?String(start):`${start}-${end}`}
+
+async function renderPublicRelaySection(def,body){
+  const mount=body.querySelector('#swPublicRelay');if(!mount)return;
+  let status;
+  try{status=await api(`/api/servers/${encodeURIComponent(def.id)}/relay`)}catch(e){if(mount.isConnected)mount.innerHTML=`<div class="callout">Public relay status failed: ${esc(e.message)}</div>`;return}
+  if(!mount.isConnected)return;
+  const targets=effectiveNetworkPorts(def);
+  const routes=targets.map(t=>{
+    const found=(status.ports||[]).find(p=>relayProto(p.protocol)===relayProto(t.protocol)&&String(p.name||'').toLowerCase()===String(t.name||'').toLowerCase());
+    const targetPort=Number(found?.targetPort??t.port),targetEnd=Number(found?.targetEndPort??t.endPort??t.port),width=targetEnd-targetPort;
+    const publicPort=Number(found?.publicPort??t.port),publicEnd=publicPort+width;
+    return{name:t.name||'Port',protocol:found?.protocol??t.protocol,targetPort,targetEnd,width,publicPort,publicEnd};
+  });
+  const running=(STATUS[def.id]?.processState||'')==='Running';
+  const configured=!!status.configured,reachable=!!status.reachable,enabled=!!status.enabled;
+  const lifecycle=!configured?'Not configured':!reachable?'Relay unreachable':!enabled?'Disabled':running?'Active while server is running':'Enabled, currently closed because server is stopped';
+  const stateClass=!configured||!reachable?'down':enabled&&running?'up':enabled?'warn':'down';
+  const rows=routes.length?routes.map((p,i)=>`<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(p.name)}</div><div class="sw-row-meta mono">${esc(String(p.protocol).toUpperCase())} target ${esc(relayDisplayRange(p.targetPort,p.targetEnd))}</div></div><div style="min-width:180px"><label class="tiny muted">Public ${p.width?'range start':'port'}</label><input data-relay-port="1" data-name="${esc(p.name)}" data-protocol="${esc(p.protocol)}" data-width="${p.width}" type="number" min="1" max="${65535-p.width}" value="${p.publicPort}" ${configured?'':'disabled'}><div class="tiny muted mono" style="margin-top:3px">${p.width?`maps ${esc(relayDisplayRange(p.publicPort,p.publicEnd))}`:`maps to ${p.targetPort}`}</div></div></div>`).join(''):'<div class="sw-empty">No game ports are defined for this server.</div>';
+  const error=status.error?`<div class="callout">${esc(status.error)}</div>`:'';
+  mount.innerHTML=`<div class="sw-section"><div class="sw-toolbar"><div><h3 style="margin:0">Public VPS relay</h3><div class="tiny muted">Public VPS port → Tailscale → this game server. Rules are installed only while the server is running.</div></div><div class="spacer"></div><span class="state ${stateClass}">${esc(lifecycle)}</span></div>${error}<div class="sw-info"><div>Relay API</div><div>${configured?(reachable?'Connected':'Configured, unreachable'):'Not configured on Agent'}</div><div>Public address</div><div class="mono">${esc(status.publicAddress||'not set')}</div><div>Target Tailscale IP</div><div class="mono">${esc(status.targetAddress||'not detected')}</div><div>Traffic model</div><div>DNAT on VPS + MASQUERADE into tailscale0</div></div><div class="callout info" style="margin-top:10px"><b>Client IP:</b> because the VPS performs MASQUERADE, the game server sees the VPS Tailscale address as the peer instead of the player's original public IP. This matches the current manual setup and keeps the return path symmetric.</div><div class="checkrow" style="margin:12px 0"><input id="swRelayEnabled" type="checkbox" ${enabled?'checked':''} ${configured?'':'disabled'}><label for="swRelayEnabled">Expose this server through the public VPS while it is running</label></div>${rows}<div class="sw-toolbar" style="margin-top:12px"><button class="btn" ${configured?'':'disabled'} onclick="serverWorkspaceResetRelayPorts()">Public ports = game ports</button><div class="spacer"></div><button class="btn primary" ${configured?'':'disabled'} onclick="serverWorkspaceSaveRelay('${jsq(def.id)}')">Save relay</button></div>${configured?'':'<div class="help">Configure Agent:PublicRelay:Url and Agent:PublicRelay:ApiToken first. The VPS relay installer prints both values after installation.</div>'}</div>`;
+}
+
+window.serverWorkspaceResetRelayPorts=function(){document.querySelectorAll('[data-relay-port]').forEach(el=>{const row=el.closest('.sw-row'),meta=row?.querySelector('.sw-row-meta')?.textContent||'',m=meta.match(/target\s+(\d+)/i);if(m)el.value=m[1]})};
+window.serverWorkspaceSaveRelay=async function(id){
+  const enabled=!!$('#swRelayEnabled')?.checked;
+  const publicPorts=[];
+  for(const el of document.querySelectorAll('[data-relay-port]')){
+    const start=Number(el.value),width=Number(el.dataset.width||0),end=start+width;
+    if(!Number.isInteger(start)||start<1||end>65535)return toast('Invalid public relay port range.','err');
+    publicPorts.push({name:el.dataset.name,protocol:el.dataset.protocol,port:start,endPort:width?end:null});
+  }
+  try{
+    await api(`/api/servers/${encodeURIComponent(id)}/relay`,{method:'PUT',body:JSON.stringify({enabled,publicPorts})});
+    toast('Public relay settings saved.','ok');
+    const def=SERVERS.find(x=>x.id===id),body=document.querySelector('.sw-workspace[data-tab="network"] .sw-body');
+    if(def&&body)renderServerNetwork(def,body);
+  }catch(e){toast('Public relay save failed: '+e.message,'err')}
+};
+
+window.addEventListener('DOMContentLoaded',()=>{
+  if(typeof renderServerNetwork==='function'&&!renderServerNetwork.__publicRelayWrapped){
+    const base=renderServerNetwork;
+    const wrapped=function(def,body){base(def,body);const advanced=body.querySelector('details.advanced');const html='<div id="swPublicRelay"><div class="sw-section"><div class="muted">Loading public relay…</div></div></div>';if(advanced)advanced.insertAdjacentHTML('beforebegin',html);else body.insertAdjacentHTML('beforeend',html);renderPublicRelaySection(def,body)};
+    wrapped.__publicRelayWrapped=true;renderServerNetwork=wrapped;
+  }
+  const legacyOpenNetwork=window.openNetwork;
+  window.openNetwork=function(id){if(typeof openServerPage==='function')return openServerPage(id,'network');return legacyOpenNetwork?legacyOpenNetwork(id):undefined};
+});
