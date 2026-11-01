@@ -31,7 +31,6 @@ public sealed class ServerInstaller
         public object Gate { get; } = new();
         public List<string> Lines { get; } = new();
         public InstallProgress Snapshot { get; set; }
-
         public JobState(InstallProgress snapshot) => Snapshot = snapshot;
     }
 
@@ -47,12 +46,12 @@ public sealed class ServerInstaller
     public InstallProgress? Get(string jobId)
     {
         if (!_jobs.TryGetValue(jobId, out var state)) return null;
-        lock (state.Gate)
-            return state.Snapshot with { LogLines = state.Lines.ToArray() };
+        lock (state.Gate) return state.Snapshot with { LogLines = state.Lines.ToArray() };
     }
 
-    public string StartJob(InstallServerRequest req)
+    public string StartJob(InstallServerRequest request)
     {
+        var req = NormalizeForHost(request);
         var jobId = Guid.NewGuid().ToString("N")[..12];
         var now = DateTimeOffset.UtcNow;
         var initial = new InstallProgress(
@@ -64,6 +63,33 @@ public sealed class ServerInstaller
         _ = Task.Run(() => RunAsync(jobId, req, CancellationToken.None));
         return jobId;
     }
+
+    private static InstallServerRequest NormalizeForHost(InstallServerRequest req)
+    {
+        if (OperatingSystem.IsWindows()) return req;
+        var profile = GameProfiles.FindFor(req.ServerDef);
+        if (profile is null || !profile.Installable) return req;
+
+        var root = req.InstallPath.Trim();
+        // Older web clients always proposed C:\GameServers\... even when connected to a Linux Agent.
+        // Treat that known Windows-shaped default as UI metadata, not a literal Linux directory name.
+        if (root.Length == 0 || LooksLikeWindowsPath(root)) root = profile.DefaultInstallPath;
+        root = root.TrimEnd('/', '\\');
+
+        var def = req.ServerDef with
+        {
+            GuestWorkingDir = root,
+            GuestExePath = profile.BuildExecutablePath(root),
+            StartArgs = profile.BuildStartArgs(root),
+            SaveDirs = profile.BuildSaveDirs(root),
+            LogPathInGuest = profile.BuildLogPath(root),
+            NetworkPorts = profile.DefaultPorts?.ToArray() ?? req.ServerDef.NetworkPorts
+        };
+        return req with { InstallPath = root, ServerDef = def };
+    }
+
+    private static bool LooksLikeWindowsPath(string path) =>
+        path.Length >= 3 && char.IsLetter(path[0]) && path[1] == ':' && (path[2] == '\\' || path[2] == '/');
 
     private async Task RunAsync(string jobId, InstallServerRequest req, CancellationToken ct)
     {
@@ -92,10 +118,6 @@ public sealed class ServerInstaller
             var expectedExe = req.ServerDef.GuestExePath;
             var exeExists = File.Exists(expectedExe);
 
-            // Terraria's server is distributed both with the main game and as a free official
-            // Re-Logic dedicated-server archive. Steam anonymous access has changed over time and
-            // can leave only Steam metadata behind. Fall back to the official archive whenever the
-            // SteamCMD result is incomplete, rather than forcing the operator to install manually.
             if (req.SteamAppId == "105600" && (!steamOk || !exeExists) && OperatingSystem.IsWindows())
             {
                 var reason = !steamOk
@@ -131,11 +153,10 @@ public sealed class ServerInstaller
                 return;
             }
 
+            EnsureUnixExecutable(expectedExe);
+
             await PublishAsync(jobId, "register", "Registering server with GameServerControl…", 99, false, false);
-            try
-            {
-                _store.Add(req.ServerDef);
-            }
+            try { _store.Add(req.ServerDef); }
             catch (Exception ex)
             {
                 await PublishAsync(jobId, "failed",
@@ -144,8 +165,11 @@ public sealed class ServerInstaller
                 return;
             }
 
+            var postInstall = req.SteamAppId == "4019830"
+                ? " Open Configuration and set Owner Player ID, server/world name and admin password before first start."
+                : "";
             await PublishAsync(jobId, "done",
-                $"Done. Server '{req.ServerDef.Name}' is installed and registered.",
+                $"Done. Server '{req.ServerDef.Name}' is installed and registered.{postInstall}",
                 100, true, true);
         }
         catch (Exception ex)
@@ -157,6 +181,17 @@ public sealed class ServerInstaller
         {
             if (gateHeld) _installGate.Release();
         }
+    }
+
+    private static void EnsureUnixExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try
+        {
+            var mode = File.GetUnixFileMode(path);
+            File.SetUnixFileMode(path, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute);
+        }
+        catch { /* Steam normally preserves executable bits; this is only a repair path. */ }
     }
 
     private async Task<bool> InstallTerrariaOfficialAsync(string jobId, string installPath, CancellationToken ct)
@@ -197,8 +232,7 @@ public sealed class ServerInstaller
             await PublishAsync(jobId, "download", "Extracting official Terraria dedicated-server package…", 70, false, false);
             ZipFile.ExtractToDirectory(zipPath, extractPath, overwriteFiles: true);
 
-            var serverExe = Directory.EnumerateFiles(extractPath, "TerrariaServer.exe", SearchOption.AllDirectories)
-                .FirstOrDefault();
+            var serverExe = Directory.EnumerateFiles(extractPath, "TerrariaServer.exe", SearchOption.AllDirectories).FirstOrDefault();
             if (serverExe is null)
             {
                 await PublishAsync(jobId, "download", "Official archive did not contain TerrariaServer.exe.", null, false, false);
@@ -227,7 +261,6 @@ public sealed class ServerInstaller
     {
         foreach (var dir in Directory.EnumerateDirectories(sourceDir, "*", SearchOption.AllDirectories))
             Directory.CreateDirectory(Path.Combine(destinationDir, Path.GetRelativePath(sourceDir, dir)));
-
         foreach (var file in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
             var target = Path.Combine(destinationDir, Path.GetRelativePath(sourceDir, file));
@@ -239,18 +272,14 @@ public sealed class ServerInstaller
     private async Task PublishAsync(string jobId, string phase, string line, int? pct, bool finished, bool success, bool addToLog = true)
     {
         if (!_jobs.TryGetValue(jobId, out var state)) return;
-
         InstallProgress snapshot;
         lock (state.Gate)
         {
             if (addToLog && !string.IsNullOrWhiteSpace(line))
             {
-                if (state.Lines.Count == 0 || !string.Equals(state.Lines[^1], line, StringComparison.Ordinal))
-                    state.Lines.Add(line);
-                if (state.Lines.Count > MaxLogLines)
-                    state.Lines.RemoveRange(0, state.Lines.Count - MaxLogLines);
+                if (state.Lines.Count == 0 || !string.Equals(state.Lines[^1], line, StringComparison.Ordinal)) state.Lines.Add(line);
+                if (state.Lines.Count > MaxLogLines) state.Lines.RemoveRange(0, state.Lines.Count - MaxLogLines);
             }
-
             var previous = state.Snapshot;
             state.Snapshot = previous with
             {
