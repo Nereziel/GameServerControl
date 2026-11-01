@@ -82,6 +82,9 @@ jobs:
       - name: Restore Shared
         run: dotnet restore src/GameServerControl.Shared
 
+      - name: Validate Valheim + Dragonwilds profile contracts
+        run: dotnet run --project tools/GameServerControl.ProfileCheck -c Release
+
       - name: Restore Agent
         run: dotnet restore src/GameServerControl.Agent
 
