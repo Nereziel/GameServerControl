@@ -1,21 +1,21 @@
 [Unit]
 Description=GameServerControl Agent (game-server dashboard backend)
-Documentation=https://github.com/tyrus2244/GameServerControl
+Documentation=https://github.com/Nereziel/GameServerControl
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 # Run as an unprivileged user dedicated to game-server hosting.
-# Create it with:  sudo useradd --system --create-home --shell /usr/sbin/nologin gsc
+# The installer creates this account and owns the managed game/backup roots below.
 User=gsc
 Group=gsc
 
-# Install location — match what install.sh produces.
 WorkingDirectory=/opt/gameservercontrol/agent
 ExecStart=/opt/gameservercontrol/agent/GameServerControl.Agent
 
-# Auto-restart on crash (the Windows equivalent is the .bat wrapper loop;
-# on Linux we let systemd handle it).
+# Keep the cross-platform backend's backup location deterministic on Linux.
+Environment=Agent__BackupRoot=/var/lib/gameservercontrol/backups
+
 Restart=on-failure
 RestartSec=10s
 
@@ -33,12 +33,9 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
 
-# The agent writes its audit log + appsettings under its working dir.
-ReadWritePaths=/opt/gameservercontrol/agent
-# Add your game-server install roots here so the agent can spawn the server processes:
-# ReadWritePaths=/srv/gameservers /home/gsc/gameservers
+# The Agent may mutate only its own state, managed game installs and backups.
+ReadWritePaths=/opt/gameservercontrol/agent /srv/gameservers /var/lib/gameservercontrol/backups
 
-# Limits — the agent itself is tiny; game-server processes it spawns inherit no limits.
 LimitNOFILE=65536
 
 [Install]
