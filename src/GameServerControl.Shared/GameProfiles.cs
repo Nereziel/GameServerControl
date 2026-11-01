@@ -4,7 +4,8 @@ public enum GameConsoleMode
 {
     None,
     LogOnly,
-    Rcon
+    Rcon,
+    Stdin
 }
 
 public sealed record GameCapabilities(
@@ -155,8 +156,10 @@ public static class GameProfiles
 
         new("terraria", "Terraria", "🌳", GameType.SteamGeneric, "105600", "Terraria", "TerrariaServer.exe",
             new[]{ "-world", @"{root}\worlds\World.wld", "-autocreate", "2", "-worldname", "World", "-port", "7777", "-maxplayers", "8" },
-            new[]{ @"{root}\worlds" }, null, Basic,
-            Notes: "Creates/loads World.wld under the server folder instead of the Windows Documents profile.", Installable: true, EstimatedSize: "~0.5 GB",
+            new[]{ @"{root}\worlds" }, null,
+            new GameCapabilities(ConsoleMode: GameConsoleMode.Stdin),
+            Notes: "Creates/loads World.wld under the server folder. The vanilla dedicated-server console is attached to GameServerControl when the server is started from the panel.",
+            Installable: true, EstimatedSize: "~0.5 GB",
             DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Tcp, 7777) }),
 
         new("dst", "Don't Starve Together", "❄", GameType.SteamGeneric, "343050", "DST", @"bin\dontstarve_dedicated_server_nullrenderer.exe",
