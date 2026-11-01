@@ -71,21 +71,65 @@ public sealed class ServerInstaller
         if (profile is null || !profile.Installable) return req;
 
         var root = req.InstallPath.Trim();
-        // Older web clients always proposed C:\GameServers\... even when connected to a Linux Agent.
-        // Treat that known Windows-shaped default as UI metadata, not a literal Linux directory name.
         if (root.Length == 0 || LooksLikeWindowsPath(root)) root = profile.DefaultInstallPath;
         root = root.TrimEnd('/', '\\');
+
+        var ports = req.ServerDef.NetworkPorts is { Length: > 0 }
+            ? req.ServerDef.NetworkPorts.ToArray()
+            : profile.DefaultPorts?.ToArray() ?? Array.Empty<NetworkPort>();
+        var args = ApplyCuratedPorts(profile, profile.BuildStartArgs(root), ports);
 
         var def = req.ServerDef with
         {
             GuestWorkingDir = root,
             GuestExePath = profile.BuildExecutablePath(root),
-            StartArgs = profile.BuildStartArgs(root),
+            StartArgs = args,
             SaveDirs = profile.BuildSaveDirs(root),
             LogPathInGuest = profile.BuildLogPath(root),
-            NetworkPorts = profile.DefaultPorts?.ToArray() ?? req.ServerDef.NetworkPorts
+            NetworkPorts = ports
         };
         return req with { InstallPath = root, ServerDef = def };
+    }
+
+    private static string[] ApplyCuratedPorts(GameProfile profile, string[] args, NetworkPort[] ports)
+    {
+        if (profile.Key.Equals("valheim", StringComparison.OrdinalIgnoreCase))
+        {
+            var game = ports.FirstOrDefault(p => p.Protocol == NetworkProtocol.Udp && p.Name.Equals("Game", StringComparison.OrdinalIgnoreCase));
+            if (game is not null) return ReplaceSeparatedArg(args, "-port", game.Port.ToString());
+        }
+        else if (profile.Key.Equals("dragonwilds", StringComparison.OrdinalIgnoreCase))
+        {
+            var game = ports.FirstOrDefault(p => p.Protocol == NetworkProtocol.Udp && p.Name.Equals("Game", StringComparison.OrdinalIgnoreCase));
+            var beacon = ports.FirstOrDefault(p => p.Protocol == NetworkProtocol.Udp && p.Name.Equals("Beacon", StringComparison.OrdinalIgnoreCase));
+            if (game is not null) args = ReplaceInlineArg(args, "-Port=", game.Port);
+            if (beacon is not null) args = ReplaceInlineArg(args, "-BeaconPort=", beacon.Port);
+        }
+        return args;
+    }
+
+    private static string[] ReplaceSeparatedArg(string[] args, string key, string value)
+    {
+        var result = args.ToArray();
+        for (var i = 0; i < result.Length - 1; i++)
+        {
+            if (!result[i].Equals(key, StringComparison.OrdinalIgnoreCase)) continue;
+            result[i + 1] = value;
+            return result;
+        }
+        return result.Concat(new[] { key, value }).ToArray();
+    }
+
+    private static string[] ReplaceInlineArg(string[] args, string prefix, int value)
+    {
+        var result = args.ToArray();
+        for (var i = 0; i < result.Length; i++)
+        {
+            if (!result[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            result[i] = prefix + value;
+            return result;
+        }
+        return result.Concat(new[] { prefix + value }).ToArray();
     }
 
     private static bool LooksLikeWindowsPath(string path) =>
@@ -191,7 +235,7 @@ public sealed class ServerInstaller
             var mode = File.GetUnixFileMode(path);
             File.SetUnixFileMode(path, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute);
         }
-        catch { /* Steam normally preserves executable bits; this is only a repair path. */ }
+        catch { }
     }
 
     private async Task<bool> InstallTerrariaOfficialAsync(string jobId, string installPath, CancellationToken ct)
