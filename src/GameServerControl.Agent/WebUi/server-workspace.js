@@ -549,3 +549,101 @@ window.addEventListener('hashchange', () => {
   renderServers();
 });
 window.addEventListener('DOMContentLoaded', installServerWorkspaceStyles);
+
+/* Network/schedule polish layered over the workspace so the profile remains the source of truth. */
+function serverWorkspacePortCount(ports) {
+  return (ports || []).reduce((sum, port) => {
+    const start = Number(port.port);
+    const end = port.endPort == null ? start : Number(port.endPort);
+    return sum + (Number.isFinite(start) && Number.isFinite(end) && end >= start ? end - start + 1 : 0);
+  }, 0);
+}
+
+function serverWorkspaceLooksWindows(def) {
+  return /^[A-Za-z]:[\\/]/.test(def?.guestExePath || '');
+}
+
+function serverWorkspaceLinuxFirewallCommands(ports) {
+  if (!(ports || []).length) return '';
+  const ufw = ports.map(port => {
+    const proto = String(port.protocol || '').toLowerCase();
+    const start = Number(port.port), end = port.endPort == null ? start : Number(port.endPort);
+    const range = end === start ? String(start) : `${start}:${end}`;
+    return `sudo ufw allow ${range}/${proto}`;
+  }).join('\n');
+  const firewalld = ports.map(port => {
+    const proto = String(port.protocol || '').toLowerCase();
+    const start = Number(port.port), end = port.endPort == null ? start : Number(port.endPort);
+    const range = end === start ? String(start) : `${start}-${end}`;
+    return `sudo firewall-cmd --permanent --add-port=${range}/${proto}`;
+  }).join('\n');
+  return `# UFW\n${ufw}\n\n# firewalld\n${firewalld}\nsudo firewall-cmd --reload`;
+}
+
+renderServerNetwork = function (def, body) {
+  const profile = profileFor(def);
+  const ports = effectiveNetworkPorts(def);
+  const profilePorts = profile?.ports || [];
+  const portCount = serverWorkspacePortCount(ports);
+  const profileCount = serverWorkspacePortCount(profilePorts);
+  const isVm = def.hostingMode === 'Vm';
+  const windows = serverWorkspaceLooksWindows(def);
+  const exeRule = windows && /\.exe$/i.test(def.guestExePath || '');
+  const running = serverWorkspaceStatus(def.id).processState === 'Running';
+
+  let firewallInfo;
+  if (isVm) {
+    firewallInfo = '<div class="callout info"><b>Firewall:</b> This server runs inside Hyper-V. The host Agent does not alter the guest firewall; allow the listed ports inside the VM and forward/NAT them to the VM when required.</div>';
+  } else if (exeRule) {
+    firewallInfo = `<div class="callout info"><b>Windows Firewall:</b> GameServerControl allows the complete server executable while the server is running and removes its managed rules when it stops. Current lifecycle state: <b>${running ? 'rule active / server running' : 'rule closed / server stopped'}</b>.<br><span class="mono">${esc(def.guestExePath)}</span></div>`;
+  } else if (windows) {
+    firewallInfo = '<div class="callout info"><b>Windows Firewall:</b> This server launches through a script/JAR rather than a direct .exe, so GameServerControl does not create a program rule automatically. Use the ports below for a manual rule.</div>';
+  } else {
+    const commands = serverWorkspaceLinuxFirewallCommands(ports);
+    firewallInfo = `<div class="callout info"><b>Linux firewall:</b> the Agent intentionally runs unprivileged, so it does not modify UFW/firewalld. Open only the game ports you need on the host/router.${commands ? `<pre class="mono" style="white-space:pre-wrap;margin:10px 0 0">${esc(commands)}</pre>` : ''}</div>`;
+  }
+
+  const rconInfo = profile?.caps?.rcon && def.rconPort
+    ? `<div class="callout info"><b>RCON:</b> ${esc(def.rconHost || 'auto')}:${esc(def.rconPort)} is a separate administration endpoint. If you expose it beyond localhost/private LAN, add the matching firewall/NAT rule deliberately and protect it with a strong password.</div>`
+    : '';
+  const portRows = ports.length
+    ? ports.map(port => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(port.name || 'Game port')}</div><div class="sw-row-meta mono">${esc(formatNetworkPort(port))}</div></div></div>`).join('')
+    : '<div class="sw-empty">This profile has no curated network ports yet.</div>';
+
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Network</b><div class="tiny muted">Game profile ports, collision reservations and firewall behavior.</div></div></div><div class="sw-metrics"><div class="sw-metric"><span>Profile</span><b>${esc(profile?.label || 'Custom')}</b></div><div class="sw-metric"><span>Reservations</span><b>${ports.length}</b></div><div class="sw-metric"><span>Game ports</span><b>${portCount}</b></div><div class="sw-metric"><span>Profile defaults</span><b>${profileCount}</b></div></div>${firewallInfo}${rconInfo}<div class="sw-section"><h3>Effective game ports</h3><div class="tiny muted" style="margin-bottom:10px">These reservations prevent conflicting BareMetal servers on the same Agent and tell you what to allow/forward. Hyper-V guests have independent network stacks.</div>${portRows}</div><details class="advanced"><summary>Advanced port override</summary><div class="advanced-body"><div class="field"><label>One port or range per line</label><textarea id="swNetworkPorts" class="mono" style="min-height:180px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: UDP 2456-2457 Game or TCP 7777 Game/API. Keep this aligned with the actual game configuration.</div></div><div class="sw-toolbar">${profilePorts.length ? `<button class="btn" onclick="serverWorkspaceResetNetwork('${jsq(def.id)}')">Reset to ${esc(profile.label)} defaults</button>` : ''}<div class="spacer"></div><button class="btn primary" onclick="serverWorkspaceSaveNetwork('${jsq(def.id)}')">Save override</button></div></div></details>`;
+};
+
+renderServerSchedule = async function (def, body) {
+  const schedule = (await api(`/api/servers/${encodeURIComponent(def.id)}/schedule`).catch(() => null)) || {};
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const linux = def.hostingMode !== 'Vm' && !serverWorkspaceLooksWindows(def);
+  const platformInfo = linux ? '<div class="callout info">Dashboard maintenance scheduling currently uses Windows Task Scheduler. On Linux use systemd timers or cron to call the local GameServerControl API.</div>' : '';
+  body.innerHTML = `${platformInfo}<div class="sw-toolbar"><div><b>Schedule</b><div class="tiny muted">Automated restart, update and backup maintenance.</div></div><div class="spacer"></div><button class="btn danger" onclick="serverWorkspaceClearSchedule('${jsq(def.id)}')">Clear</button><button class="btn primary" ${linux ? 'disabled' : ''} onclick="serverWorkspaceSaveSchedule('${jsq(def.id)}')">Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
+};
+
+const SERVER_WORKSPACE_BASE_OPEN_CREATE_SETTINGS = openCreateSettings;
+openCreateSettings = function (key) {
+  SERVER_WORKSPACE_BASE_OPEN_CREATE_SETTINGS(key);
+  const game = GAMES.find(x => x.key === key);
+  const summary = document.querySelector('#modalBody .profile-summary');
+  if (!game || !summary) return;
+  const ports = game.ports || [];
+  const count = serverWorkspacePortCount(ports);
+  const conflict = findNetworkConflict(ports);
+  summary.insertAdjacentHTML('beforeend', `<div class="section">Network</div><div class="kv compact"><div>Port reservations</div><div>${ports.length} (${count} actual port${count === 1 ? '' : 's'})</div><div>Game ports</div><div class="mono">${ports.length ? ports.map(formatNetworkPort).map(esc).join('<br>') : 'No curated defaults yet'}</div><div>Windows firewall</div><div>${/\.exe$/i.test(game.exe || '') ? 'Whole server EXE is allowed only while the server is running.' : 'Manual rule may be required for script/JAR launchers.'}</div><div>Linux firewall</div><div>Ports are shown here; UFW/firewalld stays administrator-managed.</div></div>${conflict ? `<div class="callout"><b>Port conflict:</b> ${esc(formatNetworkPort(conflict.ours))} overlaps ${esc(conflict.server.name)} (${esc(formatNetworkPort(conflict.theirs))}). Change that server before installing/running both.</div>` : ''}`);
+};
+
+const SERVER_WORKSPACE_BASE_START_INSTALL = startInstall;
+startInstall = async function (key) {
+  const game = GAMES.find(x => x.key === key);
+  const conflict = game ? findNetworkConflict(game.ports || []) : null;
+  if (conflict) {
+    const err = $('#cErr');
+    if (err) {
+      err.textContent = `Network conflict: ${formatNetworkPort(conflict.ours)} overlaps ${conflict.server.name} (${formatNetworkPort(conflict.theirs)}). Change the existing server ports first.`;
+      err.classList.remove('hidden');
+    }
+    return;
+  }
+  return SERVER_WORKSPACE_BASE_START_INSTALL(key);
+};
