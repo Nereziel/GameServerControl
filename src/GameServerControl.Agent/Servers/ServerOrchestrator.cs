@@ -568,7 +568,7 @@ public sealed class ServerOrchestrator
             var (ok, exitCode) = await _steamCmd.RunAppUpdateAsync(
                 def.GuestWorkingDir,
                 def.SteamAppId,
-                (line, _) => _ = LogAsync(id, "steamcmd", line),
+                (line, percent) => _ = LogAsync(id, "steamcmd", line),
                 ct);
             return new ActionResult(ok, ok ? "Update finished" : $"Update failed (SteamCMD exit {exitCode})", corr);
         }
