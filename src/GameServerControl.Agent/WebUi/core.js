@@ -1,5 +1,5 @@
 const $=s=>document.querySelector(s);
-const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
 const jsq=s=>String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
@@ -205,13 +205,13 @@ function readInstallPorts(g){
   const copy=(g?.ports||[]).map(p=>({...p}));
   if(g?.key==='valheim'){
     const port=Number.parseInt($('#cGamePort')?.value||'2456',10);
-    if(!Number.isInteger(port)||port<1||port>65534)throw new Error('Valheim game port must be between 1 and 65534; Valheim also uses port+1.');
+    if(!Number.isInteger(port)||port<1024||port>65534)throw new Error('Valheim game port must be between 1024 and 65534; Valheim also uses port+1.');
     return [{name:'Game',protocol:'Udp',port,endPort:port+1}];
   }
   if(g?.key==='dragonwilds'){
     const port=Number.parseInt($('#cGamePort')?.value||'7777',10),beacon=Number.parseInt($('#cBeaconPort')?.value||'8888',10);
-    if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Dragonwilds game port must be between 1 and 65535.');
-    if(!Number.isInteger(beacon)||beacon<1||beacon>65535)throw new Error('Dragonwilds beacon port must be between 1 and 65535.');
+    if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Dragonwilds game port must be between 1024 and 65535.');
+    if(!Number.isInteger(beacon)||beacon<1024||beacon>65535)throw new Error('Dragonwilds beacon port must be between 1024 and 65535.');
     if(port===beacon)throw new Error('Dragonwilds game and beacon ports must be different.');
     return [{name:'Game',protocol:'Udp',port,endPort:null},{name:'Beacon',protocol:'Udp',port:beacon,endPort:null}];
   }
@@ -254,9 +254,9 @@ function installNetworkUiHooks(){
       if(path&&g?.defaultInstallPath){path.value=g.defaultInstallPath;path.dispatchEvent(new Event('input'))}
       if(!body)return;
       if(g?.key==='valheim'){
-        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1" max="65534" value="2456"><div class="help">Valheim reserves this UDP port and the next one (port+1).</div></div>';body.appendChild(box);
+        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65534" value="2456"><div class="help">Valheim reserves this UDP port and the next one (port+1).</div></div>';body.appendChild(box);
       }else if(g?.key==='dragonwilds'){
-        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1" max="65535" value="7777"></div><div class="field"><label>Beacon port</label><input id="cBeaconPort" type="number" min="1" max="65535" value="8888"></div>';body.appendChild(box);
+        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65535" value="7777"></div><div class="field"><label>Beacon port</label><input id="cBeaconPort" type="number" min="1024" max="65535" value="8888"></div>';body.appendChild(box);
       }else if(g?.ports?.length){
         const box=document.createElement('div');box.className='callout info';box.innerHTML='<b>Default network ports:</b><br>'+g.ports.map(formatNetworkPort).map(esc).join('<br>')+'<br><span class="tiny muted">GameServerControl checks these against other BareMetal servers before registration.</span>';body.appendChild(box)
       }
