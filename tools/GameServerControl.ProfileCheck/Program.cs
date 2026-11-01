@@ -19,6 +19,21 @@ NetworkPort? Port(GameProfile profile, string name) =>
     profile.DefaultPorts?.FirstOrDefault(p =>
         p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
+ServerDef Server(string appId, string[] args, NetworkPort[] ports) => new(
+    Id: "contract-check",
+    Name: "Contract check",
+    VmName: "",
+    GameType: GameType.SteamGeneric,
+    GuestExePath: "/srv/gameservers/test/server",
+    GuestWorkingDir: "/srv/gameservers/test",
+    StartArgs: args,
+    SaveDirs: Array.Empty<string>(),
+    SteamAppId: appId,
+    GuestCredentialId: null,
+    LogPathInGuest: null,
+    HostingMode: HostingMode.BareMetal,
+    NetworkPorts: ports);
+
 var valheim = RequireProfile("valheim");
 Check(valheim.SteamAppId == "896660", "Valheim Steam App ID must remain 896660.");
 Check(valheim.Installable, "Valheim must remain installable.");
@@ -47,6 +62,12 @@ Check(valheim.LinuxDefaultStartArgs?.Select((x, i) => (x, i)).Any(x =>
 var valheimPortField = ConfigSchemas.Valheim.AllFields.FirstOrDefault(f => f.Key == "port");
 Check(valheimPortField?.Min == 1024 && valheimPortField?.Max == 65534,
     "Valheim managed port field must remain 1024-65534 because port+1 is reserved.");
+var legacyValheim = CuratedNetwork.Normalize(Server("896660",
+    new[] { "-name", "Legacy", "-port", "2600" },
+    new[] { new NetworkPort("Game", NetworkProtocol.Udp, 2456, 2457) }));
+Check(legacyValheim.NetworkPorts is { Length: 1 } &&
+      legacyValheim.NetworkPorts[0].Port == 2600 && legacyValheim.NetworkPorts[0].EndPort == 2601,
+    "Valheim legacy reservation must normalize from the actual -port launch argument.");
 
 var dragonwilds = RequireProfile("dragonwilds");
 Check(dragonwilds.SteamAppId == "4019830", "Dragonwilds Steam App ID must remain 4019830.");
@@ -70,6 +91,17 @@ Check(dragonwilds.LinuxDefaultStartArgs?.Contains("-Port=7777") == true,
     "Dragonwilds Linux launch args must contain -Port=7777.");
 Check(dragonwilds.LinuxDefaultStartArgs?.Contains("-BeaconPort=8888") == true,
     "Dragonwilds Linux launch args must contain -BeaconPort=8888.");
+var legacyDragonwilds = CuratedNetwork.Normalize(Server("4019830",
+    new[] { "-log", "-Port=9000", "-BeaconPort=9010" },
+    new[]
+    {
+        new NetworkPort("Game", NetworkProtocol.Udp, 7777),
+        new NetworkPort("Beacon", NetworkProtocol.Udp, 8888)
+    }));
+Check(legacyDragonwilds.NetworkPorts is { Length: 2 } &&
+      legacyDragonwilds.NetworkPorts.Any(p => p.Name == "Game" && p.Port == 9000) &&
+      legacyDragonwilds.NetworkPorts.Any(p => p.Name == "Beacon" && p.Port == 9010),
+    "Dragonwilds legacy reservations must normalize from -Port/-BeaconPort launch arguments.");
 
 if (failures.Count == 0)
 {
