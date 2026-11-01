@@ -183,18 +183,19 @@ function updateServerWorkspaceHeader(def) {
 
 function renderServerWorkspace(def) {
   const root = $('#servers');
+  const requestedTab = serverWorkspaceValidTab(def, SERVER_WORKSPACE.tab);
   const existing = root.querySelector('.sw-workspace');
-  if (existing && existing.dataset.serverId === def.id) {
+  if (existing && existing.dataset.serverId === def.id && existing.dataset.tab === requestedTab) {
     updateServerWorkspaceHeader(def);
     return;
   }
 
   serverWorkspaceCleanupConsole();
-  SERVER_WORKSPACE.tab = serverWorkspaceValidTab(def, SERVER_WORKSPACE.tab);
+  SERVER_WORKSPACE.tab = requestedTab;
   const meta = serverMeta(def);
   const tabs = serverWorkspaceTabs(def);
 
-  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}"><div class="sw-head"><button class="sw-back" onclick="serverWorkspaceHome()" title="Back to servers">←</button><div class="sw-icon">${meta.icon}</div><div class="grow"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div></div><div class="sw-actions"><button id="swStart" class="btn primary sw-power" onclick="action('${jsq(def.id)}','start')">Start</button><button id="swRestart" class="btn sw-power" onclick="action('${jsq(def.id)}','restart')">Restart</button><button id="swStop" class="btn danger sw-power" onclick="action('${jsq(def.id)}','stop')">Stop</button><span id="swState" class="sw-state"></span></div></div><div class="sw-tabs">${tabs.map(([key, label]) => `<button class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" onclick="serverWorkspaceSetTab('${key}')">${label}</button>`).join('')}</div><div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div></div>`;
+  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}"><div class="sw-head"><button class="sw-back" onclick="serverWorkspaceHome()" title="Back to servers">←</button><div class="sw-icon">${meta.icon}</div><div class="grow"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div></div><div class="sw-actions"><button id="swStart" class="btn primary sw-power" onclick="action('${jsq(def.id)}','start')">Start</button><button id="swRestart" class="btn sw-power" onclick="action('${jsq(def.id)}','restart')">Restart</button><button id="swStop" class="btn danger sw-power" onclick="action('${jsq(def.id)}','stop')">Stop</button><span id="swState" class="sw-state"></span></div></div><div class="sw-tabs">${tabs.map(([key, label]) => `<button class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" onclick="serverWorkspaceSetTab('${key}')">${label}</button>`).join('')}</div><div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div></div>`;
   updateServerWorkspaceHeader(def);
   renderServerWorkspaceTab(def, SERVER_WORKSPACE.tab);
 }
