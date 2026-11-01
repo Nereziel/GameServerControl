@@ -35,8 +35,9 @@ function profileToGame(p){
   const consoleMode=String(c.consoleMode||'').toLowerCase();
   return {
     key:p.key,label:p.label,icon:p.icon||'🖥',appId:p.steamAppId,size:p.estimatedSize||'varies',
-    dir:p.installDirectoryName||p.key,exe:p.executableRelative||'',args:p.defaultStartArgs||[],
-    saveRel:p.saveDirs||[],logRel:p.logPath||null,gameType:p.gameType||'SteamGeneric',
+    dir:p.installDirectoryName||p.key,defaultInstallPath:p.defaultInstallPath||p.defaultWindowsInstallPath||'',
+    exe:p.hostExecutableRelative||p.executableRelative||'',args:p.hostDefaultStartArgs||p.defaultStartArgs||[],
+    saveRel:p.hostSaveDirs||p.saveDirs||[],logRel:p.hostLogPath??p.logPath??null,gameType:p.gameType||'SteamGeneric',
     rconPort:p.defaultRconPort??null,note:p.notes||'',installable:!!p.installable,ports:p.defaultPorts||[],
     caps:{config:!!c.managedConfig,mods:!!c.mods,rcon:!!c.rcon,players:!!c.playerManagement,log:!!c.liveLog,
       console:consoleMode==='rcon'?'rcon':consoleMode==='logonly'?'log':null,hyperV:c.hyperV!==false,scheduledTask:c.scheduledTask!==false}
@@ -133,13 +134,18 @@ async function waitForAgentRestart(){
       }
     }catch{sawOffline=true}
   }
-  $('#modalBody').innerHTML='<div class="callout">The Agent did not return within three minutes. Check the Windows service and installer log.</div>';
+  $('#modalBody').innerHTML='<div class="callout">The Agent did not return within three minutes. Check the service and installer log.</div>';
   $('#modalFoot').innerHTML='<button class="btn" onclick="location.reload()">Reload</button>';
 }
 
 function slugify(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}
 function expandRoot(value,root){return String(value||'').replaceAll('{root}',root.replace(/[\\/]+$/,''))}
-function joinPath(root,rel){const value=expandRoot(rel,root);if(/^[a-zA-Z]:[\\/]/.test(value)||value.startsWith('\\\\'))return value;return root.replace(/[\\/]+$/,'')+'\\'+value.replace(/^[\\/]+/,'')}
+function joinPath(root,rel){
+  const value=expandRoot(rel,root);
+  if(/^[a-zA-Z]:[\\/]/.test(value)||value.startsWith('\\\\')||value.startsWith('/'))return value;
+  if(String(root||'').startsWith('/'))return root.replace(/\/+$/,'')+'/'+value.replace(/^[\\/]+/,'').replaceAll('\\','/');
+  return root.replace(/[\\/]+$/,'')+'\\'+value.replace(/^[\\/]+/,'');
+}
 
 function formatNetworkPort(p){
   const proto=String(p.protocol||'').toUpperCase();
@@ -170,8 +176,9 @@ function findNetworkConflict(ports){
   return null;
 }
 function resetNetworkDefaults(id){const d=SERVERS.find(x=>x.id===id),g=d?profileFor(d):null,ta=$('#networkPorts');if(ta)ta.value=(g?.ports||[]).map(formatNetworkPort).join('\n')}
+function profileOwnsNetwork(g){return g?.key==='valheim'||g?.key==='dragonwilds'}
 function openNetwork(id){
-  const d=SERVERS.find(x=>x.id===id);if(!d)return;const g=profileFor(d),ports=effectiveNetworkPorts(d),isVm=d.hostingMode==='Vm',isExe=/\.exe$/i.test(d.guestExePath||''),looksWindows=/^[A-Za-z]:[\\/]/.test(d.guestExePath||'');
+  const d=SERVERS.find(x=>x.id===id);if(!d)return;const g=profileFor(d),ports=effectiveNetworkPorts(d),isVm=d.hostingMode==='Vm',isExe=/\.exe$/i.test(d.guestExePath||''),looksWindows=/^[A-Za-z]:[\\/]/.test(d.guestExePath||''),managed=profileOwnsNetwork(g);
   const fw=isVm
     ? '<div class="callout info">Hyper-V has its own guest network stack. GameServerControl does not change the guest Windows Firewall from the host.</div>'
     : !looksWindows
@@ -179,13 +186,49 @@ function openNetwork(id){
       : isExe
         ? `<div class="callout info"><b>Windows Firewall:</b> GameServerControl manages persistent inbound and outbound Allow rules for <span class="mono">${esc(d.guestExePath)}</span>. The ports below are currently used for collision detection, not firewall filtering.</div>`
         : '<div class="callout info">This server launches through a script/JAR rather than an .exe, so a reliable Windows program rule cannot be created yet. Port reservations still prevent accidental conflicts.</div>';
-  const defaults=(g?.ports||[]).length?`<button class="btn" onclick="resetNetworkDefaults('${jsq(id)}')">Reset to ${esc(g.label)} defaults</button>`:'';
-  openModal('Network — '+d.name,`${fw}<div class="section">Reserved/listening ports</div><div class="field"><label>One port or range per line</label><textarea id="networkPorts" class="mono" style="min-height:180px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: <span class="mono">UDP 2456-2457 Game</span> or <span class="mono">TCP 7777 Game/API</span>. BareMetal servers on this Agent may not reserve overlapping ports of the same protocol.</div></div>${defaults}<div class="section">Profile defaults</div><div class="tiny muted">${(g?.ports||[]).length?(g.ports.map(formatNetworkPort).map(esc).join('<br>')):'No curated port defaults are defined for this game yet.'}</div>`,`<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveNetwork('${jsq(id)}')">Save network settings</button>`,true)
+  const managedHint=managed?`<div class="callout info"><b>${esc(g.label)} ports are profile-managed.</b> Change them in Configuration. GameServerControl will update the game launch arguments and these reservations together.</div>`:'';
+  const defaults=!managed&&(g?.ports||[]).length?`<button class="btn" onclick="resetNetworkDefaults('${jsq(id)}')">Reset to ${esc(g.label)} defaults</button>`:'';
+  const readOnly=managed?' readonly':'';
+  const footer=managed
+    ? `<button class="btn" onclick="closeModal()">Close</button><button class="btn primary" onclick="closeModal();openConfig('${jsq(id)}')">Edit Configuration</button>`
+    : `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveNetwork('${jsq(id)}')">Save network settings</button>`;
+  openModal('Network — '+d.name,`${fw}${managedHint}<div class="section">Reserved/listening ports</div><div class="field"><label>One port or range per line</label><textarea id="networkPorts" class="mono" style="min-height:180px"${readOnly}>${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: <span class="mono">UDP 2456-2457 Game</span> or <span class="mono">TCP 7777 Game/API</span>. BareMetal servers on this Agent may not reserve overlapping ports of the same protocol.</div></div>${defaults}<div class="section">Profile defaults</div><div class="tiny muted">${(g?.ports||[]).length?(g.ports.map(formatNetworkPort).map(esc).join('<br>')):'No curated port defaults are defined for this game yet.'}</div>`,footer,true)
 }
 async function saveNetwork(id){
   const d=SERVERS.find(x=>x.id===id);if(!d)return;
+  const g=profileFor(d);if(profileOwnsNetwork(g))return toast(`${g.label} ports must be changed in Configuration so launch arguments stay synchronized.`,'err');
   let ports;try{ports=parseNetworkPorts($('#networkPorts')?.value||'')}catch(e){return toast(e.message,'err')}
   try{await api(`/api/servers/${encodeURIComponent(id)}`,{method:'PUT',body:JSON.stringify({...d,networkPorts:ports})});toast('Network settings saved.','ok');closeModal();await loadServers()}catch(e){toast('Network settings rejected: '+e.message,'err')}
+}
+
+function readInstallPorts(g){
+  const copy=(g?.ports||[]).map(p=>({...p}));
+  if(g?.key==='valheim'){
+    const port=Number.parseInt($('#cGamePort')?.value||'2456',10);
+    if(!Number.isInteger(port)||port<1||port>65534)throw new Error('Valheim game port must be between 1 and 65534; Valheim also uses port+1.');
+    return [{name:'Game',protocol:'Udp',port,endPort:port+1}];
+  }
+  if(g?.key==='dragonwilds'){
+    const port=Number.parseInt($('#cGamePort')?.value||'7777',10),beacon=Number.parseInt($('#cBeaconPort')?.value||'8888',10);
+    if(!Number.isInteger(port)||port<1||port>65535)throw new Error('Dragonwilds game port must be between 1 and 65535.');
+    if(!Number.isInteger(beacon)||beacon<1||beacon>65535)throw new Error('Dragonwilds beacon port must be between 1 and 65535.');
+    if(port===beacon)throw new Error('Dragonwilds game and beacon ports must be different.');
+    return [{name:'Game',protocol:'Udp',port,endPort:null},{name:'Beacon',protocol:'Udp',port:beacon,endPort:null}];
+  }
+  return copy;
+}
+function applyInstallPorts(g,args,ports){
+  const out=[...(args||[])];
+  if(g?.key==='valheim'){
+    const port=ports[0]?.port;
+    const i=out.findIndex(x=>String(x).toLowerCase()==='-port');
+    if(i>=0&&i+1<out.length)out[i+1]=String(port);else out.push('-port',String(port));
+  }else if(g?.key==='dragonwilds'){
+    const game=ports.find(p=>String(p.name).toLowerCase()==='game')?.port,beacon=ports.find(p=>String(p.name).toLowerCase()==='beacon')?.port;
+    const setInline=(prefix,value)=>{const i=out.findIndex(x=>String(x).toLowerCase().startsWith(prefix.toLowerCase()));if(i>=0)out[i]=prefix+value;else out.push(prefix+value)};
+    setInline('-Port=',game);setInline('-BeaconPort=',beacon);
+  }
+  return out;
 }
 
 function installNetworkUiHooks(){
@@ -207,16 +250,44 @@ function installNetworkUiHooks(){
     const wrappedCreate=function(key){
       originalCreate(key);
       const g=GAMES.find(x=>x.key===key),body=$('#modalBody');
-      if(body&&g?.ports?.length){const box=document.createElement('div');box.className='callout info';box.innerHTML='<b>Default network ports:</b><br>'+g.ports.map(formatNetworkPort).map(esc).join('<br>')+'<br><span class="tiny muted">GameServerControl checks these against other BareMetal servers before registration.</span>';body.appendChild(box)}
+      const path=$('#cPath');
+      if(path&&g?.defaultInstallPath){path.value=g.defaultInstallPath;path.dispatchEvent(new Event('input'))}
+      if(!body)return;
+      if(g?.key==='valheim'){
+        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1" max="65534" value="2456"><div class="help">Valheim reserves this UDP port and the next one (port+1).</div></div>';body.appendChild(box);
+      }else if(g?.key==='dragonwilds'){
+        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1" max="65535" value="7777"></div><div class="field"><label>Beacon port</label><input id="cBeaconPort" type="number" min="1" max="65535" value="8888"></div>';body.appendChild(box);
+      }else if(g?.ports?.length){
+        const box=document.createElement('div');box.className='callout info';box.innerHTML='<b>Default network ports:</b><br>'+g.ports.map(formatNetworkPort).map(esc).join('<br>')+'<br><span class="tiny muted">GameServerControl checks these against other BareMetal servers before registration.</span>';body.appendChild(box)
+      }
     };
     wrappedCreate.__networkWrapped=true;window.openCreateSettings=wrappedCreate;
   }
+  if(typeof openEdit==='function'&&!openEdit.__profileHostingWrapped){
+    const originalEdit=openEdit;
+    const wrappedEdit=function(id){
+      originalEdit(id);
+      const d=SERVERS.find(x=>x.id===id),g=d?profileFor(d):null,sel=$('#eHosting');
+      if(g?.caps?.hyperV===false&&sel){
+        sel.innerHTML='<option value="BareMetal">This machine (BareMetal)</option>';sel.value='BareMetal';syncEditVisibility();
+        if(d?.hostingMode==='Vm'){
+          const body=$('#modalBody'),warn=document.createElement('div');warn.className='callout';warn.textContent=`${g.label} no longer supports Hyper-V. Move/reinstall this server on the Agent host and correct its paths before saving.`;body?.prepend(warn)
+        }
+      }
+    };
+    wrappedEdit.__profileHostingWrapped=true;window.openEdit=wrappedEdit;
+  }
   if(typeof startInstall==='function'&&!startInstall.__networkWrapped){
-    const originalStart=startInstall;
     const wrappedStart=async function(key){
-      const g=GAMES.find(x=>x.key===key),conflict=findNetworkConflict(g?.ports||[]);
-      if(conflict){toast(`Port conflict with ${conflict.server.name}: ${formatNetworkPort(conflict.ours)} overlaps ${formatNetworkPort(conflict.theirs)}. Change that server's Network settings first.`,'err');return}
-      return await originalStart(key);
+      const g=GAMES.find(x=>x.key===key),name=$('#cName')?.value.trim(),id=$('#cId')?.value.trim(),path=$('#cPath')?.value.trim().replace(/[\\/]+$/,''),err=$('#cErr');
+      err?.classList.add('hidden');
+      if(!g||!name||!path||!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id||'')){if(err){err.textContent='Name/path are required and ID may contain lowercase letters, digits and dashes.';err.classList.remove('hidden')}return}
+      let ports;try{ports=readInstallPorts(g)}catch(e){if(err){err.textContent=e.message;err.classList.remove('hidden')}return}
+      const conflict=findNetworkConflict(ports);
+      if(conflict){const msg=`Port conflict with ${conflict.server.name}: ${formatNetworkPort(conflict.ours)} overlaps ${formatNetworkPort(conflict.theirs)}.`;if(err){err.textContent=msg;err.classList.remove('hidden')}else toast(msg,'err');return}
+      const args=applyInstallPorts(g,expandList(g.args,path),ports);
+      const def={id,name,vmName:'',gameType:g.gameType||'SteamGeneric',guestExePath:joinPath(path,g.exe),guestWorkingDir:path,startArgs:args,saveDirs:expandList(g.saveRel,path),steamAppId:g.appId,guestCredentialId:null,logPathInGuest:g.logRel?expandRoot(g.logRel,path):null,rconHost:g.caps?.rcon?'auto':null,rconPort:g.caps?.rcon?(g.rconPort||null):null,rconPassword:null,hostingMode:'BareMetal',scheduledTaskName:null,stopProcessNames:null,discordWebhookUrl:null,networkPorts:ports};
+      try{const ack=await api('/api/servers/install',{method:'POST',body:JSON.stringify({steamAppId:g.appId,installPath:path,serverDef:def})});rememberJob({jobId:ack.jobId,name,icon:g.icon,path});closeModal();showView('installs');toast(`${g.label} installation started in background.`,'ok');await refreshJobs()}catch(e){if(err){err.textContent=e.message;err.classList.remove('hidden')}else toast(e.message,'err')}
     };
     wrappedStart.__networkWrapped=true;window.startInstall=wrappedStart;
   }
