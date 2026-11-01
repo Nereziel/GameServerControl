@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json.Nodes;
+using GameServerControl.Agent.Config;
 using GameServerControl.Agent.Hubs;
 using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Notifications;
@@ -13,8 +14,6 @@ namespace GameServerControl.Agent.Servers;
 public sealed class ServerOrchestrator
 {
     private readonly ConcurrentDictionary<int, (TimeSpan cpu, DateTime at)> _cpuSamples = new();
-    // Per-server hint that we deliberately stopped the process — used so RefreshStatusAsync
-    // doesn't emit a "Crashed" Discord alert on a clean stop.
     private readonly ConcurrentDictionary<string, bool> _stopRequested = new();
     private readonly HypervService _hv;
     private readonly GuestProcessService _guest;
@@ -23,6 +22,8 @@ public sealed class ServerOrchestrator
     private readonly StatusTracker _tracker;
     private readonly IHubContext<StatusHub> _hub;
     private readonly DiscordNotifier _discord;
+    private readonly SteamCmdManager _steamCmd;
+    private readonly DragonwildsConfig _dragonwildsConfig;
     private readonly IConfiguration _cfg;
     private readonly ILogger<ServerOrchestrator> _logger;
 
@@ -34,6 +35,8 @@ public sealed class ServerOrchestrator
         StatusTracker tracker,
         IHubContext<StatusHub> hub,
         DiscordNotifier discord,
+        SteamCmdManager steamCmd,
+        DragonwildsConfig dragonwildsConfig,
         IConfiguration cfg,
         ILogger<ServerOrchestrator> logger)
     {
@@ -44,9 +47,14 @@ public sealed class ServerOrchestrator
         _tracker = tracker;
         _hub = hub;
         _discord = discord;
+        _steamCmd = steamCmd;
+        _dragonwildsConfig = dragonwildsConfig;
         _cfg = cfg;
         _logger = logger;
     }
+
+    private string BackupRoot => _cfg["Agent:BackupRoot"] ??
+        (OperatingSystem.IsWindows() ? @"C:\GameServerControl\Backups" : "/var/lib/gameservercontrol/backups");
 
     private GuestCredential GetCred(string? credId)
     {
@@ -76,8 +84,6 @@ public sealed class ServerOrchestrator
         }
         else if (!OperatingSystem.IsWindows())
         {
-            // Vm hosting needs Hyper-V; on Linux we just report unknown so the dashboard
-            // can show a clean "not supported" hint instead of hammering PS with unknown cmdlets.
             vmState = VmState.Unknown;
             procState = ProcessState.Unknown;
         }
@@ -105,7 +111,6 @@ public sealed class ServerOrchestrator
             }
         }
 
-        // CPU / RAM (BareMetal only for now — Hyper-V VM metrics are a future enhancement)
         double? cpuPct = null;
         long? memMB = null;
         if (def.HostingMode == HostingMode.BareMetal && pid is int pp)
@@ -131,10 +136,7 @@ public sealed class ServerOrchestrator
             }
         }
 
-        // Per-game metadata (e.g. Windrose InviteCode)
         var metadata = await BuildMetadataAsync(def, ct);
-
-        // Snapshot previous state so we can detect Running -> NotRunning transitions (= crash).
         var prevState = _tracker.Get(id).ProcessState;
 
         var status = _tracker.Update(id, cur => cur with
@@ -148,8 +150,6 @@ public sealed class ServerOrchestrator
         });
         await BroadcastAsync(status);
 
-        // Crash detection: was Running, now NotRunning, and Stop wasn't requested.
-        // Fires at most once per crash because the next refresh will see prev == NotRunning.
         if (prevState == ProcessState.Running && procState == ProcessState.NotRunning)
         {
             var wasStop = _stopRequested.TryRemove(id, out _);
@@ -166,7 +166,6 @@ public sealed class ServerOrchestrator
     private async Task<Dictionary<string, string>?> BuildMetadataAsync(ServerDef def, CancellationToken ct)
     {
         if (def.GameType != GameType.Windrose) return null;
-        // Try both layouts — the modern Windrose install nests under R5\, but older saves had it at the root.
         var candidates = new[]
         {
             Path.Combine(def.GuestWorkingDir, "R5", "ServerDescription.json"),
@@ -198,13 +197,22 @@ public sealed class ServerOrchestrator
         _logger.LogInformation("[{Id}] {Src}: {Text}", id, source, text);
     }
 
-    // ---------------- Start ----------------
-
     public async Task<ActionResult> StartAsync(string id, CancellationToken ct = default)
     {
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);
         if (def is null) return new ActionResult(false, "Unknown server", corr);
+
+        var profile = GameProfiles.FindFor(def);
+        if (def.HostingMode == HostingMode.Vm && profile is not null && !profile.Capabilities.HyperV)
+            return new ActionResult(false, $"{profile.Label} is supported only in BareMetal hosting mode.", corr);
+
+        if (def.SteamAppId == "4019830")
+        {
+            var readinessError = await _dragonwildsConfig.ValidateForStartAsync(def, ct);
+            if (!string.IsNullOrWhiteSpace(readinessError))
+                return new ActionResult(false, readinessError, corr);
+        }
 
         await LogAsync(id, "orch", $"Start requested ({def.HostingMode})");
         return def.HostingMode == HostingMode.BareMetal
@@ -222,19 +230,13 @@ public sealed class ServerOrchestrator
             return new ActionResult(true, $"Already running (pid={pidAlready})", corr);
         }
 
-        // Scheduled-task lifecycle (Windrose pattern) — preserves the existing autostart-on-boot config.
-        // Only used on Windows; Linux falls through to direct Process.Start (autostart is the user's
-        // systemd unit's job, not ours).
         if (!string.IsNullOrWhiteSpace(def.ScheduledTaskName) && _local.HasScheduledTaskSupport)
         {
-            // The toggle is authoritative: starting via the dashboard means autostart is intended,
-            // so make sure the task is enabled (Start fails if the task is currently disabled).
             await _local.SetAutostartAsync(def.ScheduledTaskName, true, ct);
             await LogAsync(def.Id, "orch", $"schtasks /run /tn \"{def.ScheduledTaskName}\" (autostart enabled)");
             if (!await _local.StartScheduledTaskAsync(def.ScheduledTaskName, ct))
                 return new ActionResult(false, "schtasks /run failed (task may not exist)", corr);
 
-            // Poll for the spawned process so we can report a real PID
             var deadline = DateTime.UtcNow.AddSeconds(45);
             int? foundPid = null;
             while (DateTime.UtcNow < deadline)
@@ -303,7 +305,7 @@ public sealed class ServerOrchestrator
                 var (ok, _) = await _guest.FindProcessAsync(def.VmName, cred, def.GuestExePath, ct);
                 if (ok) { reachable = true; break; }
             }
-            catch { /* keep trying */ }
+            catch { }
             await Task.Delay(3000, ct);
         }
         if (!reachable) return new ActionResult(false, "VM running but guest not reachable via PowerShell Direct", corr);
@@ -318,8 +320,6 @@ public sealed class ServerOrchestrator
         return new ActionResult(true, $"Started (pid={pid})", corr);
     }
 
-    // ---------------- Stop ----------------
-
     public async Task<ActionResult> StopAsync(string id, bool stopVm, bool force, CancellationToken ct = default)
     {
         var corr = Guid.NewGuid().ToString("n");
@@ -327,15 +327,12 @@ public sealed class ServerOrchestrator
         if (def is null) return new ActionResult(false, "Unknown server", corr);
 
         await LogAsync(id, "orch", $"Stop requested (mode={def.HostingMode}, stopVm={stopVm}, force={force})");
-        _stopRequested[id] = true;   // suppress the crash-detection Discord ping
+        _stopRequested[id] = true;
 
         if (def.HostingMode == HostingMode.BareMetal)
         {
             if (!string.IsNullOrWhiteSpace(def.ScheduledTaskName) && _local.HasScheduledTaskSupport)
             {
-                // Disable BEFORE ending — prevents "restart on failure" or boot-time autostart
-                // from racing our taskkill. The dashboard toggle is authoritative; stopping here
-                // means "stay off until the user explicitly starts again."
                 await _local.SetAutostartAsync(def.ScheduledTaskName, false, ct);
                 await LogAsync(id, "orch", $"Disabled + ending scheduled task \"{def.ScheduledTaskName}\"");
                 await _local.EndScheduledTaskAsync(def.ScheduledTaskName, ct);
@@ -384,8 +381,6 @@ public sealed class ServerOrchestrator
         return await StartAsync(id, ct);
     }
 
-    // ---------------- Backup ----------------
-
     public async Task<ActionResult> BackupAsync(string id, CancellationToken ct = default)
     {
         var corr = Guid.NewGuid().ToString("n");
@@ -411,7 +406,7 @@ public sealed class ServerOrchestrator
         if (def.SaveDirs is null || def.SaveDirs.Length == 0)
             return new ActionResult(false, "No SaveDirs configured for this server.", corr);
 
-        var backupRoot = _cfg["Agent:BackupRoot"] ?? @"C:\GameServerControl\Backups";
+        var backupRoot = BackupRoot;
         var dest = Path.Combine(backupRoot, def.Id);
         Directory.CreateDirectory(dest);
         var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
@@ -447,8 +442,6 @@ public sealed class ServerOrchestrator
         }, ct);
 
         var size = new FileInfo(zipPath).Length;
-
-        // Retention: keep newest N (config: Agent:BackupRetention, default 10)
         var keep = int.TryParse(_cfg["Agent:BackupRetention"], out var k) && k > 0 ? k : 10;
         var olds = new DirectoryInfo(dest).GetFiles("*.zip").OrderByDescending(f => f.LastWriteTimeUtc).Skip(keep).ToList();
         foreach (var f in olds)
@@ -468,8 +461,7 @@ public sealed class ServerOrchestrator
     public Task<List<BackupInfo>> ListBackupsAsync(string id, CancellationToken ct = default)
     {
         var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
-        var backupRoot = _cfg["Agent:BackupRoot"] ?? @"C:\GameServerControl\Backups";
-        var dir = Path.Combine(backupRoot, def.Id);
+        var dir = Path.Combine(BackupRoot, def.Id);
         var list = new List<BackupInfo>();
         if (!Directory.Exists(dir)) return Task.FromResult(list);
         foreach (var f in new DirectoryInfo(dir).GetFiles("*.zip").OrderByDescending(f => f.LastWriteTimeUtc))
@@ -494,16 +486,14 @@ public sealed class ServerOrchestrator
         if (def.HostingMode != HostingMode.BareMetal)
             return new ActionResult(false, "Restore is only implemented for BareMetal servers", corr);
 
-        // Don't restore while the server is running
         var st = _tracker.Get(id);
         if (st.ProcessState == ProcessState.Running)
             return new ActionResult(false, "Stop the server before restoring a backup.", corr);
 
-        var backupRoot = _cfg["Agent:BackupRoot"] ?? @"C:\GameServerControl\Backups";
+        var backupRoot = BackupRoot;
         var zipPath = Path.Combine(backupRoot, def.Id, backupName);
         if (!File.Exists(zipPath)) return new ActionResult(false, "Backup not found: " + backupName, corr);
 
-        // Safety net: save current saves as a "pre-restore" backup
         var safetyName = $"{def.Id}-prerestore-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip";
         var safetyPath = Path.Combine(backupRoot, def.Id, safetyName);
         try
@@ -527,7 +517,6 @@ public sealed class ServerOrchestrator
         }
         catch (Exception ex) { _logger.LogWarning(ex, "Safety backup failed (continuing)"); }
 
-        // Extract zip back into the SaveDirs, replacing existing files
         try
         {
             await LogAsync(id, "restore", $"Restoring from {backupName}");
@@ -559,14 +548,11 @@ public sealed class ServerOrchestrator
     {
         var def = _registry.Get(id);
         if (def is null) return Task.FromResult(false);
-        var backupRoot = _cfg["Agent:BackupRoot"] ?? @"C:\GameServerControl\Backups";
-        var zipPath = Path.Combine(backupRoot, def.Id, backupName);
+        var zipPath = Path.Combine(BackupRoot, def.Id, backupName);
         if (!File.Exists(zipPath)) return Task.FromResult(false);
         try { File.Delete(zipPath); return Task.FromResult(true); }
         catch (Exception ex) { _logger.LogWarning(ex, "Delete backup failed"); return Task.FromResult(false); }
     }
-
-    // ---------------- Update (SteamCMD) ----------------
 
     public async Task<ActionResult> UpdateAsync(string id, CancellationToken ct = default)
     {
@@ -578,12 +564,13 @@ public sealed class ServerOrchestrator
 
         if (def.HostingMode == HostingMode.BareMetal)
         {
-            var steamCmd = _cfg["Agent:SteamCmdPath"] ?? "steamcmd";
-            var cmdLine = $"\"{steamCmd}\" +login anonymous +force_install_dir \"{def.GuestWorkingDir}\" +app_update {def.SteamAppId} validate +quit";
-            await LogAsync(id, "orch", "Local SteamCMD: " + cmdLine);
-            var (ok, output) = await _local.RunCommandAsync(cmdLine, def.GuestWorkingDir, TimeSpan.FromMinutes(30), ct);
-            await LogAsync(id, "steamcmd", output.Length > 4000 ? output[^4000..] : output);
-            return new ActionResult(ok, ok ? "Update finished" : "Update failed", corr);
+            await LogAsync(id, "orch", $"SteamCMD update app {def.SteamAppId} in {def.GuestWorkingDir}");
+            var (ok, exitCode) = await _steamCmd.RunAppUpdateAsync(
+                def.GuestWorkingDir,
+                def.SteamAppId,
+                (line, _) => _ = LogAsync(id, "steamcmd", line),
+                ct);
+            return new ActionResult(ok, ok ? "Update finished" : $"Update failed (SteamCMD exit {exitCode})", corr);
         }
 
         var cred = GetCred(def.GuestCredentialId);
