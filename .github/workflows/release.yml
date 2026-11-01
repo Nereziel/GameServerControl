@@ -10,21 +10,58 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build (e.g. v1.1.0)'
+        description: 'New release tag to create from current main (e.g. v1.1.1)'
         required: true
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      ref: ${{ steps.release.outputs.ref }}
+    steps:
+      - name: Resolve release tag and source ref
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$ ]]; then
+              echo "::error::Release tag must look like v1.1.1."
+              exit 1
+            fi
+
+            if git ls-remote --exit-code --tags "https://github.com/${REPOSITORY}.git" "refs/tags/${tag}" >/dev/null 2>&1; then
+              echo "::error::Tag ${tag} already exists. Choose a new version; manual releases are built from current main."
+              exit 1
+            fi
+
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
   build-windows:
     name: Build Windows agent + tray
     runs-on: windows-latest
+    needs: prepare
     steps:
-      - name: Checkout release ref
+      - name: Checkout release source
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v6
@@ -58,11 +95,12 @@ jobs:
   build-linux:
     name: Build Linux agent + relay
     runs-on: ubuntu-24.04
+    needs: prepare
     steps:
-      - name: Checkout release ref
+      - name: Checkout release source
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v6
@@ -109,12 +147,12 @@ jobs:
   release:
     name: Create GitHub Release
     runs-on: ubuntu-24.04
-    needs: [build-windows, build-linux]
+    needs: [prepare, build-windows, build-linux]
     steps:
-      - name: Checkout release ref
+      - name: Checkout release source
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.prepare.outputs.ref }}
 
       - name: Download Windows packages
         uses: actions/download-artifact@v8
@@ -132,20 +170,12 @@ jobs:
           cp deploy/linux/install-from-release.sh       GameServerControl-Install-Linux.sh
           cp deploy/relay/install-from-release.sh       GameServerControl-Install-Relay.sh
 
-      - name: Determine tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ needs.prepare.outputs.ref }}
+          name: ${{ needs.prepare.outputs.tag }}
           generate_release_notes: true
           draft: false
           prerelease: false
