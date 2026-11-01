@@ -44,7 +44,6 @@ public sealed class ServerStore
             SaveAll(list);
             _registry.Reload();
         }
-        EnsureFirewall(normalized);
         return normalized;
     }
 
@@ -63,7 +62,6 @@ public sealed class ServerStore
             SaveAll(list);
             _registry.Reload();
         }
-        EnsureFirewall(normalized);
         return normalized;
     }
 
@@ -80,15 +78,10 @@ public sealed class ServerStore
             _registry.Reload();
         }
 
+        // Defensive cleanup in case the server was deleted while running or after an unclean Agent shutdown.
         if (!WindowsFirewall.RemoveProgramRules(id, out var firewallError))
             _logger.LogWarning("Could not remove Windows Firewall rules for {Id}: {Error}", id, firewallError);
         return true;
-    }
-
-    private void EnsureFirewall(ServerDef def)
-    {
-        if (!WindowsFirewall.EnsureProgramRules(def, out var error))
-            _logger.LogWarning("Could not create/update Windows Firewall rules for {Id}: {Error}", def.Id, error);
     }
 
     private static ServerDef Normalize(ServerDef def)
