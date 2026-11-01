@@ -82,6 +82,32 @@ public sealed class DragonwildsConfig : IGameConfig
         return values;
     }
 
+    public async Task<string?> ValidateForStartAsync(ServerDef def, CancellationToken ct)
+    {
+        if (def.HostingMode != HostingMode.BareMetal)
+            return "RuneScape: Dragonwilds is supported only in BareMetal hosting mode.";
+
+        var path = LocalIniPath(def);
+        if (!File.Exists(path))
+            return "Dragonwilds is not configured yet. Open Configuration and set Owner Player ID, Server name, Default world name and Admin password before the first start.";
+
+        var values = Parse(await File.ReadAllTextAsync(path, ct));
+        var missing = new List<string>();
+        if (!HasValue(values, "OwnerId")) missing.Add("Owner Player ID");
+        if (!HasValue(values, "ServerName")) missing.Add("Server name");
+        if (!HasValue(values, "DefaultWorldName")) missing.Add("Default world name");
+        if (!HasValue(values, "AdminPassword")) missing.Add("Admin password");
+        if (missing.Count > 0)
+            return "Dragonwilds configuration is incomplete: " + string.Join(", ", missing) + ". Open Configuration and save the required values before starting the server.";
+
+        var port = ReadLaunchPort(def, "Port", 7777);
+        var beaconPort = ReadLaunchPort(def, "BeaconPort", port <= 64424 ? port + 1111 : 8888);
+        if (port is < 1 or > 65535 || beaconPort is < 1 or > 65535 || port == beaconPort)
+            return "Dragonwilds network configuration is invalid. Set distinct Game port and Beacon port values in Configuration.";
+
+        return null;
+    }
+
     public async Task<bool> WriteAsync(ServerDef def, Dictionary<string, string> values, CancellationToken ct)
     {
         await EnsureStoppedAsync(def, ct);
@@ -193,9 +219,12 @@ public sealed class DragonwildsConfig : IGameConfig
 
     private static void Require(Dictionary<string, string> values, string key, string message)
     {
-        if (!values.TryGetValue(key, out var value) || string.IsNullOrWhiteSpace(value))
+        if (!HasValue(values, key))
             throw new ArgumentException(message);
     }
+
+    private static bool HasValue(IReadOnlyDictionary<string, string> values, string key) =>
+        values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value);
 
     private static int ReadLaunchPort(ServerDef def, string switchName, int fallback)
     {
