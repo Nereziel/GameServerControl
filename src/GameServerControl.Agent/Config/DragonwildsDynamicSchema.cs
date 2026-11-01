@@ -33,21 +33,23 @@ public sealed class DragonwildsDynamicSchema : IDynamicSchemaExtension
         var fields = new[]
         {
             new ConfigField("OwnerId", "Owner Player ID", ConfigFieldType.Text,
-                Description: "Required by Jagex's current self-hosting guide. Copy your Dragonwilds Player ID from the bottom of the in-game Settings screen."),
+                Description: "Required by Jagex. Copy your Dragonwilds Player ID from the bottom of the in-game Settings screen."),
             new ConfigField("ServerName", "Server name", ConfigFieldType.Text,
                 Description: "Required. Name shown for this dedicated server."),
             new ConfigField("DefaultWorldName", "Default world name", ConfigFieldType.Text,
-                Description: "Required. Used when the server creates a new world."),
+                Description: "Required. Used when the server creates a new world and shown in the Worlds browser."),
             new ConfigField("AdminPassword", "Admin password", ConfigFieldType.Password,
                 Description: "Required. Grants access to the in-game Server Management screen."),
             new ConfigField("WorldPassword", "World password", ConfigFieldType.Password,
-                Description: "Optional. Overrides the password stored in the selected world."),
+                Description: "Optional. Overrides the password stored in the selected world; empty means no join password."),
+            new ConfigField("Administrators", "Permanent administrators", ConfigFieldType.Multiline,
+                Description: "One Dragonwilds user ID per line. GameServerControl stores these in Jagex's AdministratorList=(...) setting."),
             new ConfigField("Port", "Game port", ConfigFieldType.Integer,
-                Description: "UDP listen port. 7777 is the first/default instance; use 7778, 7779, … for additional local instances.",
+                Description: "Main UDP game port. Jagex default: 7777.",
                 Default: "7777", Min: 1, Max: 65535),
-            new ConfigField("PlatformPolicy", "Crossplay / platform policy", ConfigFieldType.Choice,
-                Description: "Dragonwilds 1.0 dedicated-server platform policy. Crossplay accepts all supported platforms; platform-specific values restrict joins.",
-                Choices: new[] { "Crossplay", "PC", "PlayStation", "Xbox", "Nintendo" }, Default: "Crossplay")
+            new ConfigField("BeaconPort", "Beacon port", ConfigFieldType.Integer,
+                Description: "Separate UDP beacon/discovery port. Jagex's current default is 8888 (game port + 1111). Both ports must be allowed/forwarded.",
+                Default: "8888", Min: 1, Max: 65535)
         }
         .Where(f => !curatedKeys.Contains(f.Key))
         .ToArray();
