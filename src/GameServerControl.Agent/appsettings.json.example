@@ -22,6 +22,15 @@
     "Repo": "Nereziel/GameServerControl",
     "ServersJsonPath": "servers.json",
 
+    "_PublicRelayHelp": "Optional Linux VPS relay. Url must point to GameServerControl.Relay over Tailscale. Public ports are DNATed on the VPS and forwarded through tailscale0 to this Agent host.",
+    "PublicRelay": {
+      "Url": "",
+      "ApiToken": "",
+      "TargetAddress": "",
+      "PublicAddress": "",
+      "StatePath": "public-relay.json"
+    },
+
     "_AuditHelp": "Override audit log directory. Empty defaults to <agent>/Logs/audit/.",
     "AuditLogPath": "",
 
