@@ -1,16 +1,45 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using GameServerControl.Agent.Hubs;
+using GameServerControl.Agent.Servers;
+using GameServerControl.Shared;
+using Microsoft.AspNetCore.SignalR;
 
 namespace GameServerControl.Agent.Hyperv;
+
+public sealed record LocalConsoleState(
+    bool Supported,
+    bool InputAvailable,
+    string Message,
+    LogLine[] Lines);
 
 /// <summary>
 /// Bare-metal counterpart to <see cref="GuestProcessService"/>. Runs everything directly
 /// on the agent host instead of dispatching through PowerShell Direct into a VM guest.
+/// For profiles explicitly marked as <see cref="GameConsoleMode.Stdin"/>, the process is
+/// launched with redirected stdin/stdout/stderr and its console is kept attached to the Agent.
 /// </summary>
 public sealed class LocalProcessService
 {
     private static readonly TimeSpan GracefulStopTimeout = TimeSpan.FromSeconds(8);
+    private const int MaxConsoleLines = 400;
+    private const int MaxConsoleChars = 200_000;
+    private const int MaxConsoleLineChars = 16_384;
+
     private readonly ILogger<LocalProcessService> _logger;
-    public LocalProcessService(ILogger<LocalProcessService> logger) { _logger = logger; }
+    private readonly ServerRegistry _registry;
+    private readonly IHubContext<StatusHub> _hub;
+    private readonly ConcurrentDictionary<string, ConsoleSession> _consoleSessions = new(StringComparer.OrdinalIgnoreCase);
+
+    public LocalProcessService(
+        ILogger<LocalProcessService> logger,
+        ServerRegistry registry,
+        IHubContext<StatusHub> hub)
+    {
+        _logger = logger;
+        _registry = registry;
+        _hub = hub;
+    }
 
     public bool HasScheduledTaskSupport => OperatingSystem.IsWindows();
 
@@ -21,19 +50,32 @@ public sealed class LocalProcessService
             if (!File.Exists(exePath))
                 return Task.FromResult<(bool, int?, string)>((false, null, $"EXE not found: {exePath}"));
 
+            var def = FindServerForExe(exePath);
+            var interactive = def is not null
+                && def.HostingMode == HostingMode.BareMetal
+                && string.IsNullOrWhiteSpace(def.ScheduledTaskName)
+                && GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
+
             var psi = new ProcessStartInfo
             {
                 FileName = exePath,
                 WorkingDirectory = string.IsNullOrWhiteSpace(workingDir) ? Path.GetDirectoryName(exePath) ?? "" : workingDir,
-                UseShellExecute = true,
-                CreateNoWindow = false,
-                WindowStyle = ProcessWindowStyle.Minimized
+                UseShellExecute = !interactive,
+                RedirectStandardInput = interactive,
+                RedirectStandardOutput = interactive,
+                RedirectStandardError = interactive,
+                CreateNoWindow = interactive,
+                WindowStyle = interactive ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Minimized
             };
             foreach (var a in args)
                 psi.ArgumentList.Add(a);
 
             var p = Process.Start(psi);
             if (p is null) return Task.FromResult<(bool, int?, string)>((false, null, "Process.Start returned null"));
+
+            if (interactive && def is not null)
+                AttachInteractiveConsole(def, p);
+
             return Task.FromResult<(bool, int?, string)>((true, p.Id, ""));
         }
         catch (Exception ex)
@@ -42,6 +84,104 @@ public sealed class LocalProcessService
             return Task.FromResult<(bool, int?, string)>((false, null, ex.Message));
         }
     }
+
+    private void AttachInteractiveConsole(ServerDef def, Process process)
+    {
+        var session = new ConsoleSession(def.Id, process);
+        _consoleSessions[def.Id] = session;
+
+        process.EnableRaisingEvents = true;
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) _ = RecordAndBroadcastAsync(session, "stdout", e.Data);
+        };
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not null) _ = RecordAndBroadcastAsync(session, "stderr", e.Data);
+        };
+        process.Exited += (_, _) =>
+        {
+            session.MarkExited();
+            var code = "?";
+            try { code = process.ExitCode.ToString(); } catch { }
+            _ = RecordAndBroadcastAsync(session, "process", $"[process exited with code {code}]");
+        };
+
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        _ = RecordAndBroadcastAsync(session, "process", $"[interactive console attached — pid {process.Id}]");
+    }
+
+    public LocalConsoleState GetConsoleState(ServerDef def)
+    {
+        var supported = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
+        if (!supported)
+            return new LocalConsoleState(false, false, "This game profile does not use a stdin console.", Array.Empty<LogLine>());
+        if (def.HostingMode != HostingMode.BareMetal)
+            return new LocalConsoleState(true, false, "Interactive stdin is currently available only for servers running on this machine.", Array.Empty<LogLine>());
+        if (!string.IsNullOrWhiteSpace(def.ScheduledTaskName))
+            return new LocalConsoleState(true, false, "This server starts through Task Scheduler, so GameServerControl cannot attach its stdin. Remove the scheduled task launcher to use the interactive console.", Array.Empty<LogLine>());
+
+        if (!_consoleSessions.TryGetValue(def.Id, out var session))
+            return new LocalConsoleState(true, false, "Console input will attach after this server is started from GameServerControl. If it is already running, restart it from this panel.", Array.Empty<LogLine>());
+
+        var lines = session.Snapshot();
+        if (!session.InputAvailable)
+            return new LocalConsoleState(true, false, "The attached process is no longer accepting console input.", lines);
+
+        return new LocalConsoleState(true, true, "Interactive console attached.", lines);
+    }
+
+    public async Task<(bool Ok, string Error)> SendConsoleInputAsync(ServerDef def, string command, CancellationToken ct = default)
+    {
+        if (GameProfiles.FindFor(def)?.Capabilities.ConsoleMode != GameConsoleMode.Stdin)
+            return (false, "This game profile does not support stdin console input.");
+        if (def.HostingMode != HostingMode.BareMetal)
+            return (false, "Interactive stdin is not available for Hyper-V guest processes yet.");
+        if (!_consoleSessions.TryGetValue(def.Id, out var session) || !session.InputAvailable)
+            return (false, "No attached console session. Start or restart this server from GameServerControl first.");
+
+        command = command.Trim();
+        if (command.Length == 0) return (false, "Command is empty.");
+        if (command.Length > 4096) return (false, "Command is too long.");
+        if (command.Contains('\r') || command.Contains('\n')) return (false, "Send one command at a time.");
+
+        await session.InputGate.WaitAsync(ct);
+        try
+        {
+            if (!session.InputAvailable)
+                return (false, "The console session closed before the command could be sent.");
+            await session.Process.StandardInput.WriteLineAsync(command);
+            await session.Process.StandardInput.FlushAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Console input failed for {ServerId}", def.Id);
+            return (false, ex.Message);
+        }
+        finally
+        {
+            session.InputGate.Release();
+        }
+
+        await RecordAndBroadcastAsync(session, "stdin", "> " + command);
+        return (true, "");
+    }
+
+    private async Task RecordAndBroadcastAsync(ConsoleSession session, string source, string text)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        if (text.Length > MaxConsoleLineChars)
+            text = text[..MaxConsoleLineChars] + "…";
+
+        var line = new LogLine(session.ServerId, DateTimeOffset.UtcNow, source, text);
+        session.Add(line);
+        try { await _hub.Clients.All.SendAsync("logLine", line); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Console SignalR broadcast failed for {ServerId}", session.ServerId); }
+    }
+
+    private ServerDef? FindServerForExe(string exePath)
+        => _registry.All.FirstOrDefault(s => s.HostingMode == HostingMode.BareMetal && PathsEqual(s.GuestExePath, exePath));
 
     public Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default)
     {
@@ -292,6 +432,54 @@ public sealed class LocalProcessService
         catch
         {
             return string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        }
+    }
+
+    private sealed class ConsoleSession
+    {
+        private readonly object _gate = new();
+        private readonly List<LogLine> _lines = new();
+        private int _chars;
+        private volatile bool _exited;
+
+        public ConsoleSession(string serverId, Process process)
+        {
+            ServerId = serverId;
+            Process = process;
+        }
+
+        public string ServerId { get; }
+        public Process Process { get; }
+        public SemaphoreSlim InputGate { get; } = new(1, 1);
+        public bool InputAvailable
+        {
+            get
+            {
+                if (_exited) return false;
+                try { return !Process.HasExited; }
+                catch { return false; }
+            }
+        }
+
+        public void MarkExited() => _exited = true;
+
+        public void Add(LogLine line)
+        {
+            lock (_gate)
+            {
+                _lines.Add(line);
+                _chars += line.Text.Length;
+                while (_lines.Count > MaxConsoleLines || _chars > MaxConsoleChars)
+                {
+                    _chars -= _lines[0].Text.Length;
+                    _lines.RemoveAt(0);
+                }
+            }
+        }
+
+        public LogLine[] Snapshot()
+        {
+            lock (_gate) return _lines.ToArray();
         }
     }
 }

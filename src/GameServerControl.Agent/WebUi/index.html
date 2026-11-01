@@ -127,6 +127,7 @@ action=async function(id,a){
 <script src="/webui/server-admin.js"></script>
 <script src="/webui/jobs-mods.js"></script>
 <script src="/webui/config-backups.js"></script>
+<script src="/webui/server-workspace.js"></script>
 <script>
 /* Parallel install polling + live detail log. */
 refreshJobs=async function(render=true){
@@ -149,6 +150,16 @@ function enhancePasswordFields(root=document){
 }
 const baseOpenModal=openModal;openModal=function(...args){baseOpenModal(...args);enhancePasswordFields($('#modal'))};enhancePasswordFields(document);
 new MutationObserver(()=>enhancePasswordFields(document)).observe(document.body,{childList:true,subtree:true});
+
+/* Reconnect attached stdin consoles after lifecycle changes performed from the workspace. */
+const baseServerAction=action;
+action=async function(id,a){
+  await baseServerAction(id,a);
+  if(!['start','restart','stop'].includes(a))return;
+  if(SERVER_WORKSPACE.serverId!==id||SERVER_WORKSPACE.tab!=='console')return;
+  const d=SERVERS.find(x=>x.id===id);if(!d||profileFor(d)?.caps?.console!=='stdin')return;
+  await renderServerWorkspaceTab(d,'console');
+};
 
 /* Keep the complete-delete behavior introduced earlier. */
 window.deleteServer=function(id){
