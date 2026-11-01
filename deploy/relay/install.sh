@@ -81,10 +81,36 @@ net.ipv4.ip_forward = 1
 EOF
 sysctl -p /etc/sysctl.d/99-gameservercontrol-relay.conf >/dev/null
 
+# The Relay API is intentionally reachable only over Tailscale. If UFW is active,
+# explicitly allow the API on the Tailscale interface; no public-interface API rule is added.
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+  ufw allow in on "$TAILSCALE_INTERFACE" to "$TAILSCALE_IP" port "$API_PORT" proto tcp comment 'GameServerControl Relay API' >/dev/null
+fi
+
 cp "$SOURCE_DIR/$UNIT_NAME" "/etc/systemd/system/$UNIT_NAME"
 systemctl daemon-reload
 systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
 systemctl restart "$UNIT_NAME"
+sleep 2
+
+if ! systemctl is-active --quiet "$UNIT_NAME"; then
+  echo "Relay service failed to start." >&2
+  journalctl -u "$UNIT_NAME" -n 50 --no-pager >&2 || true
+  exit 1
+fi
+
+# Test the exact address the Agent will use. This catches bind failures, UFW rules,
+# invalid environment configuration and early service crashes during installation.
+if command -v curl >/dev/null 2>&1; then
+  if ! curl -fsS --connect-timeout 5 -H "Authorization: Bearer ${RELAY_TOKEN}" \
+      "http://${TAILSCALE_IP}:${API_PORT}/api/health" >/dev/null; then
+    echo "Relay service is running, but its API health check failed on http://${TAILSCALE_IP}:${API_PORT}." >&2
+    echo "Listener check: ss -lntp | grep ':${API_PORT}'" >&2
+    echo "Service logs:  journalctl -u ${UNIT_NAME} -n 100 --no-pager" >&2
+    journalctl -u "$UNIT_NAME" -n 50 --no-pager >&2 || true
+    exit 1
+  fi
+fi
 
 echo
 echo "GameServerControl Relay installed."
@@ -94,6 +120,7 @@ echo "  Tailscale iface:  ${TAILSCALE_INTERFACE}"
 echo "  State:             ${STATE_DIR}/routes.json"
 echo "  API token:         ${RELAY_TOKEN}"
 echo
-echo "Put the API URL + token into Agent:PublicRelay."
+echo "Configure the Relay URL + token in the Agent Web UI under Server -> Network -> Public VPS relay."
 echo "The relay manages only its GSC_RELAY_* chains; it does not rewrite /etc/ufw/before.rules."
-echo "Remember to allow the game ports in your VPS provider/cloud firewall as well."
+echo "If UFW is active, TCP ${API_PORT} is allowed only on ${TAILSCALE_INTERFACE}."
+echo "Remember to allow the public game ports in your VPS provider/cloud firewall as well."
