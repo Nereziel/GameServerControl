@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: error
 
   linux-build:
-    name: Linux agent + web UI
+    name: Linux agent + web UI + relay
     runs-on: ubuntu-24.04
 
     steps:
@@ -75,6 +75,7 @@ jobs:
         run: |
           bash -n deploy/linux/install-from-release.sh
           bash -n deploy/linux/install.sh
+          bash -n deploy/relay/install.sh
 
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
@@ -91,19 +92,39 @@ jobs:
       - name: Build Agent (Release)
         run: dotnet build src/GameServerControl.Agent -c Release --no-restore
 
+      - name: Restore Relay
+        run: dotnet restore src/GameServerControl.Relay
+
+      - name: Build Relay (Release)
+        run: dotnet build src/GameServerControl.Relay -c Release --no-restore
+
       - name: Publish agent (linux-x64, self-contained)
         run: dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained true -o publish/Agent-linux
 
-      - name: Stage deploy artifacts alongside agent
+      - name: Publish relay (linux-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Relay -c Release -r linux-x64 --self-contained true -o publish/Relay-linux
+
+      - name: Stage deploy artifacts
         run: |
           cp deploy/linux/gameservercontrol-agent.service publish/Agent-linux/
           cp deploy/linux/install.sh publish/Agent-linux/
           chmod +x publish/Agent-linux/install.sh
           chmod +x publish/Agent-linux/GameServerControl.Agent
+          cp deploy/relay/gameservercontrol-relay.service publish/Relay-linux/
+          cp deploy/relay/install.sh publish/Relay-linux/
+          chmod +x publish/Relay-linux/install.sh
+          chmod +x publish/Relay-linux/GameServerControl.Relay
 
       - name: Upload Linux agent
         uses: actions/upload-artifact@v7
         with:
           name: GameServerControl-Agent-linux
           path: publish/Agent-linux
+          if-no-files-found: error
+
+      - name: Upload Linux relay
+        uses: actions/upload-artifact@v7
+        with:
+          name: GameServerControl-Relay-linux
+          path: publish/Relay-linux
           if-no-files-found: error
