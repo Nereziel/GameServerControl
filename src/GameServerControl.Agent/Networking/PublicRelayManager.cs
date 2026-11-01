@@ -22,18 +22,34 @@ public sealed class PublicRelayManager
 
     private readonly ServerRegistry _registry;
     private readonly ILogger<PublicRelayManager> _logger;
-    private readonly string _baseUrl;
-    private readonly string _apiToken;
-    private readonly string? _configuredTarget;
-    private readonly string? _publicAddress;
+    private string _baseUrl;
+    private string _apiToken;
+    private string? _configuredTarget;
+    private string? _publicAddress;
     private readonly string _statePath;
     private readonly object _stateGate = new();
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private readonly ConcurrentDictionary<string, string> _lastApplied = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, PublicRelayServerSettings> _settings;
 
+    private sealed record StoredGlobalSettings(
+        string Url,
+        string ApiToken,
+        string? TargetAddress,
+        string? PublicAddress);
+
+    private sealed record GlobalSnapshot(
+        string Url,
+        string ApiToken,
+        string? TargetAddress,
+        string? PublicAddress)
+    {
+        public bool Configured => !string.IsNullOrWhiteSpace(Url) && ApiToken.Length >= 24;
+    }
+
     private sealed class StateDocument
     {
+        public StoredGlobalSettings? Global { get; set; }
         public Dictionary<string, PublicRelayServerSettings>? Servers { get; set; }
     }
 
@@ -41,44 +57,59 @@ public sealed class PublicRelayManager
     {
         _registry = registry;
         _logger = logger;
-        _baseUrl = (cfg["Agent:PublicRelay:Url"] ?? "").TrimEnd('/');
-        _apiToken = cfg["Agent:PublicRelay:ApiToken"] ?? "";
-        _configuredTarget = NullIfBlank(cfg["Agent:PublicRelay:TargetAddress"]);
-        _publicAddress = NullIfBlank(cfg["Agent:PublicRelay:PublicAddress"]);
         var configuredState = cfg["Agent:PublicRelay:StatePath"] ?? "public-relay.json";
         _statePath = Path.IsPathRooted(configuredState) ? configuredState : Path.Combine(env.ContentRootPath, configuredState);
-        _settings = LoadState();
+
+        var state = LoadState();
+        _settings = new Dictionary<string, PublicRelayServerSettings>(state.Servers ?? new(), StringComparer.OrdinalIgnoreCase);
+        if (state.Global is not null)
+        {
+            _baseUrl = state.Global.Url.TrimEnd('/');
+            _apiToken = state.Global.ApiToken;
+            _configuredTarget = NullIfBlank(state.Global.TargetAddress);
+            _publicAddress = NullIfBlank(state.Global.PublicAddress);
+        }
+        else
+        {
+            _baseUrl = (cfg["Agent:PublicRelay:Url"] ?? "").TrimEnd('/');
+            _apiToken = cfg["Agent:PublicRelay:ApiToken"] ?? "";
+            _configuredTarget = NullIfBlank(cfg["Agent:PublicRelay:TargetAddress"]);
+            _publicAddress = NullIfBlank(cfg["Agent:PublicRelay:PublicAddress"]);
+        }
     }
 
-    public bool Configured => !string.IsNullOrWhiteSpace(_baseUrl) && _apiToken.Length >= 24;
+    public bool Configured => SnapshotGlobal().Configured;
 
     public PublicRelayServerSettings SettingsFor(string serverId)
     {
         lock (_stateGate)
-            return _settings.TryGetValue(serverId, out var value) ? value : new PublicRelayServerSettings(false, null);
+            return _settings.TryGetValue(serverId, out var value)
+                ? new PublicRelayServerSettings(value.Enabled, value.PublicPorts)
+                : new PublicRelayServerSettings(false, null);
     }
 
     public async Task<PublicRelayServerStatus> GetStatusAsync(string serverId, CancellationToken ct = default)
     {
         var def = _registry.Get(serverId) ?? throw new KeyNotFoundException(serverId);
         var settings = SettingsFor(serverId);
+        var global = SnapshotGlobal();
         string? target = null;
         RelayRoutePort[] ports = Array.Empty<RelayRoutePort>();
         string? error = null;
 
         try
         {
-            target = ResolveTargetAddress();
+            target = ResolveTargetAddress(global.TargetAddress);
             ports = BuildRoute(def, settings, target).Ports;
         }
         catch (Exception ex) { error = ex.Message; }
 
         var reachable = false;
-        if (Configured)
+        if (global.Configured)
         {
             try
             {
-                using var response = await SendAsync(HttpMethod.Get, "/api/health", null, ct);
+                using var response = await SendAsync(HttpMethod.Get, "/api/health", null, global, ct);
                 reachable = response.IsSuccessStatusCode;
                 if (!reachable && error is null) error = await ResponseErrorAsync(response, ct);
             }
@@ -89,7 +120,17 @@ public sealed class PublicRelayManager
             error = "Public relay is not configured on this Agent.";
         }
 
-        return new PublicRelayServerStatus(Configured, settings.Enabled, reachable, _publicAddress, target, ports, error);
+        return new PublicRelayServerStatus(
+            global.Configured,
+            settings.Enabled,
+            reachable,
+            global.PublicAddress,
+            target,
+            ports,
+            error,
+            global.Url,
+            !string.IsNullOrWhiteSpace(global.ApiToken),
+            global.TargetAddress);
     }
 
     public async Task<PublicRelayServerStatus> SaveAsync(string serverId, PublicRelayServerSettings settings, bool serverRunning, CancellationToken ct = default)
@@ -98,19 +139,33 @@ public sealed class PublicRelayManager
         await _mutationGate.WaitAsync(ct);
         try
         {
-            var target = ResolveTargetAddress();
-            var route = BuildRoute(def, settings, target);
-            ValidatePublicConflicts(serverId, settings);
+            var currentGlobal = SnapshotGlobal();
+            var candidateGlobal = CandidateGlobal(currentGlobal, settings);
+            ValidateGlobal(candidateGlobal);
+
+            var serverSettings = new PublicRelayServerSettings(settings.Enabled, settings.PublicPorts);
+            var target = ResolveTargetAddress(candidateGlobal.TargetAddress);
+            _ = BuildRoute(def, serverSettings, target);
+            ValidatePublicConflicts(serverId, serverSettings, target);
+
+            if (serverSettings.Enabled && !candidateGlobal.Configured)
+                throw new InvalidOperationException("Relay is enabled for this server but the Agent relay URL/token are not configured.");
+
+            var connectionChanged = !string.Equals(currentGlobal.Url, candidateGlobal.Url, StringComparison.OrdinalIgnoreCase) ||
+                                    !string.Equals(currentGlobal.ApiToken, candidateGlobal.ApiToken, StringComparison.Ordinal);
+            if (connectionChanged && currentGlobal.Configured)
+                await RemoveRoutesFromOldRelayBestEffortAsync(currentGlobal, ct);
 
             lock (_stateGate)
             {
-                _settings[serverId] = settings;
+                _baseUrl = candidateGlobal.Url;
+                _apiToken = candidateGlobal.ApiToken;
+                _configuredTarget = candidateGlobal.TargetAddress;
+                _publicAddress = candidateGlobal.PublicAddress;
+                _settings[serverId] = serverSettings;
                 SaveStateLocked();
             }
-            _lastApplied.TryRemove(serverId, out _);
-
-            if (settings.Enabled && !Configured)
-                throw new InvalidOperationException("Relay is enabled for this server but Agent:PublicRelay:Url/ApiToken are not configured.");
+            _lastApplied.Clear();
 
             await EnsureForServerAsync(def, serverRunning, ct);
             return await GetStatusAsync(serverId, ct);
@@ -128,8 +183,9 @@ public sealed class PublicRelayManager
                 if (_settings.Remove(serverId)) SaveStateLocked();
             }
             _lastApplied.TryRemove(serverId, out _);
-            if (!Configured) return;
-            try { using var _ = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(serverId)}", null, ct); }
+            var global = SnapshotGlobal();
+            if (!global.Configured) return;
+            try { using var _ = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(serverId)}", null, global, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "Could not remove public relay route for {ServerId}", serverId); }
         }
         finally { _mutationGate.Release(); }
@@ -138,13 +194,14 @@ public sealed class PublicRelayManager
     public async Task EnsureForServerAsync(ServerDef def, bool running, CancellationToken ct = default)
     {
         var settings = SettingsFor(def.Id);
+        var global = SnapshotGlobal();
         if (!settings.Enabled || !running)
         {
-            var desired = "off";
+            const string desired = "off";
             if (_lastApplied.TryGetValue(def.Id, out var previous) && previous == desired) return;
-            if (Configured)
+            if (global.Configured)
             {
-                using var response = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(def.Id)}", null, ct);
+                using var response = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(def.Id)}", null, global, ct);
                 if (!response.IsSuccessStatusCode)
                     throw new InvalidOperationException(await ResponseErrorAsync(response, ct));
             }
@@ -152,15 +209,15 @@ public sealed class PublicRelayManager
             return;
         }
 
-        if (!Configured)
-            throw new InvalidOperationException("Public relay is enabled but Agent:PublicRelay is not configured.");
+        if (!global.Configured)
+            throw new InvalidOperationException("Public relay is enabled but the Agent relay URL/token are not configured.");
 
-        var target = ResolveTargetAddress();
+        var target = ResolveTargetAddress(global.TargetAddress);
         var route = BuildRoute(def, settings, target);
         var desiredHash = JsonSerializer.Serialize(route, JsonOptions);
         if (_lastApplied.TryGetValue(def.Id, out var last) && last == desiredHash) return;
 
-        using var put = await SendAsync(HttpMethod.Put, $"/api/routes/{Uri.EscapeDataString(def.Id)}", route, ct);
+        using var put = await SendAsync(HttpMethod.Put, $"/api/routes/{Uri.EscapeDataString(def.Id)}", route, global, ct);
         if (!put.IsSuccessStatusCode)
             throw new InvalidOperationException(await ResponseErrorAsync(put, ct));
         _lastApplied[def.Id] = desiredHash;
@@ -195,15 +252,15 @@ public sealed class PublicRelayManager
         return new RelayRouteDefinition(def.Id, targetAddress, routes.ToArray());
     }
 
-    private void ValidatePublicConflicts(string candidateId, PublicRelayServerSettings candidate)
+    private void ValidatePublicConflicts(string candidateId, PublicRelayServerSettings candidate, string targetAddress)
     {
         if (!candidate.Enabled) return;
         var definitions = new List<RelayRouteDefinition>();
         foreach (var def in _registry.All)
         {
-            var settings = string.Equals(def.Id, candidateId, StringComparison.OrdinalIgnoreCase) ? candidate : SettingsFor(def.Id);
-            if (!settings.Enabled) continue;
-            definitions.Add(BuildRoute(def, settings, ResolveTargetAddress()));
+            var serverSettings = string.Equals(def.Id, candidateId, StringComparison.OrdinalIgnoreCase) ? candidate : SettingsFor(def.Id);
+            if (!serverSettings.Enabled) continue;
+            definitions.Add(BuildRoute(def, serverSettings, targetAddress));
         }
 
         var all = definitions.SelectMany(d => d.Ports.Select(p => (d.ServerId, Port: p))).ToArray();
@@ -216,9 +273,48 @@ public sealed class PublicRelayManager
         }
     }
 
-    private string ResolveTargetAddress()
+    private GlobalSnapshot CandidateGlobal(GlobalSnapshot current, PublicRelayServerSettings settings)
     {
-        if (_configuredTarget is not null) return _configuredTarget;
+        var url = settings.RelayUrl is null ? current.Url : settings.RelayUrl.Trim().TrimEnd('/');
+        var token = settings.RelayApiToken is null ? current.ApiToken : settings.RelayApiToken.Trim();
+        var target = settings.TargetAddress is null ? current.TargetAddress : NullIfBlank(settings.TargetAddress);
+        var publicAddress = settings.PublicAddress is null ? current.PublicAddress : NullIfBlank(settings.PublicAddress);
+        return new GlobalSnapshot(url, token, target, publicAddress);
+    }
+
+    private static void ValidateGlobal(GlobalSnapshot global)
+    {
+        if (!string.IsNullOrWhiteSpace(global.Url))
+        {
+            if (!Uri.TryCreate(global.Url, UriKind.Absolute, out var uri) ||
+                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                throw new ArgumentException("Relay URL must be an absolute http:// or https:// URL, normally the VPS Tailscale IP and port 5100.");
+        }
+        if (!string.IsNullOrWhiteSpace(global.ApiToken) && global.ApiToken.Length < 24)
+            throw new ArgumentException("Relay API token must contain at least 24 characters.");
+    }
+
+    private async Task RemoveRoutesFromOldRelayBestEffortAsync(GlobalSnapshot oldGlobal, CancellationToken ct)
+    {
+        foreach (var def in _registry.All)
+        {
+            if (!SettingsFor(def.Id).Enabled) continue;
+            try
+            {
+                using var response = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(def.Id)}", null, oldGlobal, ct);
+                if (!response.IsSuccessStatusCode)
+                    _logger.LogWarning("Old relay returned HTTP {Status} while removing {ServerId}", (int)response.StatusCode, def.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not remove {ServerId} from the previous public relay connection", def.Id);
+            }
+        }
+    }
+
+    private string ResolveTargetAddress(string? configuredTarget)
+    {
+        if (configuredTarget is not null) return configuredTarget;
 
         var candidates = NetworkInterface.GetAllNetworkInterfaces()
             .Where(n => n.OperationalStatus == OperationalStatus.Up)
@@ -228,7 +324,7 @@ public sealed class PublicRelayManager
                                     x.Interface.Description.Contains("tailscale", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (candidates.Length == 0)
-            throw new InvalidOperationException("Could not detect this Agent's Tailscale IPv4 address. Set Agent:PublicRelay:TargetAddress explicitly.");
+            throw new InvalidOperationException("Could not detect this Agent's Tailscale IPv4 address. Set the relay TargetAddress explicitly.");
         return candidates[0].Address.ToString();
     }
 
@@ -238,11 +334,17 @@ public sealed class PublicRelayManager
         return b.Length == 4 && b[0] == 100 && b[1] is >= 64 and <= 127;
     }
 
-    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, CancellationToken ct)
+    private GlobalSnapshot SnapshotGlobal()
     {
-        if (!Configured) throw new InvalidOperationException("Public relay is not configured.");
-        var request = new HttpRequestMessage(method, _baseUrl + path);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiToken);
+        lock (_stateGate)
+            return new GlobalSnapshot(_baseUrl, _apiToken, _configuredTarget, _publicAddress);
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(HttpMethod method, string path, object? body, GlobalSnapshot global, CancellationToken ct)
+    {
+        if (!global.Configured) throw new InvalidOperationException("Public relay is not configured.");
+        var request = new HttpRequestMessage(method, global.Url + path);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", global.ApiToken);
         if (body is not null) request.Content = JsonContent.Create(body, options: JsonOptions);
         return await Http.SendAsync(request, ct);
     }
@@ -253,18 +355,17 @@ public sealed class PublicRelayManager
         return string.IsNullOrWhiteSpace(text) ? $"Relay returned HTTP {(int)response.StatusCode}." : text;
     }
 
-    private Dictionary<string, PublicRelayServerSettings> LoadState()
+    private StateDocument LoadState()
     {
         try
         {
-            if (!File.Exists(_statePath)) return new(StringComparer.OrdinalIgnoreCase);
-            var doc = JsonSerializer.Deserialize<StateDocument>(File.ReadAllText(_statePath), JsonOptions);
-            return new Dictionary<string, PublicRelayServerSettings>(doc?.Servers ?? new(), StringComparer.OrdinalIgnoreCase);
+            if (!File.Exists(_statePath)) return new StateDocument();
+            return JsonSerializer.Deserialize<StateDocument>(File.ReadAllText(_statePath), JsonOptions) ?? new StateDocument();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Could not load public relay state from {Path}", _statePath);
-            return new(StringComparer.OrdinalIgnoreCase);
+            return new StateDocument();
         }
     }
 
@@ -272,7 +373,8 @@ public sealed class PublicRelayManager
     {
         var dir = Path.GetDirectoryName(_statePath);
         if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-        var json = JsonSerializer.Serialize(new StateDocument { Servers = _settings }, JsonOptions);
+        var global = new StoredGlobalSettings(_baseUrl, _apiToken, _configuredTarget, _publicAddress);
+        var json = JsonSerializer.Serialize(new StateDocument { Global = global, Servers = _settings }, JsonOptions);
         var tmp = _statePath + ".tmp";
         File.WriteAllText(tmp, json);
         File.Move(tmp, _statePath, overwrite: true);
