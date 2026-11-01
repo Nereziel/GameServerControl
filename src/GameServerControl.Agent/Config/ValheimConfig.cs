@@ -1,10 +1,13 @@
+using System.Text;
+using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Config;
 
 /// <summary>
-/// Valheim configures via launch args on valheim_server. ServerDef.StartArgs is the source of truth.
+/// Valheim configures primarily via launch args on valheim_server. ServerDef.StartArgs is the
+/// source of truth for launch settings; the three official permission files live in -savedir.
 /// Managed fields follow Iron Gate's dedicated-server syntax, including -setkey for checkbox-style
 /// world modifiers. Unknown launch args are preserved so manual Unity/BepInEx flags are not lost.
 /// </summary>
@@ -26,59 +29,45 @@ public sealed class ValheimConfig : IGameConfig
         "backupshort", "backuplong", "preset", "public", "instanceid"
     };
 
-    private readonly ServerStore _store;
-    public ValheimConfig(ServerStore store) { _store = store; }
-
-    public Task<Dictionary<string, string>> ReadAsync(ServerDef def, CancellationToken ct)
+    private static readonly (string Key, string FileName)[] AccessFiles =
     {
-        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var args = def.StartArgs ?? Array.Empty<string>();
+        ("adminlist", "adminlist.txt"),
+        ("bannedlist", "bannedlist.txt"),
+        ("permittedlist", "permittedlist.txt")
+    };
 
-        for (var i = 0; i < args.Length; i++)
-        {
-            var a = args[i];
-            if (!a.StartsWith("-", StringComparison.Ordinal)) continue;
-            var bare = a.TrimStart('-');
+    private readonly ServerStore _store;
+    private readonly GuestProcessService _guest;
+    private readonly IConfiguration _cfg;
+    private readonly ILogger<ValheimConfig> _logger;
 
-            if (bare.Equals("modifier", StringComparison.OrdinalIgnoreCase) && i + 2 < args.Length)
-            {
-                dict[$"modifier:{args[i + 1]}"] = args[i + 2];
-                i += 2;
-                continue;
-            }
-
-            if (bare.Equals("setkey", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-            {
-                var key = args[i + 1];
-                if (SetKeyFlags.Contains(key)) dict[key] = "true";
-                i++;
-                continue;
-            }
-
-            // Read legacy GameServerControl args too, then normalize them to -setkey on save.
-            if (SetKeyFlags.Contains(bare))
-            {
-                dict[bare] = "true";
-                continue;
-            }
-
-            if (BoolFlags.Contains(bare))
-            {
-                dict[bare] = "true";
-                continue;
-            }
-
-            if (KeyValueArgs.Contains(bare) && i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
-            {
-                dict[bare] = args[i + 1];
-                i++;
-            }
-        }
-
-        return Task.FromResult(dict);
+    public ValheimConfig(
+        ServerStore store,
+        GuestProcessService guest,
+        IConfiguration cfg,
+        ILogger<ValheimConfig> logger)
+    {
+        _store = store;
+        _guest = guest;
+        _cfg = cfg;
+        _logger = logger;
     }
 
-    public Task<bool> WriteAsync(ServerDef def, Dictionary<string, string> values, CancellationToken ct)
+    public async Task<Dictionary<string, string>> ReadAsync(ServerDef def, CancellationToken ct)
+    {
+        var dict = ReadLaunchArgs(def.StartArgs ?? Array.Empty<string>());
+        var saveDir = ResolveSaveDir(def, dict);
+
+        foreach (var (key, fileName) in AccessFiles)
+        {
+            var text = await ReadAccessFileAsync(def, Path.Combine(saveDir, fileName), ct);
+            dict[key] = NormalizeAccessList(text);
+        }
+
+        return dict;
+    }
+
+    public async Task<bool> WriteAsync(ServerDef def, Dictionary<string, string> values, CancellationToken ct)
     {
         var preserved = PreserveUnknownArgs(def.StartArgs ?? Array.Empty<string>());
         var managed = new List<string>();
@@ -125,8 +114,154 @@ public sealed class ValheimConfig : IGameConfig
             };
         }
 
+        var saveDir = values.TryGetValue("savedir", out var saveDirRaw) && !string.IsNullOrWhiteSpace(saveDirRaw)
+            ? saveDirRaw.Trim()
+            : ResolveSaveDir(def, ReadLaunchArgs(args));
+        updated = updated with { SaveDirs = new[] { saveDir } };
+
+        // Persist/validate the definition first so a port collision cannot leave permission files
+        // changed after the API rejects the configuration. Roll back the definition on file failure.
         _store.Update(def.Id, updated);
-        return Task.FromResult(true);
+        try
+        {
+            foreach (var (key, fileName) in AccessFiles)
+            {
+                if (!values.TryGetValue(key, out var text)) continue;
+                if (!await WriteAccessFileAsync(def, Path.Combine(saveDir, fileName), NormalizeAccessList(text), ct))
+                    throw new IOException($"Could not write {fileName}.");
+            }
+            return true;
+        }
+        catch
+        {
+            try { _store.Update(def.Id, def); }
+            catch (Exception rollbackEx) { _logger.LogWarning(rollbackEx, "Valheim ServerDef rollback failed for {Id}", def.Id); }
+            throw;
+        }
+    }
+
+    private static Dictionary<string, string> ReadLaunchArgs(string[] args)
+    {
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (!arg.StartsWith("-", StringComparison.Ordinal)) continue;
+            var bare = arg.TrimStart('-');
+
+            if (bare.Equals("modifier", StringComparison.OrdinalIgnoreCase) && i + 2 < args.Length)
+            {
+                dict[$"modifier:{args[i + 1]}"] = args[i + 2];
+                i += 2;
+                continue;
+            }
+
+            if (bare.Equals("setkey", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+            {
+                var key = args[i + 1];
+                if (SetKeyFlags.Contains(key)) dict[key] = "true";
+                i++;
+                continue;
+            }
+
+            // Read legacy GameServerControl direct flags too, then normalize them to -setkey on save.
+            if (SetKeyFlags.Contains(bare))
+            {
+                dict[bare] = "true";
+                continue;
+            }
+
+            if (BoolFlags.Contains(bare))
+            {
+                dict[bare] = "true";
+                continue;
+            }
+
+            if (KeyValueArgs.Contains(bare) && i + 1 < args.Length && !args[i + 1].StartsWith("-", StringComparison.Ordinal))
+            {
+                dict[bare] = args[++i];
+            }
+        }
+        return dict;
+    }
+
+    private string ResolveSaveDir(ServerDef def, IReadOnlyDictionary<string, string> values)
+    {
+        if (values.TryGetValue("savedir", out var explicitDir) && !string.IsNullOrWhiteSpace(explicitDir))
+            return explicitDir.Trim();
+        if (def.SaveDirs is { Length: > 0 } && !string.IsNullOrWhiteSpace(def.SaveDirs[0]))
+            return def.SaveDirs[0];
+
+        if (def.HostingMode == HostingMode.Vm)
+            return Path.Combine(def.GuestWorkingDir, "data");
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return OperatingSystem.IsWindows()
+            ? Path.Combine(home, "AppData", "LocalLow", "IronGate", "Valheim")
+            : Path.Combine(home, ".config", "unity3d", "IronGate", "Valheim");
+    }
+
+    private GuestCredential GetCred(string? id)
+    {
+        var key = string.IsNullOrWhiteSpace(id) ? "default" : id;
+        var section = _cfg.GetSection($"Agent:GuestCredentials:{key}");
+        return new GuestCredential
+        {
+            Username = section["Username"] ?? "",
+            Password = section["Password"] ?? ""
+        };
+    }
+
+    private async Task<string> ReadAccessFileAsync(ServerDef def, string path, CancellationToken ct)
+    {
+        if (def.HostingMode == HostingMode.BareMetal)
+            return File.Exists(path) ? await File.ReadAllTextAsync(path, ct) : "";
+
+        var safePath = path.Replace("'", "''");
+        var cmd = $"powershell -NoProfile -Command \"if (Test-Path -LiteralPath '{safePath}') {{ Get-Content -LiteralPath '{safePath}' -Raw }} else {{ '' }}\"";
+        var (ok, output) = await _guest.RunCommandInGuestAsync(def.VmName, GetCred(def.GuestCredentialId), cmd,
+            def.GuestWorkingDir, TimeSpan.FromSeconds(20), ct);
+        return ok ? output : "";
+    }
+
+    private async Task<bool> WriteAccessFileAsync(ServerDef def, string path, string text, CancellationToken ct)
+    {
+        var output = string.IsNullOrWhiteSpace(text) ? "" : text.TrimEnd() + Environment.NewLine;
+        if (def.HostingMode == HostingMode.BareMetal)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                await File.WriteAllTextAsync(path, output, new UTF8Encoding(false), ct);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Valheim access-list write to {Path} failed", path);
+                return false;
+            }
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(output.Replace(Environment.NewLine, "\r\n"));
+        var b64 = Convert.ToBase64String(bytes);
+        var dir = Path.GetDirectoryName(path)!.Replace("'", "''");
+        var safePath = path.Replace("'", "''");
+        var script = "powershell -NoProfile -Command \"" +
+            $"New-Item -ItemType Directory -Force -Path '{dir}' | Out-Null; " +
+            $"[IO.File]::WriteAllBytes('{safePath}', [Convert]::FromBase64String('{b64}'))" +
+            "\"";
+        var (ok, commandOutput) = await _guest.RunCommandInGuestAsync(def.VmName, GetCred(def.GuestCredentialId), script,
+            def.GuestWorkingDir, TimeSpan.FromSeconds(30), ct);
+        if (!ok) _logger.LogError("Valheim access-list write to {Path} failed: {Out}", path, commandOutput);
+        return ok;
+    }
+
+    private static string NormalizeAccessList(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        return string.Join("\n", text.Replace("\r\n", "\n").Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0));
     }
 
     private static List<string> PreserveUnknownArgs(string[] existing)
@@ -162,9 +297,7 @@ public sealed class ValheimConfig : IGameConfig
 
             preserved.Add(arg);
             if (i + 1 < existing.Length && !existing[i + 1].StartsWith("-", StringComparison.Ordinal))
-            {
                 preserved.Add(existing[++i]);
-            }
         }
         return preserved;
     }
