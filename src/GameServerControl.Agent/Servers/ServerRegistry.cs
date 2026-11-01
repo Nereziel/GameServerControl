@@ -44,7 +44,8 @@ public sealed class ServerRegistry
                 PropertyNameCaseInsensitive = true,
                 Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
             });
-            lock (_lock) _servers = doc?.Servers?.ToList() ?? new();
+            var loaded = doc?.Servers?.Select(CuratedNetwork.Normalize).ToList() ?? new List<ServerDef>();
+            lock (_lock) _servers = loaded;
             _logger.LogInformation("Loaded {Count} servers from {Path}", _servers.Count, _path);
         }
         catch (Exception ex)
