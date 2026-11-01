@@ -26,6 +26,11 @@ Windows tray helper (optional)
    ├─ shows Agent service status
    ├─ Start / Stop / Restart Agent
    └─ launches GameServerControl updater
+
+Public Linux VPS Relay (optional)
+   ├─ receives desired routes from the Agent over Tailscale
+   ├─ opens/closes public game forwarding with server lifecycle
+   └─ DNAT + FORWARD + MASQUERADE through tailscale0
 ```
 
 The built-in web dashboard is served by the Agent itself. For remote/public access, keep the Agent private and place Cloudflare Access / Worker / Tunnel or another authenticated reverse proxy in front of it.
@@ -34,6 +39,7 @@ The built-in web dashboard is served by the Agent itself. For remote/public acce
 
 - Windows Server / Windows 10/11: full Agent feature set, including Hyper-V integration where configured, plus the optional tray helper.
 - Linux: Agent, API and Web UI; Hyper-V and Windows tray features are unavailable.
+- Linux VPS: optional `GameServerControl.Relay` for exposing game ports from a public VPS through Tailscale to a GameServerControl Agent host.
 - Release artifacts are self-contained and do not require a preinstalled .NET runtime.
 
 ## Windows install
@@ -85,6 +91,30 @@ curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/dep
 
 Then open the Agent's configured HTTP address in a browser.
 
+## Public VPS Relay install
+
+Use this on a public Linux VPS that is connected to the same Tailscale network as the GameServerControl Agent host:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/relay/install-from-release.sh | sudo bash
+```
+
+The Relay installer:
+
+- downloads the self-contained `GameServerControl.Relay` release,
+- detects the VPS public interface and Tailscale IPv4 address,
+- enables IPv4 forwarding,
+- installs and enables `gameservercontrol-relay.service`,
+- binds the Relay API to the VPS Tailscale address on port `5100` by default,
+- generates an API token on first install and preserves it during updates,
+- manages only its own `GSC_RELAY_*` iptables chains and does not rewrite `/etc/ufw/before.rules`.
+
+At the end of installation it prints the Relay API URL and token. Configure those on the Agent under `Agent:PublicRelay`, then enable **Public VPS relay** for the desired server in its Network workspace.
+
+When an enabled game server starts, the Agent sends the desired route to the VPS Relay over Tailscale. The Relay creates DNAT/FORWARD/MASQUERADE rules for that server. When the server stops, the Agent removes the route again.
+
+The VPS provider/cloud firewall must still allow the selected public game ports.
+
 ## Web UI
 
 The Web UI is the primary control surface. It supports:
@@ -101,6 +131,7 @@ The Web UI is the primary control surface. It supports:
 - live log console where the game exposes a usable log
 - RCON/player management where GameServerControl has a supported handler
 - mods, marketplace search and mod updates where supported
+- Public VPS relay configuration where configured
 - API token management
 - Agent update checks and Windows self-update
 
@@ -139,6 +170,8 @@ Authorization: Bearer <token>
 
 Do not expose the Agent API directly to the public Internet. For remote administration use Tailscale or an authenticated reverse proxy such as Cloudflare Access.
 
+The optional Relay API is also bearer-token protected and is intended to be reachable over Tailscale, not the public Internet.
+
 ## Updates
 
 The Agent checks GitHub Releases for a newer version. On Windows, an Admin user can start an update directly from the Web UI. The Agent launches an updater process outside its own install directory, returns the HTTP response, then the external updater stops and replaces the Agent and starts the service again. Running game-server processes are not intentionally stopped by a GameServerControl self-update.
@@ -146,6 +179,8 @@ The Agent checks GitHub Releases for a newer version. On Windows, an Admin user 
 The Windows tray helper can also check GitHub Releases and launch the same updater. When the update starts from the tray, the tray exits so its executable can be replaced, then the non-elevated updater parent starts the new tray helper again after the elevated install finishes.
 
 A manual fallback updater shortcut is also created by the Windows installer.
+
+The Linux Relay can be updated by running the same one-line Relay install command again. Its existing API token is preserved unless explicitly overridden.
 
 ## Development
 
@@ -175,14 +210,16 @@ http://127.0.0.1:5099
 
 ## Release layout
 
-Current releases contain the Agent/Web application and Windows releases additionally contain the tray helper:
+Current releases contain the Agent/Web application, the optional Linux VPS Relay, and Windows releases additionally contain the tray helper:
 
 ```text
 GameServerControl-Agent-windows.zip
 GameServerControl-Tray-windows.zip
 GameServerControl-Agent-linux.tar.gz
+GameServerControl-Relay-linux.tar.gz
 GameServerControl-Install-Windows.ps1
 GameServerControl-Install-Linux.sh
+GameServerControl-Install-Relay.sh
 ```
 
 The former WPF desktop client remains retired; browser control is the supported administration UI. The tray helper is intentionally limited to local quick actions and does not duplicate the Web UI.
