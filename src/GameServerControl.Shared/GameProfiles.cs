@@ -87,7 +87,9 @@ public static class GameProfiles
             new[]{ "-log", "-NewConsole" },
             new[]{ @"{root}\RSDragonwilds\Saved\Savegames" }, @"{root}\RSDragonwilds\Saved\Logs\RSDragonwilds.log",
             new GameCapabilities(ManagedConfig: true, LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
-            Installable: true, EstimatedSize: "~6 GB"),
+            Notes: "Dedicated servers use UDP 7777 by default; additional local instances normally use the next port (7778, 7779, …).",
+            Installable: true, EstimatedSize: "~6 GB",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 7777) }),
 
         new("ark-asa", "ARK: Survival Ascended", "🦖", GameType.SteamGeneric, "2430930", "ArkAscended", @"ShooterGame\Binaries\Win64\ArkAscendedServer.exe",
             new[]{ "TheIsland_WP?listen?MaxPlayers=20?ServerPassword=?ServerAdminPassword=change-me" },
