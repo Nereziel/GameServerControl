@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'New release tag to create from current main (e.g. v1.1.1)'
+        description: 'New release tag to create from current main (e.g. v1.1.2)'
         required: true
 
 permissions:
@@ -23,8 +23,9 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       ref: ${{ steps.release.outputs.ref }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - name: Resolve release tag and source ref
+      - name: Resolve release tag, version and source ref
         id: release
         shell: bash
         env:
@@ -36,22 +37,23 @@ jobs:
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             tag="$INPUT_TAG"
-            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$ ]]; then
-              echo "::error::Release tag must look like v1.1.1."
-              exit 1
-            fi
-
             if git ls-remote --exit-code --tags "https://github.com/${REPOSITORY}.git" "refs/tags/${tag}" >/dev/null 2>&1; then
               echo "::error::Tag ${tag} already exists. Choose a new version; manual releases are built from current main."
               exit 1
             fi
-
-            echo "tag=$tag" >> "$GITHUB_OUTPUT"
-            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
           else
-            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-            echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+            tag="${GITHUB_REF#refs/tags/}"
           fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must look like v1.1.2."
+            exit 1
+          fi
+
+          version="${tag#v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "ref=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
   build-windows:
     name: Build Windows agent + tray
@@ -72,10 +74,33 @@ jobs:
         run: dotnet restore
 
       - name: Publish agent (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
+        run: >-
+          dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true
+          -p:Version=${{ needs.prepare.outputs.version }}
+          -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
+          -p:FileVersion=${{ needs.prepare.outputs.version }}.0
+          -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -o publish/Agent-windows
 
       - name: Publish tray helper (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Tray -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/Tray-windows
+        run: >-
+          dotnet publish src/GameServerControl.Tray -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:Version=${{ needs.prepare.outputs.version }}
+          -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
+          -p:FileVersion=${{ needs.prepare.outputs.version }}.0
+          -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -o publish/Tray-windows
+
+      - name: Verify Windows binary versions
+        shell: pwsh
+        run: |
+          $expected = '${{ needs.prepare.outputs.version }}'
+          $agent = (Get-Item 'publish/Agent-windows/GameServerControl.Agent.exe').VersionInfo.ProductVersion
+          $tray = (Get-Item 'publish/Tray-windows/GameServerControl.Tray.exe').VersionInfo.ProductVersion
+          if ($agent -ne $expected) { throw "Agent ProductVersion '$agent' does not match release '$expected'." }
+          if ($tray -ne $expected) { throw "Tray ProductVersion '$tray' does not match release '$expected'." }
+          Write-Host "Verified Agent + Tray version $expected"
 
       - name: Zip Windows packages
         shell: pwsh
@@ -114,10 +139,22 @@ jobs:
           bash -n deploy/relay/install.sh
 
       - name: Publish agent (linux-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained true -o publish/Agent-linux
+        run: >-
+          dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained true
+          -p:Version=${{ needs.prepare.outputs.version }}
+          -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
+          -p:FileVersion=${{ needs.prepare.outputs.version }}.0
+          -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -o publish/Agent-linux
 
       - name: Publish relay (linux-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Relay -c Release -r linux-x64 --self-contained true -o publish/Relay-linux
+        run: >-
+          dotnet publish src/GameServerControl.Relay -c Release -r linux-x64 --self-contained true
+          -p:Version=${{ needs.prepare.outputs.version }}
+          -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
+          -p:FileVersion=${{ needs.prepare.outputs.version }}.0
+          -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -o publish/Relay-linux
 
       - name: Stage deploy artifacts
         run: |
@@ -202,4 +239,5 @@ jobs:
                 # Public Linux VPS Relay
                 curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/relay/install-from-release.sh | sudo bash
 
+            Release binaries are stamped with version ${{ needs.prepare.outputs.version }} from the release tag.
             The Relay installer detects the VPS public interface and Tailscale IPv4, enables IPv4 forwarding, installs the systemd service, and prints the Tailscale API URL plus token to configure on the Agent.
