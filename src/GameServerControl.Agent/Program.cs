@@ -136,7 +136,8 @@ var webUiAssets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCas
     ["core.js"] = "text/javascript; charset=utf-8",
     ["server-admin.js"] = "text/javascript; charset=utf-8",
     ["jobs-mods.js"] = "text/javascript; charset=utf-8",
-    ["config-backups.js"] = "text/javascript; charset=utf-8"
+    ["config-backups.js"] = "text/javascript; charset=utf-8",
+    ["server-workspace.js"] = "text/javascript; charset=utf-8"
 };
 app.MapGet("/webui/{file}", (string file) =>
 {
