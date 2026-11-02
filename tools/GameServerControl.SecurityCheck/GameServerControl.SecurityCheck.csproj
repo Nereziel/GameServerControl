@@ -11,6 +11,8 @@
     <ProjectReference Include="../../src/GameServerControl.Shared/GameServerControl.Shared.csproj" />
     <Compile Include="../../src/GameServerControl.Agent/Auth/TokenRegistry.cs" Link="TokenRegistry.cs" />
     <Compile Include="../../src/GameServerControl.Agent/Auth/AuthenticationFailureThrottle.cs" Link="AuthenticationFailureThrottle.cs" />
+    <Compile Include="../../src/GameServerControl.Agent/Auth/FirstRunTokenGenerator.cs" Link="FirstRunTokenGenerator.cs" />
     <Compile Include="../../src/GameServerControl.Agent/Security/SecretProtector.cs" Link="SecretProtector.cs" />
+    <Compile Include="../../src/GameServerControl.Agent/Security/ConfigurationSecretStore.cs" Link="ConfigurationSecretStore.cs" />
   </ItemGroup>
 </Project>
