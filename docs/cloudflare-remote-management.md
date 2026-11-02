@@ -51,17 +51,14 @@ Remote API and SignalR/WebSocket requests require a valid Cloudflare Access JWT 
 
 The private Agent origin should be a separate Tunnel hostname protected by a Cloudflare Access `Service Auth` policy. The Worker authenticates to that hostname with an Access service token, then authenticates to GameServerControl with the Agent API token.
 
-Required Worker configuration:
+The checked-in Wrangler configuration contains no production hostnames, tokens or audience IDs. All six runtime values are declared as required secrets so a production deploy fails instead of silently using example values:
 
 - `AGENT_ORIGIN` - HTTPS hostname routed by Cloudflare Tunnel to the Agent, for example `https://gsc-origin.example.com`.
 - `ACCESS_TEAM_DOMAIN` - Cloudflare Access team domain, for example `https://example.cloudflareaccess.com`.
 - `ACCESS_POLICY_AUD` - audience tag for the Access application protecting the panel.
-
-Required Worker secrets:
-
-- `AGENT_API_TOKEN`
-- `ORIGIN_ACCESS_CLIENT_ID`
-- `ORIGIN_ACCESS_CLIENT_SECRET`
+- `AGENT_API_TOKEN` - GameServerControl Agent Admin API token.
+- `ORIGIN_ACCESS_CLIENT_ID` - Access service-token client ID for the private Tunnel origin.
+- `ORIGIN_ACCESS_CLIENT_SECRET` - Access service-token client secret for the private Tunnel origin.
 
 `workers_dev` and Worker preview URLs are disabled in the checked-in Wrangler configuration so the gateway is not accidentally exposed through an unprotected default Workers hostname.
 
@@ -125,10 +122,41 @@ npm run build
 
 The build output is generated under `src/GameServerControl.Cloud/dist/` and is intentionally ignored by Git.
 
-For local Worker development, configure Wrangler development Access identity and local secrets, then run:
+For local Worker development, create an uncommitted `src/GameServerControl.Cloud/.dev.vars` containing the six runtime values listed above, then run:
 
 ```bash
 npm run dev
 ```
 
-Cloudflare account resources are intentionally not created automatically from the repository because the account, zone, hostname, Access policy and secrets are environment-specific. The checked-in Worker and Tunnel bootstrap are ready to be connected once those values are selected, without changing or disabling local Agent administration.
+`.dev.vars` is ignored by Git.
+
+## Manual production deployment from GitHub Actions
+
+The repository contains `.github/workflows/cloudflare-deploy.yml`. It is intentionally `workflow_dispatch` only: pushes to `main` never publish the panel automatically.
+
+Configure these GitHub Actions secrets before running the workflow:
+
+```text
+CLOUDFLARE_ACCOUNT_ID
+CLOUDFLARE_API_TOKEN
+GSC_CF_AGENT_ORIGIN
+GSC_CF_ACCESS_TEAM_DOMAIN
+GSC_CF_ACCESS_POLICY_AUD
+GSC_CF_AGENT_API_TOKEN
+GSC_CF_ORIGIN_ACCESS_CLIENT_ID
+GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET
+```
+
+`CLOUDFLARE_API_TOKEN` should be scoped to the required Cloudflare account/Worker resources instead of using a global API key.
+
+The deployment workflow:
+
+1. stages the current Agent Web UI,
+2. validates that every required deployment/runtime secret is present,
+3. rejects a non-HTTPS Tunnel origin or invalid Access team domain,
+4. uploads all six runtime values as encrypted Worker secrets,
+5. runs `wrangler deploy --strict`.
+
+Because `workers_dev` and preview URLs are disabled, deploying code alone does not create an unintended public default endpoint. Configure the intended custom panel hostname and its Cloudflare Access policy explicitly.
+
+Cloudflare account resources such as the zone, Tunnel, published application, service-token policy, panel hostname and user Access policy remain environment-specific and are not silently created by a normal repository push. The Worker, deployment workflow and Tunnel bootstrap are ready to be connected to those resources without changing or disabling local Agent administration.
