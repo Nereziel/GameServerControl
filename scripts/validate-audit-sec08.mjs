@@ -21,7 +21,7 @@ const registry = read('src/GameServerControl.Agent/Servers/ServerRegistry.cs');
 const store = read('src/GameServerControl.Agent/Servers/ServerStore.cs');
 const relay = read('src/GameServerControl.Agent/Networking/PublicRelayManager.cs');
 const firstRun = read('src/GameServerControl.Agent/Auth/FirstRunTokenGenerator.cs');
-const program = read('src/GameServerControl.Agent/Program.cs');
+const certHelper = read('src/GameServerControl.Agent/Auth/CertHelper.cs');
 const winInstaller = read('deploy/windows/install.ps1');
 const linuxReleaseInstaller = read('deploy/linux/install-from-release.sh');
 const linuxSourceInstaller = read('deploy/linux/install.sh');
@@ -37,8 +37,9 @@ for (const key of ['ApiToken', 'CertPassword', 'ApiKey', 'Password'])
   requireToken(configStore, key, `Configuration migration must classify ${key} as sensitive`);
 requireToken(configStore, 'secret-state.json', 'Encrypted configuration state needs a stable file');
 requireToken(configStore, '<stored-encrypted>', 'appsettings plaintext must be replaced by a non-secret sentinel');
-requireToken(program, 'ConfigurationSecretStore', 'Configuration secrets must initialize before consumers use IConfiguration');
+requireToken(firstRun, 'MigrateAndApply', 'General configuration migration must run before auth/service consumers are instantiated');
 requireToken(firstRun, 'ConfigurationSecretStore', 'First-run bootstrap token must persist through encrypted secret state');
+requireToken(certHelper, 'ResolveEffectiveSecret', 'HTTPS certificate password must resolve encrypted state before Kestrel uses it');
 rejectToken(firstRun, '"ApiToken": "{token}"', 'First-run token must not be written into appsettings plaintext');
 
 requireToken(serverCodec, 'RconPassword', 'Server RCON password must be protected at rest');
