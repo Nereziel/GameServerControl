@@ -19,11 +19,15 @@ function rejectToken(source, token, message) {
 requireToken(auth, 'Request.Path.StartsWithSegments("/hubs/status")', 'Query-string bearer tokens must be scoped to the SignalR status hub');
 requireToken(auth, 'Request.Query.TryGetValue("access_token"', 'SignalR query-token compatibility must remain available');
 
-// Finding 5: browser credentials must not survive the browser session.
+// Finding 5: browser credentials must not survive the browser session. A one-way removeItem
+// is retained so upgrades erase credentials persisted by older localStorage-based builds.
 requireToken(core, 'sessionStorage', 'Direct Web UI credentials must use session-scoped storage');
-rejectToken(core, 'localStorage', 'Direct Web UI must not persist bearer credentials in localStorage');
+requireToken(core, 'localStorage.removeItem(CFG_KEY)', 'Direct Web UI must erase legacy persistent credentials during upgrade');
+rejectToken(core, 'localStorage.setItem', 'Direct Web UI must not persist bearer credentials in localStorage');
+rejectToken(core, 'localStorage.getItem', 'Direct Web UI must not reload bearer credentials from localStorage');
 requireToken(cloudAdapter, 'sessionStorage', 'Cloud adapter connection state must use session-scoped storage');
-rejectToken(cloudAdapter, 'localStorage', 'Cloud adapter must not persist connection state in localStorage');
+rejectToken(cloudAdapter, 'localStorage.setItem', 'Cloud adapter must not persist connection state in localStorage');
+rejectToken(cloudAdapter, 'localStorage.getItem', 'Cloud adapter must not reload connection state from localStorage');
 
 // Finding 6: repeated authentication failures must be blocked before another credential lookup.
 requireToken(auth, 'AuthenticationFailureThrottle.Shared', 'Authentication handler must use the shared failure throttle');
