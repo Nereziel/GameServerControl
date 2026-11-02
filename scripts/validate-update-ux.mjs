@@ -14,6 +14,8 @@ const linuxInstaller = read('deploy/linux/install-from-release.sh');
 required(endpoints, '/update/preflight', 'Agent must expose update preflight');
 required(updater, 'GetPreflight', 'Update service must calculate readiness');
 required(ui, 'openUpdate', 'Web UI must expose the update workflow');
+required(ui, '/api/update/preflight', 'Update modal must read update readiness');
+required(ui, 'Update readiness', 'Update modal must show update readiness');
 required(ui, 'startSelfUpdate', 'Web UI must be able to start the Agent updater');
 required(ui, 'waitForAgentRestart', 'Web UI must reconnect after an update');
 required(windowsInstaller, 'Rollback previous Agent payload', 'Windows installer must contain rollback path');
