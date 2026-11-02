@@ -1,12 +1,13 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// On first startup, if Agent:ApiToken is empty or a known placeholder, generates a
-/// random 32-byte token, writes it back to appsettings.json, and prints it once.
+/// random 32-byte token and persists it to the restricted appsettings.json state file.
 /// </summary>
 public static class FirstRunTokenGenerator
 {
@@ -48,22 +49,17 @@ public static class FirstRunTokenGenerator
                 return true;
             }
 
-            var tmp = appsettingsPath + ".tmp";
-            File.WriteAllText(tmp, updated);
-            if (File.Exists(appsettingsPath))
-                File.Replace(tmp, appsettingsPath, appsettingsPath + ".bak");
-            else
-                File.Move(tmp, appsettingsPath);
+            var backup = appsettingsPath + ".bak";
+            File.Copy(appsettingsPath, backup, overwrite: true);
+            SecretFilePermissions.RestrictExisting(backup);
+            SecretFilePermissions.WriteAllTextAtomic(appsettingsPath, updated);
 
-            logger.LogInformation("Generated new agent API token (prefix {Prefix}…). Full token saved to appsettings.json.", token[..Math.Min(8, token.Length)]);
+            logger.LogInformation("Generated a new agent API token. The credential was saved to the restricted appsettings.json state file.");
             Console.WriteLine();
             Console.WriteLine("====================================================================");
-            Console.WriteLine("  GENERATED NEW AGENT API TOKEN — copy this into your client now:");
-            Console.WriteLine();
-            Console.WriteLine($"     {token}");
-            Console.WriteLine();
-            Console.WriteLine("  Saved to: " + appsettingsPath);
-            Console.WriteLine("  This message only appears once. Subsequent boots reuse the token.");
+            Console.WriteLine("  Generated a new Agent API token and saved it to the restricted state file:");
+            Console.WriteLine("  " + appsettingsPath);
+            Console.WriteLine("  The credential itself is intentionally not written to service stdout.");
             Console.WriteLine("====================================================================");
             Console.WriteLine();
         }
@@ -76,12 +72,17 @@ public static class FirstRunTokenGenerator
 
     private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, string token, ILogger logger)
     {
-        if (File.Exists(appsettingsPath)) return;
+        if (File.Exists(appsettingsPath))
+        {
+            SecretFilePermissions.RestrictExisting(appsettingsPath);
+            return;
+        }
 
         var examplePath = Path.Combine(baseDir, "appsettings.json.example");
         if (File.Exists(examplePath))
         {
             File.Copy(examplePath, appsettingsPath, overwrite: false);
+            SecretFilePermissions.RestrictExisting(appsettingsPath);
             logger.LogInformation("Created appsettings.json from appsettings.json.example.");
             return;
         }
@@ -109,7 +110,9 @@ public static class FirstRunTokenGenerator
                 GuestCredentials = new Dictionary<string, object>()
             }
         };
-        File.WriteAllText(appsettingsPath, JsonSerializer.Serialize(fallback, new JsonSerializerOptions { WriteIndented = true }));
+        SecretFilePermissions.WriteAllTextAtomic(
+            appsettingsPath,
+            JsonSerializer.Serialize(fallback, new JsonSerializerOptions { WriteIndented = true }));
         logger.LogWarning("appsettings.json.example was missing; created a minimal appsettings.json instead.");
     }
 
