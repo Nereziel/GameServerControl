@@ -80,6 +80,72 @@ public sealed class PublicRelayManager
 
     public bool Configured => SnapshotGlobal().Configured;
 
+    public async Task<PublicRelayGlobalStatus> GetGlobalStatusAsync(CancellationToken ct = default)
+    {
+        var global = SnapshotGlobal();
+        string? target = null;
+        string? error = null;
+
+        try { target = ResolveTargetAddress(global.TargetAddress); }
+        catch (Exception ex) { error = ex.Message; }
+
+        var reachable = false;
+        if (global.Configured)
+        {
+            try
+            {
+                using var response = await SendAsync(HttpMethod.Get, "/api/health", null, global, ct);
+                reachable = response.IsSuccessStatusCode;
+                if (!reachable && error is null) error = await ResponseErrorAsync(response, ct);
+            }
+            catch (Exception ex) { if (error is null) error = ex.Message; }
+        }
+        else if (error is null)
+        {
+            error = "Public relay is not configured on this Agent.";
+        }
+
+        return new PublicRelayGlobalStatus(
+            global.Configured,
+            reachable,
+            global.Url,
+            !string.IsNullOrWhiteSpace(global.ApiToken),
+            global.TargetAddress,
+            target,
+            global.PublicAddress,
+            error);
+    }
+
+    public async Task<PublicRelayGlobalStatus> SaveGlobalAsync(PublicRelayGlobalSettings settings, CancellationToken ct = default)
+    {
+        if (settings is null) throw new ArgumentNullException(nameof(settings));
+        await _mutationGate.WaitAsync(ct);
+        try
+        {
+            var currentGlobal = SnapshotGlobal();
+            var candidateGlobal = CandidateGlobal(currentGlobal, settings);
+            ValidateGlobal(candidateGlobal);
+
+            var connectionChanged = !string.Equals(currentGlobal.Url, candidateGlobal.Url, StringComparison.OrdinalIgnoreCase) ||
+                                    !string.Equals(currentGlobal.ApiToken, candidateGlobal.ApiToken, StringComparison.Ordinal);
+            if (connectionChanged && currentGlobal.Configured)
+                await RemoveRoutesFromOldRelayBestEffortAsync(currentGlobal, ct);
+
+            lock (_stateGate)
+            {
+                _baseUrl = candidateGlobal.Url;
+                _apiToken = candidateGlobal.ApiToken;
+                _configuredTarget = candidateGlobal.TargetAddress;
+                _publicAddress = candidateGlobal.PublicAddress;
+                SaveStateLocked();
+            }
+            _lastApplied.Clear();
+
+            return await GetGlobalStatusAsync(ct);
+        }
+        finally { _mutationGate.Release(); }
+    }
+
     public PublicRelayServerSettings SettingsFor(string serverId)
     {
         lock (_stateGate)
@@ -274,6 +340,15 @@ public sealed class PublicRelayManager
     }
 
     private GlobalSnapshot CandidateGlobal(GlobalSnapshot current, PublicRelayServerSettings settings)
+    {
+        var url = settings.RelayUrl is null ? current.Url : settings.RelayUrl.Trim().TrimEnd('/');
+        var token = settings.RelayApiToken is null ? current.ApiToken : settings.RelayApiToken.Trim();
+        var target = settings.TargetAddress is null ? current.TargetAddress : NullIfBlank(settings.TargetAddress);
+        var publicAddress = settings.PublicAddress is null ? current.PublicAddress : NullIfBlank(settings.PublicAddress);
+        return new GlobalSnapshot(url, token, target, publicAddress);
+    }
+
+    private GlobalSnapshot CandidateGlobal(GlobalSnapshot current, PublicRelayGlobalSettings settings)
     {
         var url = settings.RelayUrl is null ? current.Url : settings.RelayUrl.Trim().TrimEnd('/');
         var token = settings.RelayApiToken is null ? current.ApiToken : settings.RelayApiToken.Trim();
