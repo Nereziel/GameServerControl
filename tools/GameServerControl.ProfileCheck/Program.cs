@@ -127,11 +127,11 @@ CheckSyntaxValid("settings.xml", "<settings><port>2456</port></settings>");
 CheckSyntaxInvalid("settings.xml", "<settings>");
 CheckSyntaxValid("plugin.ini", "[General]\nEnabled = true");
 CheckSyntaxInvalid("plugin.ini", "[General\nEnabled = true");
-CheckSyntaxValid("plugin.properties", "enabled=true\nname=Example");
-CheckSyntaxInvalid("plugin.properties", "brokenLineWithoutSeparator");
+CheckSyntaxValid("plugin.properties", "enabled=true\nkeyWithoutValue\nname=Example");
+CheckSyntaxInvalid("plugin.properties", "name=bad\\u12G4");
 CheckSyntaxValid("plugin.toml", "[server]\nenabled = true\nports = [2456, 2457]");
 CheckSyntaxInvalid("plugin.toml", "[server\nenabled = true");
-CheckSyntaxValid("plugin.yaml", "server:\n  enabled: true\n  port: 2456");
+CheckSyntaxValid("plugin.yaml", "server:\n  enabled: true\n  description: \"multi\n    line value\"");
 CheckSyntaxInvalid("plugin.yaml", "server:\n\tenabled: true");
 
 if (failures.Count == 0)
