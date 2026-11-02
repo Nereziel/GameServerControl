@@ -30,6 +30,7 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) { throw "$script`n$((($parseErrors | ForEach-Object { $_.Message }) -join "`n"))" }
           }
+          & ./scripts/validate-windows-updater.ps1
 
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
@@ -42,6 +43,9 @@ jobs:
 
       - name: Validate mod/plugin management
         run: node scripts/validate-mod-management.mjs
+
+      - name: Validate audit SEC-03 through SEC-06
+        run: node scripts/validate-audit-sec03-sec06.mjs
 
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
@@ -129,6 +133,9 @@ jobs:
 
       - name: Validate mod/plugin management
         run: node scripts/validate-mod-management.mjs
+
+      - name: Validate audit SEC-03 through SEC-06
+        run: node scripts/validate-audit-sec03-sec06.mjs
 
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release

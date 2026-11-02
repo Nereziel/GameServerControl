@@ -11,6 +11,7 @@
 #   GSC_VERSION    — pin a tag like v1.0.8 (default: latest)
 
 set -euo pipefail
+umask 077
 
 REPO="${GSC_REPO:-Nereziel/GameServerControl}"
 INSTALL_DIR="${GSC_INSTALL:-/opt/gameservercontrol/agent}"
@@ -66,6 +67,15 @@ if systemctl is-active --quiet "$UNIT_NAME"; then
     ok "Stopped."
 fi
 
+if [[ -d "$INSTALL_DIR" ]]; then
+    step "Restricting existing Agent state before upgrade"
+    chmod 700 "$INSTALL_DIR"
+    for f in appsettings.json servers.json tokens.json public-relay.json appsettings.json.bak servers.json.bak; do
+        [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
+    done
+    ok "Existing Agent state permissions restricted."
+fi
+
 step "Installing into $INSTALL_DIR"
 preserve_dir="$tmp_dir/preserved"
 mkdir -p "$preserve_dir"
@@ -85,6 +95,7 @@ elif [[ -d "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
 fi
 mkdir -p "$INSTALL_DIR"
+chmod 700 "$INSTALL_DIR"
 tar -xzf "$tmp_dir/agent.tar.gz" -C "$INSTALL_DIR"
 
 for f in appsettings.json servers.json tokens.json public-relay.json; do
@@ -124,6 +135,10 @@ else
     skip "Already exists."
 fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+chmod 700 "$INSTALL_DIR"
+for f in appsettings.json servers.json tokens.json public-relay.json; do
+    [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
+done
 
 step "Installing systemd unit"
 unit_src="$INSTALL_DIR/$UNIT_NAME"
@@ -160,16 +175,8 @@ else
     fail "Service did not become active. Check: journalctl -u $UNIT_NAME -n 50"
 fi
 
-step "Reading the persisted API token"
-api_token="$(grep -oP '"ApiToken"\s*:\s*"\K[^"]+' "$INSTALL_DIR/appsettings.json" | head -1 || true)"
-if [[ -n "$api_token" && "$api_token" != "REPLACE_WITH_32_CHARS+" ]]; then
-    echo ""
-    echo -e "${YELLOW}   ----- AGENT API TOKEN (keep this private) -----${NC}"
-    echo "   $api_token"
-    echo -e "${YELLOW}   -----------------------------------------------${NC}"
-else
-    warn "API token is still a placeholder. Check the service log and $INSTALL_DIR/appsettings.json."
-fi
+step "Secret state"
+ok "API credentials remain only in restricted local state files; plaintext tokens are not printed to service or installer stdout."
 
 echo ""
 echo "Installed $tag."

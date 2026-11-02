@@ -435,6 +435,7 @@ public sealed class PublicRelayManager
         try
         {
             if (!File.Exists(_statePath)) return new StateDocument();
+            SecretFilePermissions.RestrictExisting(_statePath);
             return JsonSerializer.Deserialize<StateDocument>(File.ReadAllText(_statePath), JsonOptions) ?? new StateDocument();
         }
         catch (Exception ex)
@@ -446,13 +447,9 @@ public sealed class PublicRelayManager
 
     private void SaveStateLocked()
     {
-        var dir = Path.GetDirectoryName(_statePath);
-        if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
         var global = new StoredGlobalSettings(_baseUrl, _apiToken, _configuredTarget, _publicAddress);
         var json = JsonSerializer.Serialize(new StateDocument { Global = global, Servers = _settings }, JsonOptions);
-        var tmp = _statePath + ".tmp";
-        File.WriteAllText(tmp, json);
-        File.Move(tmp, _statePath, overwrite: true);
+        SecretFilePermissions.WriteAllTextAtomic(_statePath, json);
     }
 
     private static void ValidateRange(int start, int? endRaw, string kind, string name)

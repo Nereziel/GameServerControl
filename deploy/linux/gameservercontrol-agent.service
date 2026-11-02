@@ -9,6 +9,7 @@ Wants=network-online.target
 # The installer creates this account and owns the managed game/backup roots below.
 User=gsc
 Group=gsc
+UMask=0077
 
 WorkingDirectory=/opt/gameservercontrol/agent
 ExecStart=/opt/gameservercontrol/agent/GameServerControl.Agent
