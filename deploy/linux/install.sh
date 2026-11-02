@@ -34,7 +34,7 @@ fi
 if ! command -v dotnet >/dev/null 2>&1; then
   echo "ERROR: dotnet CLI not found. Install .NET 8 SDK first:"
   echo "  Debian/Ubuntu: https://learn.microsoft.com/dotnet/core/install/linux-ubuntu"
-  echo "  Fedora/RHEL:   https://learn.microsoft.com/dotnet/core/install-linux-rhel"
+  echo "  Fedora/RHEL:   https://learn.microsoft.com/dotnet/core/install/linux-rhel"
   exit 1
 fi
 
