@@ -4,17 +4,17 @@ import { fetchAgentHealth } from '../src/index.js';
 
 const env = {
   AGENT_ORIGIN: 'https://gsc-origin.example.com',
-  AGENT_API_TOKEN: 'agent-token-value',
+  AGENT_READONLY_TOKEN: 'agent-readonly-token-value',
   ORIGIN_ACCESS_CLIENT_ID: 'service-client-id',
   ORIGIN_ACCESS_CLIENT_SECRET: 'service-client-secret'
 };
 
-test('fetchAgentHealth authenticates to the Tunnel origin and Agent', async () => {
+test('fetchAgentHealth authenticates to the Tunnel origin and Agent with the ReadOnly token', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init = {}) => {
     assert.equal(String(input), 'https://gsc-origin.example.com/api/health');
     const headers = new Headers(init.headers);
-    assert.equal(headers.get('authorization'), 'Bearer agent-token-value');
+    assert.equal(headers.get('authorization'), 'Bearer agent-readonly-token-value');
     assert.equal(headers.get('cf-access-client-id'), 'service-client-id');
     assert.equal(headers.get('cf-access-client-secret'), 'service-client-secret');
     return Response.json({ ok: true, ts: '2026-11-02T10:00:00Z' });
