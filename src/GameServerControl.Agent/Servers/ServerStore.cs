@@ -186,7 +186,7 @@ public sealed class ServerStore
     {
         var doc = new ServersFile { Servers = list.ToArray() };
         var json = JsonSerializer.Serialize(doc, JsonOpts);
-        SecretFilePermissions.WriteAllTextAtomic(_path, json);
+        SecretFilePermissions.WriteAllTextAtomic(_path, json, _path + ".bak");
     }
 
     private sealed class ServersFile
