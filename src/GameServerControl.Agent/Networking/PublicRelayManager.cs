@@ -315,7 +315,7 @@ public sealed class PublicRelayManager
 
         foreach (var extra in overrides)
         {
-            if (!targetPorts.Any(p => p.Protocol == extra.Protocol && p.Name.Equals(target.Name, StringComparison.OrdinalIgnoreCase)))
+            if (!targetPorts.Any(p => p.Protocol == extra.Protocol && p.Name.Equals(extra.Name, StringComparison.OrdinalIgnoreCase)))
                 throw new ArgumentException($"Public relay override '{extra.Name}' does not match a current server network port.");
         }
 
