@@ -1,0 +1,59 @@
+name: Apply PERF-02 pruning throttle
+
+on:
+  push:
+    branches: [fix/audit-perf01-perf02]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/audit-perf01-perf02
+      - name: Apply and verify pruning throttle
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/GameServerControl.Agent/Servers/ServerInstaller.cs')
+          text = p.read_text()
+          replacements = [
+            (
+              '    private readonly ConcurrentDictionary<string, JobState> _jobs = new();\n',
+              '    private readonly ConcurrentDictionary<string, JobState> _jobs = new();\n    private readonly object _pruneGate = new();\n    private DateTimeOffset _nextPruneAt = DateTimeOffset.MinValue;\n'
+            ),
+            (
+              '    public string StartJob(InstallServerRequest request)\n    {\n        PruneCompletedJobs();\n',
+              '    public string StartJob(InstallServerRequest request)\n    {\n        PruneCompletedJobs(force: true);\n'
+            ),
+            (
+              '        if (finished) PruneCompletedJobs();\n    }\n\n    private void PruneCompletedJobs()\n    {\n        var snapshots = new List<InstallProgress>(_jobs.Count);',
+              '        if (finished) PruneCompletedJobs(force: true);\n    }\n\n    private void PruneCompletedJobs(bool force = false)\n    {\n        var now = DateTimeOffset.UtcNow;\n        lock (_pruneGate)\n        {\n            if (!force && now < _nextPruneAt) return;\n            _nextPruneAt = now.AddMinutes(1);\n        }\n\n        var snapshots = new List<InstallProgress>(_jobs.Count);'
+            ),
+            (
+              '        foreach (var jobId in InstallJobRetention.SelectEvictions(snapshots, DateTimeOffset.UtcNow))\n',
+              '        foreach (var jobId in InstallJobRetention.SelectEvictions(snapshots, now))\n'
+            ),
+          ]
+          for old, new in replacements:
+              if new in text:
+                  continue
+              if old not in text:
+                  raise SystemExit('expected ServerInstaller fragment not found')
+              text = text.replace(old, new, 1)
+          p.write_text(text)
+          PY
+          node scripts/validate-perf01-perf02.mjs
+          dotnet run --project tools/GameServerControl.PerformanceCheck -c Release
+          dotnet build src/GameServerControl.Agent -c Release
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/GameServerControl.Agent/Servers/ServerInstaller.cs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'perf: throttle completed-job pruning on reads'
+          git push origin HEAD:fix/audit-perf01-perf02
