@@ -6,6 +6,7 @@
 # Requires sudo for systemd integration + user creation.
 
 set -euo pipefail
+umask 077
 
 INSTALL_DIR="${INSTALL_DIR:-/opt/gameservercontrol/agent}"
 SERVICE_USER="${SERVICE_USER:-gsc}"
@@ -73,6 +74,10 @@ if [[ ! -f "$INSTALL_DIR/servers.json" ]]; then
 fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
+chmod 700 "$INSTALL_DIR"
+for f in appsettings.json servers.json tokens.json public-relay.json; do
+  [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
+done
 
 # 7) Install systemd unit. The shipped unit grants write access to /srv/gameservers and the
 # default backup root. Custom GAME_ROOT/BACKUP_ROOT values require a matching systemd override.
@@ -85,13 +90,11 @@ systemctl daemon-reload
 systemctl enable "$UNIT_NAME"
 systemctl start "$UNIT_NAME"
 
-# 8) Show the generated token (from journalctl)
+# 8) Do not scrape or print the generated credential from journald/stdout.
 sleep 2
 echo
-echo "=== Generated API token (copy this into your client/web UI) ==="
-journalctl -u "$UNIT_NAME" --no-pager --since "1 minute ago" 2>/dev/null \
-  | grep -A 2 "GENERATED NEW AGENT API TOKEN" \
-  || echo "(no token printed — likely already set in appsettings.json)"
+echo "=== Secret state ==="
+echo "API credentials remain in restricted local state files and are not printed to installer/service stdout."
 
 echo
 echo "=== Done ==="
