@@ -36,7 +36,13 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             if (s.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
                 presented = s.Substring("Bearer ".Length).Trim();
         }
-        if (presented is null && Request.Query.TryGetValue("access_token", out var q))
+
+        // SignalR's browser transport may need to send its bearer token through the
+        // access_token query parameter. Do not accept query-string credentials on normal
+        // API routes, where URLs can be retained by logs, history and intermediary tooling.
+        if (presented is null &&
+            Request.Path.StartsWithSegments("/hubs/status") &&
+            Request.Query.TryGetValue("access_token", out var q))
             presented = q.ToString();
 
         if (string.IsNullOrEmpty(presented))
