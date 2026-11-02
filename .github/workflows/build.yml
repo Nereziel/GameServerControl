@@ -46,6 +46,9 @@ jobs:
       - name: Validate backup lifecycle
         run: node scripts/validate-backup-lifecycle.mjs
 
+      - name: Validate backup workspace UI
+        run: node scripts/validate-backup-ui.mjs
+
       - name: Restore
         run: dotnet restore
 
@@ -111,6 +114,9 @@ jobs:
 
       - name: Validate backup lifecycle
         run: node scripts/validate-backup-lifecycle.mjs
+
+      - name: Validate backup workspace UI
+        run: node scripts/validate-backup-ui.mjs
 
       - name: Validate Cloudflare Worker bundle
         working-directory: src/GameServerControl.Cloud
