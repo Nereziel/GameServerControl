@@ -6,10 +6,12 @@ const indexHtml = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
 const webUiSources = fs.readdirSync(webUiDir)
   .filter(name => /\.(?:html|js)$/i.test(name))
   .map(name => [name, fs.readFileSync(path.join(webUiDir, name), 'utf8')]);
-const program = fs.readFileSync('src/GameServerControl.Agent/Program.cs', 'utf8');
+const roleMiddleware = fs.readFileSync('src/GameServerControl.Agent/Auth/RoleEnforcementMiddleware.cs', 'utf8');
 const securityHeadersPath = 'src/GameServerControl.Agent/Security/WebSecurityHeadersMiddleware.cs';
 const securityHeaders = fs.existsSync(securityHeadersPath) ? fs.readFileSync(securityHeadersPath, 'utf8') : '';
 const cloudWorker = fs.readFileSync('src/GameServerControl.Cloud/src/index.js', 'utf8');
+const cloudAdapter = fs.readFileSync('src/GameServerControl.Cloud/static/cloud-adapter.js', 'utf8');
+const cloudBuild = fs.readFileSync('src/GameServerControl.Cloud/scripts/build.mjs', 'utf8');
 
 function requireToken(source, token, message) {
   if (!source.includes(token)) throw new Error(`${message}: missing ${token}`);
@@ -20,7 +22,7 @@ function rejectPattern(source, pattern, message, fileName) {
   if (match) throw new Error(`${message} in ${fileName}: ${match[0]}`);
 }
 
-for (const [name, source] of webUiSources) {
+for (const [name, source] of [...webUiSources, ['cloud-adapter.js', cloudAdapter]]) {
   rejectPattern(source, /\bon(?:click|change|input|keydown|keyup|submit|focus|blur)\s*=/i,
     'SEC-07 forbids inline DOM event-handler attributes', name);
   rejectPattern(source, /\.on(?:click|change|input|keydown|keyup|submit|focus|blur)\s*=/i,
@@ -33,10 +35,13 @@ for (const [name, source] of webUiSources) {
 
 rejectPattern(indexHtml, /<script(?![^>]*\bsrc\s*=)[^>]*>[\s\S]*?<\/script>/i,
   'SEC-07 requires all executable JavaScript to come from external same-origin files', 'index.html');
-requireToken(indexHtml, '/webui/control-room.js', 'SEC-07 must externalize the control-room script');
-requireToken(indexHtml, '/webui/workspace-overrides.js', 'SEC-07 must externalize workspace/delete overrides');
+requireToken(indexHtml, '/webui/core.js', 'SEC-07 must keep control-room logic in an external same-origin script');
+requireToken(indexHtml, '/webui/server-workspace.js', 'SEC-07 must keep workspace logic in an external same-origin script');
+rejectPattern(cloudBuild, /<script>[^<]*GSC_CLOUD_MODE/i,
+  'Cloud staging must not inject an inline executable bootstrap', 'build.mjs');
+requireToken(cloudBuild, '/webui/cloud-adapter.js', 'Cloud staging must use the external adapter script');
 
-requireToken(program, 'WebSecurityHeadersMiddleware', 'Agent pipeline must install the WebUI security-header middleware');
+requireToken(roleMiddleware, 'WebSecurityHeadersMiddleware.Apply', 'The registered Agent middleware must apply WebUI security headers');
 requireToken(securityHeaders, 'Content-Security-Policy', 'Agent must emit a Content-Security-Policy header');
 requireToken(securityHeaders, "script-src 'self'", 'Agent CSP must restrict scripts to same-origin files');
 requireToken(securityHeaders, "script-src-attr 'none'", 'Agent CSP must disable inline event-handler attributes');
