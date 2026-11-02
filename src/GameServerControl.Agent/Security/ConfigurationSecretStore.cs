@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using GameServerControl.Shared;
@@ -21,7 +22,11 @@ public sealed class ConfigurationSecretStore
     {
         "", "REPLACE_WITH_32_CHARS+", "CHANGE_ME", "your-token-here", "<generate>", Sentinel
     };
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
 
     private readonly string _appsettingsPath;
     private readonly string _statePath;
@@ -145,6 +150,8 @@ public sealed class ConfigurationSecretStore
                 return effectiveValue;
             if (_values.TryGetValue(path, out var protectedValue))
                 return _protector.Unprotect(protectedValue, Purpose(path));
+            if (disk is not null && string.Equals(disk.Value, Sentinel, StringComparison.Ordinal))
+                throw new InvalidOperationException($"Encrypted configuration state is missing required secret '{path}'.");
             return effectiveValue;
         }
     }
