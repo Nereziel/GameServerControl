@@ -22,7 +22,7 @@ jobs:
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
-      - name: Validate SEC-08 source contract
-        run: node scripts/validate-audit-sec08.mjs
       - name: Validate secret behavior
         run: dotnet run --project tools/GameServerControl.SecurityCheck -c Release
+      - name: Validate SEC-08 source contract
+        run: node scripts/validate-audit-sec08.mjs
