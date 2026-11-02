@@ -54,17 +54,17 @@ public sealed class ServerRegistry
             SecretFilePermissions.RestrictExisting(_path);
             var raw = ReadStoredServers(_path);
             var migratePrimary = raw.Any(s => ServerSecretStorage.NeedsProtection(s, _protector));
-            var loaded = raw
-                .Select(s => CuratedNetwork.Normalize(ServerSecretStorage.UnprotectFromStorage(s, _protector)))
-                .ToList();
-            lock (_lock) _servers = loaded;
-
             if (migratePrimary)
             {
                 WriteProtectedServers(_path, raw);
                 _logger.LogInformation("Migrated persisted server credentials to encrypted storage in {Path}", _path);
             }
             MigrateBackupIfNeeded(_path + ".bak");
+
+            var loaded = raw
+                .Select(s => CuratedNetwork.Normalize(ServerSecretStorage.UnprotectFromStorage(s, _protector)))
+                .ToList();
+            lock (_lock) _servers = loaded;
             _logger.LogInformation("Loaded {Count} servers from {Path}", _servers.Count, _path);
         }
         catch (Exception ex)
@@ -81,7 +81,7 @@ public sealed class ServerRegistry
 
     private void WriteProtectedServers(string path, IEnumerable<ServerDef> servers)
     {
-        var protectedServers = servers.Select(s => ServerSecretStorage.ProtectForStorage(s, _protector)).ToArray();
+        var protectedServers = servers.Select(s => ServerSecretStorage.ProtectExistingForMigration(s, _protector)).ToArray();
         var json = JsonSerializer.Serialize(new ServersFile { Servers = protectedServers }, JsonOpts);
         SecretFilePermissions.WriteAllTextAtomic(path, json);
     }
