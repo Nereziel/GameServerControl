@@ -19,7 +19,7 @@ public static class SecretFilePermissions
             File.SetUnixFileMode(fullPath, PrivateFileMode);
     }
 
-    public static void WriteAllTextAtomic(string path, string contents)
+    public static void WriteAllTextAtomic(string path, string contents, string? backupPath = null)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Secret file path is required.", nameof(path));
 
@@ -29,6 +29,19 @@ public static class SecretFilePermissions
         Directory.CreateDirectory(directory);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(directory, PrivateDirectoryMode);
+
+        string? fullBackupPath = null;
+        if (!string.IsNullOrWhiteSpace(backupPath))
+        {
+            fullBackupPath = Path.GetFullPath(backupPath);
+            var backupDirectory = Path.GetDirectoryName(fullBackupPath)
+                ?? throw new ArgumentException("Secret backup path must have a parent directory.", nameof(backupPath));
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (!string.Equals(Path.GetFullPath(backupDirectory), Path.GetFullPath(directory), comparison))
+                throw new ArgumentException("Secret backup must be stored in the same restricted directory as the primary file.", nameof(backupPath));
+            if (string.Equals(fullBackupPath, fullPath, comparison))
+                throw new ArgumentException("Secret backup path must differ from the primary file path.", nameof(backupPath));
+        }
 
         var tmp = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
@@ -48,6 +61,12 @@ public static class SecretFilePermissions
                 });
                 using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
                 writer.Write(contents);
+            }
+
+            if (fullBackupPath is not null && File.Exists(fullPath))
+            {
+                File.Copy(fullPath, fullBackupPath, overwrite: true);
+                RestrictExisting(fullBackupPath);
             }
 
             File.Move(tmp, fullPath, overwrite: true);
