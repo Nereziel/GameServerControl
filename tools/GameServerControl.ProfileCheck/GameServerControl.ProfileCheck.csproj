@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/GameServerControl.Shared/GameServerControl.Shared.csproj" />
+    <Compile Include="../../src/GameServerControl.Agent/Config/ServerConfigSyntaxValidator.cs" Link="ServerConfigSyntaxValidator.cs" />
   </ItemGroup>
 </Project>
