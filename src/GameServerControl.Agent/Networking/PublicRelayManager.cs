@@ -3,8 +3,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using GameServerControl.Agent.Security;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 
@@ -12,6 +14,7 @@ namespace GameServerControl.Agent.Networking;
 
 public sealed class PublicRelayManager
 {
+    private const string RelayTokenPurpose = "relay:api-token";
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -22,6 +25,7 @@ public sealed class PublicRelayManager
 
     private readonly ServerRegistry _registry;
     private readonly ILogger<PublicRelayManager> _logger;
+    private readonly SecretProtector _secretProtector;
     private string _baseUrl;
     private string _apiToken;
     private string? _configuredTarget;
@@ -57,15 +61,17 @@ public sealed class PublicRelayManager
     {
         _registry = registry;
         _logger = logger;
+        _secretProtector = new SecretProtector(env.ContentRootPath);
         var configuredState = cfg["Agent:PublicRelay:StatePath"] ?? "public-relay.json";
         _statePath = Path.IsPathRooted(configuredState) ? configuredState : Path.Combine(env.ContentRootPath, configuredState);
 
-        var state = LoadState();
+        var state = LoadState(out var migrateLegacyToken);
         _settings = new Dictionary<string, PublicRelayServerSettings>(state.Servers ?? new(), StringComparer.OrdinalIgnoreCase);
         if (state.Global is not null)
         {
             _baseUrl = state.Global.Url.TrimEnd('/');
-            _apiToken = state.Global.ApiToken;
+            _apiToken = OpenStoredToken(state.Global.ApiToken, out var tokenWasLegacy);
+            migrateLegacyToken |= tokenWasLegacy;
             _configuredTarget = NullIfBlank(state.Global.TargetAddress);
             _publicAddress = NullIfBlank(state.Global.PublicAddress);
         }
@@ -75,6 +81,12 @@ public sealed class PublicRelayManager
             _apiToken = cfg["Agent:PublicRelay:ApiToken"] ?? "";
             _configuredTarget = NullIfBlank(cfg["Agent:PublicRelay:TargetAddress"]);
             _publicAddress = NullIfBlank(cfg["Agent:PublicRelay:PublicAddress"]);
+        }
+
+        if (migrateLegacyToken)
+        {
+            lock (_stateGate) SaveStateLocked();
+            _logger.LogInformation("Migrated public relay credential to encrypted state at {Path}", _statePath);
         }
     }
 
@@ -297,23 +309,19 @@ public sealed class PublicRelayManager
 
         foreach (var target in targetPorts)
         {
-            var publicPort = overrides.FirstOrDefault(p => p.Protocol == target.Protocol &&
-                p.Name.Equals(target.Name, StringComparison.OrdinalIgnoreCase));
+            var publicPort = overrides.FirstOrDefault(p => p.Protocol == target.Protocol && p.Name.Equals(target.Name, StringComparison.OrdinalIgnoreCase));
             var publicStart = publicPort?.Port ?? target.Port;
             var publicEnd = publicPort?.EndPort ?? target.EndPort;
             ValidateRange(publicStart, publicEnd, "public", target.Name);
             ValidateRange(target.Port, target.EndPort, "target", target.Name);
             if ((publicEnd ?? publicStart) - publicStart != (target.EndPort ?? target.Port) - target.Port)
                 throw new ArgumentException($"Public port range '{target.Name}' must contain the same number of ports as its target range.");
-
             routes.Add(new RelayRoutePort(target.Name, target.Protocol, publicStart, publicEnd, target.Port, target.EndPort));
         }
 
         foreach (var extra in overrides)
-        {
             if (!targetPorts.Any(p => p.Protocol == extra.Protocol && p.Name.Equals(extra.Name, StringComparison.OrdinalIgnoreCase)))
                 throw new ArgumentException($"Public relay override '{extra.Name}' does not match a current server network port.");
-        }
 
         return new RelayRouteDefinition(def.Id, targetAddress, routes.ToArray());
     }
@@ -361,8 +369,7 @@ public sealed class PublicRelayManager
     {
         if (!string.IsNullOrWhiteSpace(global.Url))
         {
-            if (!Uri.TryCreate(global.Url, UriKind.Absolute, out var uri) ||
-                (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            if (!Uri.TryCreate(global.Url, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
                 throw new ArgumentException("Relay URL must be an absolute http:// or https:// URL, normally the VPS Tailscale IP and port 5100.");
         }
         if (!string.IsNullOrWhiteSpace(global.ApiToken) && global.ApiToken.Length < 24)
@@ -390,13 +397,11 @@ public sealed class PublicRelayManager
     private string ResolveTargetAddress(string? configuredTarget)
     {
         if (configuredTarget is not null) return configuredTarget;
-
         var candidates = NetworkInterface.GetAllNetworkInterfaces()
             .Where(n => n.OperationalStatus == OperationalStatus.Up)
             .SelectMany(n => n.GetIPProperties().UnicastAddresses.Select(a => (Interface: n, Address: a.Address)))
             .Where(x => x.Address.AddressFamily == AddressFamily.InterNetwork && IsTailscaleAddress(x.Address))
-            .OrderByDescending(x => x.Interface.Name.Contains("tailscale", StringComparison.OrdinalIgnoreCase) ||
-                                    x.Interface.Description.Contains("tailscale", StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(x => x.Interface.Name.Contains("tailscale", StringComparison.OrdinalIgnoreCase) || x.Interface.Description.Contains("tailscale", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         if (candidates.Length == 0)
             throw new InvalidOperationException("Could not detect this Agent's Tailscale IPv4 address. Set the relay TargetAddress explicitly.");
@@ -430,13 +435,21 @@ public sealed class PublicRelayManager
         return string.IsNullOrWhiteSpace(text) ? $"Relay returned HTTP {(int)response.StatusCode}." : text;
     }
 
-    private StateDocument LoadState()
+    private StateDocument LoadState(out bool migrateLegacyToken)
     {
+        migrateLegacyToken = false;
         try
         {
             if (!File.Exists(_statePath)) return new StateDocument();
             SecretFilePermissions.RestrictExisting(_statePath);
-            return JsonSerializer.Deserialize<StateDocument>(File.ReadAllText(_statePath), JsonOptions) ?? new StateDocument();
+            var state = JsonSerializer.Deserialize<StateDocument>(File.ReadAllText(_statePath), JsonOptions) ?? new StateDocument();
+            if (state.Global is { ApiToken.Length: > 0 } global && !SecretProtector.IsProtected(global.ApiToken))
+                migrateLegacyToken = true;
+            return state;
+        }
+        catch (CryptographicException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -445,9 +458,20 @@ public sealed class PublicRelayManager
         }
     }
 
+    private string OpenStoredToken(string storedToken, out bool legacy)
+    {
+        legacy = false;
+        if (string.IsNullOrWhiteSpace(storedToken)) return "";
+        if (SecretProtector.IsProtected(storedToken))
+            return _secretProtector.Unprotect(storedToken, RelayTokenPurpose);
+        legacy = true;
+        return storedToken;
+    }
+
     private void SaveStateLocked()
     {
-        var global = new StoredGlobalSettings(_baseUrl, _apiToken, _configuredTarget, _publicAddress);
+        var storedToken = string.IsNullOrWhiteSpace(_apiToken) ? "" : _secretProtector.Protect(_apiToken, RelayTokenPurpose);
+        var global = new StoredGlobalSettings(_baseUrl, storedToken, _configuredTarget, _publicAddress);
         var json = JsonSerializer.Serialize(new StateDocument { Global = global, Servers = _settings }, JsonOptions);
         SecretFilePermissions.WriteAllTextAtomic(_statePath, json);
     }
