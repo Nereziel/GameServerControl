@@ -21,8 +21,8 @@ requireToken(roles, 'TryRedactPasswordValues', 'ReadOnly managed config response
 requireToken(roles, 'secretValues', 'ReadOnly managed config responses must expose only secret presence metadata');
 requireToken(roles, 'FileContentSuffix', 'ReadOnly raw config-file content must be explicitly denied');
 requireToken(roles, 'StatusCodes.Status403Forbidden', 'ReadOnly raw config-file content must return 403');
-rejectToken(serverView, 'RconPassword,', 'ServerViewDto must not expose the RCON password value');
-rejectToken(serverView, 'DiscordWebhookUrl,', 'ServerViewDto must not expose the Discord webhook value');
+rejectToken(serverView, 'string? RconPassword', 'ServerViewDto must not expose the RCON password value');
+rejectToken(serverView, 'string? DiscordWebhookUrl', 'ServerViewDto must not expose the Discord webhook value');
 requireToken(serverView, 'HasRconPassword', 'ServerViewDto should expose only RCON password presence');
 requireToken(serverView, 'HasDiscordWebhookUrl', 'ServerViewDto should expose only webhook presence');
 
