@@ -2,6 +2,7 @@ import fs from 'node:fs';
 
 const auth = fs.readFileSync('src/GameServerControl.Agent/Auth/TokenAuthHandler.cs', 'utf8');
 const core = fs.readFileSync('src/GameServerControl.Agent/WebUi/core.js', 'utf8');
+const cloudAdapter = fs.readFileSync('src/GameServerControl.Cloud/static/cloud-adapter.js', 'utf8');
 const program = fs.readFileSync('src/GameServerControl.Agent/Program.cs', 'utf8');
 const security = fs.readFileSync('SECURITY.md', 'utf8');
 const throttlePath = 'src/GameServerControl.Agent/Auth/AuthenticationFailureThrottle.cs';
@@ -19,9 +20,11 @@ function rejectToken(source, token, message) {
 requireToken(auth, 'Request.Path.StartsWithSegments("/hubs/status")', 'Query-string bearer tokens must be scoped to the SignalR status hub');
 requireToken(auth, 'Request.Query.TryGetValue("access_token"', 'SignalR query-token compatibility must remain available');
 
-// Finding 5: direct browser credentials must not survive the browser session.
+// Finding 5: browser credentials must not survive the browser session.
 requireToken(core, 'sessionStorage', 'Direct Web UI credentials must use session-scoped storage');
 rejectToken(core, 'localStorage', 'Direct Web UI must not persist bearer credentials in localStorage');
+requireToken(cloudAdapter, 'sessionStorage', 'Cloud adapter connection state must use session-scoped storage');
+rejectToken(cloudAdapter, 'localStorage', 'Cloud adapter must not persist connection state in localStorage');
 
 // Finding 6: repeated authentication failures must be throttled before authentication runs.
 requireToken(program, 'AddSingleton<AuthenticationFailureThrottle>()', 'Authentication failure throttle must be registered');
