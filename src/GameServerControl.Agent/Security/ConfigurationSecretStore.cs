@@ -15,19 +15,11 @@ public sealed class ConfigurationSecretStore
     private const int CurrentVersion = 1;
     private static readonly HashSet<string> SensitiveLeafNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ApiToken",
-        "CertPassword",
-        "ApiKey",
-        "Password"
+        "ApiToken", "CertPassword", "ApiKey", "Password"
     };
     private static readonly HashSet<string> PlaceholderValues = new(StringComparer.OrdinalIgnoreCase)
     {
-        "",
-        "REPLACE_WITH_32_CHARS+",
-        "CHANGE_ME",
-        "your-token-here",
-        "<generate>",
-        Sentinel
+        "", "REPLACE_WITH_32_CHARS+", "CHANGE_ME", "your-token-here", "<generate>", Sentinel
     };
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -71,42 +63,31 @@ public sealed class ConfigurationSecretStore
             if (File.Exists(_appsettingsPath))
             {
                 SecretFilePermissions.RestrictExisting(_appsettingsPath);
-                root = JsonNode.Parse(File.ReadAllText(_appsettingsPath)) as JsonObject
-                    ?? throw new InvalidOperationException("appsettings.json must contain a JSON object.");
-
+                root = LoadAppSettings();
                 if (root["Agent"] is JsonObject agent)
                 {
                     foreach (var disk in EnumerateSensitiveLeaves(agent, "Agent"))
                     {
                         seenPaths.Add(disk.Path);
                         var runtimeBefore = configuration[disk.Path];
-                        var diskHasPlaintext = IsReusableSecret(disk.Value);
-
-                        if (diskHasPlaintext)
+                        if (IsReusableSecret(disk.Value))
                         {
                             _values[disk.Path] = _protector.Protect(disk.Value, Purpose(disk.Path));
                             stateDirty = true;
                             disk.Parent[disk.Name] = Sentinel;
                             appsettingsDirty = true;
-
-                            // If the effective value came from this JSON file (or a placeholder),
-                            // keep the migrated plaintext in memory. A different non-placeholder
-                            // value indicates a higher-precedence runtime provider and is preserved.
                             if (string.Equals(runtimeBefore, disk.Value, StringComparison.Ordinal) || IsPlaceholder(runtimeBefore))
                                 configuration[disk.Path] = disk.Value;
                         }
                         else if (_values.ContainsKey(disk.Path) && !string.Equals(disk.Value, Sentinel, StringComparison.Ordinal))
                         {
-                            // The encrypted state survived while a template/placeholder config was
-                            // restored. Mark the physical file as externally stored again.
                             disk.Parent[disk.Name] = Sentinel;
                             appsettingsDirty = true;
                         }
 
                         if (_values.TryGetValue(disk.Path, out var protectedValue))
                         {
-                            var current = configuration[disk.Path];
-                            if (IsPlaceholder(current))
+                            if (IsPlaceholder(configuration[disk.Path]))
                                 configuration[disk.Path] = _protector.Unprotect(protectedValue, Purpose(disk.Path));
                         }
                         else if (string.Equals(disk.Value, Sentinel, StringComparison.Ordinal))
@@ -117,13 +98,10 @@ public sealed class ConfigurationSecretStore
                 }
             }
 
-            // Apply encrypted values whose paths are no longer present in appsettings.json,
-            // but never replace a concrete higher-precedence runtime value.
             foreach (var (path, protectedValue) in _values)
             {
                 if (seenPaths.Contains(path)) continue;
-                var current = configuration[path];
-                if (IsPlaceholder(current))
+                if (IsPlaceholder(configuration[path]))
                     configuration[path] = _protector.Unprotect(protectedValue, Purpose(path));
             }
 
@@ -132,20 +110,63 @@ public sealed class ConfigurationSecretStore
         }
     }
 
+    /// <summary>
+    /// Resolves a secret needed before the normal startup migration point. A concrete
+    /// higher-precedence runtime override is returned but never persisted. Plaintext
+    /// physically present in appsettings is still migrated and scrubbed.
+    /// </summary>
+    public string ResolveEffectiveSecret(string path, string effectiveValue)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Configuration secret path is required.", nameof(path));
+        lock (_gate)
+        {
+            var root = File.Exists(_appsettingsPath) ? LoadAppSettings() : null;
+            var disk = root is null ? null : FindLeaf(root, path);
+            var stateDirty = false;
+            var appsettingsDirty = false;
+
+            if (disk is not null && IsReusableSecret(disk.Value))
+            {
+                _values[path] = _protector.Protect(disk.Value, Purpose(path));
+                stateDirty = true;
+                disk.Parent[disk.Name] = Sentinel;
+                appsettingsDirty = true;
+            }
+            else if (disk is not null && _values.ContainsKey(path) && !string.Equals(disk.Value, Sentinel, StringComparison.Ordinal))
+            {
+                disk.Parent[disk.Name] = Sentinel;
+                appsettingsDirty = true;
+            }
+
+            if (stateDirty) SaveStateLocked();
+            if (appsettingsDirty && root is not null) SaveSanitizedAppSettings(root);
+
+            if (!IsPlaceholder(effectiveValue) && (disk is null || !string.Equals(effectiveValue, disk.Value, StringComparison.Ordinal)))
+                return effectiveValue;
+            if (_values.TryGetValue(path, out var protectedValue))
+                return _protector.Unprotect(protectedValue, Purpose(path));
+            return effectiveValue;
+        }
+    }
+
     public void SetSecret(IConfiguration configuration, string path, string value)
     {
         ArgumentNullException.ThrowIfNull(configuration);
+        SetSecretValue(path, value);
+        configuration[path] = value;
+    }
+
+    public void SetSecretValue(string path, string value)
+    {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Configuration secret path is required.", nameof(path));
         if (string.IsNullOrWhiteSpace(value)) throw new ArgumentException("Configuration secret value is required.", nameof(value));
         if (!path.StartsWith("Agent:", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Only Agent configuration secrets may be persisted.", nameof(path));
-
         lock (_gate)
         {
             _values[path] = _protector.Protect(value, Purpose(path));
             SaveStateLocked();
             ScrubAppSettingsPath(path);
-            configuration[path] = value;
         }
     }
 
@@ -165,14 +186,11 @@ public sealed class ConfigurationSecretStore
             ?? throw new InvalidOperationException("secret-state.json is empty or invalid.");
         if (doc.Version != CurrentVersion)
             throw new InvalidOperationException($"Unsupported secret-state.json version {doc.Version}.");
-
         var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (path, protectedValue) in doc.Values)
         {
             if (string.IsNullOrWhiteSpace(path) || !SecretProtector.IsProtected(protectedValue))
                 throw new InvalidOperationException("secret-state.json contains an invalid unprotected entry.");
-            // Authenticate every entry immediately so key loss/tampering fails startup rather
-            // than surfacing only when a rarely-used feature requests the credential.
             _ = _protector.Unprotect(protectedValue, Purpose(path));
             values[path] = protectedValue;
         }
@@ -181,31 +199,27 @@ public sealed class ConfigurationSecretStore
 
     private void SaveStateLocked()
     {
-        var doc = new StateDocument
-        {
-            Version = CurrentVersion,
-            Values = new Dictionary<string, string>(_values, StringComparer.OrdinalIgnoreCase)
-        };
+        var doc = new StateDocument { Version = CurrentVersion, Values = new Dictionary<string, string>(_values, StringComparer.OrdinalIgnoreCase) };
         SecretFilePermissions.WriteAllTextAtomic(_statePath, JsonSerializer.Serialize(doc, JsonOptions));
     }
+
+    private JsonObject LoadAppSettings()
+        => JsonNode.Parse(File.ReadAllText(_appsettingsPath)) as JsonObject
+           ?? throw new InvalidOperationException("appsettings.json must contain a JSON object.");
 
     private void SaveSanitizedAppSettings(JsonObject root)
     {
         var sanitized = root.ToJsonString(JsonOptions);
         SecretFilePermissions.WriteAllTextAtomic(_appsettingsPath, sanitized);
-        // Never retain a pre-migration plaintext backup. The backup is deliberately the
-        // already-sanitized representation rather than the old physical file.
         SecretFilePermissions.WriteAllTextAtomic(_appsettingsPath + ".bak", sanitized);
     }
 
     private void ScrubAppSettingsPath(string path)
     {
         if (!File.Exists(_appsettingsPath)) return;
-        var root = JsonNode.Parse(File.ReadAllText(_appsettingsPath)) as JsonObject
-            ?? throw new InvalidOperationException("appsettings.json must contain a JSON object.");
+        var root = LoadAppSettings();
         var segments = path.Split(':', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length == 0) return;
-
         JsonObject current = root;
         for (var i = 0; i < segments.Length - 1; i++)
         {
@@ -218,6 +232,20 @@ public sealed class ConfigurationSecretStore
         }
         current[segments[^1]] = Sentinel;
         SaveSanitizedAppSettings(root);
+    }
+
+    private static DiskSecret? FindLeaf(JsonObject root, string path)
+    {
+        var segments = path.Split(':', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0) return null;
+        JsonObject current = root;
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            if (current[segments[i]] is not JsonObject child) return null;
+            current = child;
+        }
+        if (current[segments[^1]] is not JsonValue value || !value.TryGetValue<string>(out var text)) return null;
+        return new DiskSecret(path, current, segments[^1], text ?? "");
     }
 
     private static IEnumerable<DiskSecret> EnumerateSensitiveLeaves(JsonObject obj, string prefix)
@@ -236,11 +264,7 @@ public sealed class ConfigurationSecretStore
         }
     }
 
-    private static bool IsReusableSecret(string? value)
-        => !IsPlaceholder(value) && !SecretProtector.IsProtected(value);
-
-    private static bool IsPlaceholder(string? value)
-        => string.IsNullOrWhiteSpace(value) || PlaceholderValues.Contains(value.Trim());
-
+    private static bool IsReusableSecret(string? value) => !IsPlaceholder(value) && !SecretProtector.IsProtected(value);
+    private static bool IsPlaceholder(string? value) => string.IsNullOrWhiteSpace(value) || PlaceholderValues.Contains(value.Trim());
     private static string Purpose(string path) => "config:" + path;
 }
