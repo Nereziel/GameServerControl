@@ -1,12 +1,23 @@
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Servers;
 
 public sealed class ServerRegistry
 {
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
+
     private readonly ILogger<ServerRegistry> _logger;
     private readonly string _path;
+    private readonly ServerSecretProtection _secretProtection;
     private readonly object _lock = new();
     private List<ServerDef> _servers = new();
 
@@ -15,6 +26,7 @@ public sealed class ServerRegistry
         _logger = logger;
         var configured = cfg["Agent:ServersJsonPath"] ?? "servers.json";
         _path = Path.IsPathRooted(configured) ? configured : Path.Combine(env.ContentRootPath, configured);
+        _secretProtection = new ServerSecretProtection(new SecretProtector(env.ContentRootPath));
         Reload();
     }
 
@@ -38,15 +50,36 @@ public sealed class ServerRegistry
                 lock (_lock) _servers = new();
                 return;
             }
+
+            SecretFilePermissions.RestrictExisting(_path);
             var json = File.ReadAllText(_path);
-            var doc = JsonSerializer.Deserialize<ServersFile>(json, new JsonSerializerOptions
+            var doc = JsonSerializer.Deserialize<ServersFile>(json, JsonOpts);
+            var migratedLegacy = false;
+            var loaded = new List<ServerDef>();
+            foreach (var stored in doc?.Servers ?? Array.Empty<ServerDef>())
             {
-                PropertyNameCaseInsensitive = true,
-                Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
-            });
-            var loaded = doc?.Servers?.Select(CuratedNetwork.Normalize).ToList() ?? new List<ServerDef>();
+                var clear = _secretProtection.UnprotectFromStorage(stored, out var legacy);
+                migratedLegacy |= legacy;
+                loaded.Add(CuratedNetwork.Normalize(clear));
+            }
+
+            if (migratedLegacy)
+            {
+                var protectedDoc = new ServersFile { Servers = loaded.Select(_secretProtection.ProtectForStorage).ToArray() };
+                var protectedJson = JsonSerializer.Serialize(protectedDoc, JsonOpts);
+                // Do not preserve the old plaintext file as a backup during migration.
+                SecretFilePermissions.WriteAllTextAtomic(_path, protectedJson);
+                SecretFilePermissions.WriteAllTextAtomic(_path + ".bak", protectedJson);
+                _logger.LogInformation("Migrated reusable server credentials to encrypted state in {Path}", _path);
+            }
+
             lock (_lock) _servers = loaded;
             _logger.LogInformation("Loaded {Count} servers from {Path}", _servers.Count, _path);
+        }
+        catch (CryptographicException ex)
+        {
+            _logger.LogCritical(ex, "Encrypted server state could not be authenticated at {Path}", _path);
+            throw;
         }
         catch (Exception ex)
         {
