@@ -15,6 +15,8 @@ requireToken(backup, 'BackupSafety.ValidateBackupFileName', 'Backup archive name
 requireToken(backup, 'BackupSafety.NormalizeArchiveEntry', 'ZIP entries must be validated before restore');
 requireToken(backup, 'RestoreBareMetalFromArchiveAsync', 'BareMetal restore must use staged restore orchestration');
 requireToken(backup, 'Safety backup failed', 'Restore must abort when the mandatory safety backup fails');
+requireToken(backup, 'Backup is incomplete', 'Backups that skipped files must be rejected for restore');
+requireToken(backup, 'Restorable: meta?.SkippedFiles is not > 0', 'Incomplete backups must be marked non-restorable in listings');
 requireToken(backup, '.gsc-restore-', 'Restore must extract into staging directories');
 requireToken(backup, '.gsc-old-', 'Restore must retain old directories for rollback during swap');
 requireToken(backup, 'BackupKind.SafetyArchive', 'Safety archives must be classified separately');
