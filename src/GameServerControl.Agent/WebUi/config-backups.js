@@ -176,7 +176,7 @@ function openAddExisting() {
   const options = existingProfiles().map(g => `<option value="${esc(g.key)}">${esc(g.label)}</option>`).join('');
   openModal(
     'Add existing server',
-    `<div class="callout info">Registers an existing installation. Pick its game profile first so saves, logs and supported features can be filled automatically.</div><div class="field"><label>Game profile</label><select id="aProfile" onchange="applyExistingProfile()"><option value="">Custom / unknown</option>${options}</select></div><div class="formgrid"><div class="field"><label>Name</label><input id="aName" placeholder="My Server"></div><div class="field"><label>Server ID</label><input id="aId" placeholder="my-server"></div></div><div class="field"><label>Server folder</label><input id="aWork" class="mono" placeholder="C:\\GameServers\\Example" oninput="applyExistingProfile(false)"></div><div class="field"><label>Server executable</label><input id="aExe" class="mono"></div><div class="formgrid"><div class="field"><label>Save folders</label><textarea id="aSaves" class="mono"></textarea></div><div id="aLogWrap" class="field"><label>Log file</label><input id="aLog" class="mono"></div></div><details class="advanced"><summary>Advanced settings</summary><div class="advanced-body"><div class="field"><label>Start args — one per line</label><textarea id="aArgs" class="mono"></textarea></div><div class="formgrid"><div class="field"><label>Steam App ID</label><input id="aSteam"></div><div class="field"><label>Game type</label><select id="aGame"><option>SteamGeneric</option><option>Windrose</option><option>Minecraft</option><option>Custom</option></select></div></div><div id="aRcon" class="hidden"><div class="section">RCON</div><div class="formgrid three"><div class="field"><label>Host</label><input id="aRhost" value="auto"></div><div class="field"><label>Port</label><input id="aRport" type="number" min="1" max="65535"></div><div class="field"><label>Password</label><input id="aRpass" type="password"></div></div></div></div></details>`,
+    `<div class="callout info">Registers an existing installation. Pick its game profile first so saves, logs and supported features can be filled automatically.</div><div class="field"><label>Game profile</label><select id="aProfile" onchange="applyExistingProfile()"><option value="">Custom / unknown</option>${options}</select></div><div class="formgrid"><div class="field"><label>Name</label><input id="aName" placeholder="My Server"></div><div class="field"><label>Server ID</label><input id="aId" placeholder="my-server"></div></div><div class="field"><label>Server folder</label><input id="aWork" class="mono" placeholder="C:\\GameServers\\Example" oninput="applyExistingProfile(false)"></div><div class="field"><label>Server executable</label><input id="aExe" class="mono"></div><div class="formgrid"><div class="field"><label>Save folders</label><textarea id="aSaves" class="mono"></textarea></div><div id="aLogWrap" class="field"><label>Log file</label><input id="aLog" class="mono"></div></div><details class="advanced"><summary>Advanced settings</summary><div class="advanced-body"><div class="field"><label>Start args — one per line</label><textarea id="aArgs" class="mono"></textarea></div><div class="formgrid three"><div class="field"><label>Steam App ID</label><input id="aSteam"></div><div class="field"><label>Game type</label><select id="aGame"><option>SteamGeneric</option><option>Windrose</option><option>Minecraft</option><option>Custom</option></select></div></div><div id="aRcon" class="hidden"><div class="section">RCON</div><div class="formgrid three"><div class="field"><label>Host</label><input id="aRhost" value="auto"></div><div class="field"><label>Port</label><input id="aRport" type="number" min="1" max="65535"></div><div class="field"><label>Password</label><input id="aRpass" type="password"></div></div></div></div></details>`,
     '<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveAddExisting()">Add server</button>',
     true
   );
@@ -588,6 +588,77 @@ window.serverConfigRestore = serverConfigRestore;
         body.appendChild(section);
       };
     }
+  };
+  setTimeout(install, 0);
+})();
+
+/* Capability-aware server administration. Raw RCON remains available only in the dedicated
+   console; this workspace exposes the standard commands explicitly advertised by the handler. */
+async function renderServerAdmin(def, body) {
+  body.innerHTML = '<div class="muted">Loading admin capabilities…</div>';
+  try {
+    const cap = await api(`/api/servers/${encodeURIComponent(def.id)}/admin/capabilities`);
+    const commands = new Set((cap.commands || []).map(String));
+    if (!cap.supported) {
+      body.innerHTML = '<div class="sw-empty">This game does not expose standard RCON administration actions.</div>';
+      return;
+    }
+    if (!cap.configured) {
+      body.innerHTML = '<div class="callout info">RCON is supported, but this server needs an RCON port and password before admin actions can run.</div>';
+      return;
+    }
+    const save = commands.has('Save') ? `<button class="btn" onclick="serverWorkspaceAdminCommand('${jsq(def.id)}','Save')">Save world</button>` : '';
+    const broadcast = commands.has('BroadcastMessage') ? `<div class="sw-section"><h3>Broadcast message</h3><div class="sw-toolbar"><input id="swAdminBroadcast" class="grow" maxlength="500" placeholder="Message to connected players"><button class="btn primary" onclick="serverWorkspaceAdminCommand('${jsq(def.id)}','BroadcastMessage',$('#swAdminBroadcast').value)">Broadcast</button></div></div>` : '';
+    const shutdown = commands.has('Shutdown') ? `<button class="btn danger" onclick="serverWorkspaceAdminCommand('${jsq(def.id)}','Shutdown')">RCON shutdown</button>` : '';
+    const playerHint = commands.has('KickPlayer') || commands.has('BanPlayer') ? '<div class="callout info">Kick and ban actions remain in the Players tab so the player identifier is selected safely.</div>' : '';
+    body.innerHTML = `<div class="sw-section"><div class="sw-toolbar"><div><h3 style="margin:0">Server administration</h3><div class="tiny muted">Only standard commands advertised by the game-specific RCON handler are shown.</div></div><div class="spacer"></div>${save}${shutdown}</div></div>${broadcast}${playerHint}`;
+  } catch (e) {
+    body.innerHTML = `<div class="callout">Admin capabilities failed: ${esc(e.message)}</div>`;
+  }
+}
+
+window.serverWorkspaceAdminCommand = async function (id, command, payload = null) {
+  if (command === 'Shutdown' && !confirm('Send the game server its RCON shutdown command?')) return;
+  if (command === 'BroadcastMessage' && !String(payload || '').trim()) return toast('Enter a broadcast message.', 'err');
+  try {
+    const result = await api(`/api/servers/${encodeURIComponent(id)}/rcon/command`, {
+      method: 'POST',
+      body: JSON.stringify({ command, payload: payload == null ? null : String(payload) })
+    });
+    toast(result?.success ? `${command} completed.` : `${command} failed: ${result?.error || 'unknown error'}`, result?.success ? 'ok' : 'err');
+  } catch (e) {
+    toast(`${command} failed: ${e.message}`, 'err');
+  }
+};
+
+(function installServerAdminWorkspace() {
+  let attempts = 0;
+  const install = () => {
+    if (typeof serverWorkspaceTabs !== 'function' || typeof renderServerWorkspaceTab !== 'function') {
+      if (++attempts < 200) setTimeout(install, 10);
+      return;
+    }
+    if (window.__gscAdminWorkspaceInstalled) return;
+    window.__gscAdminWorkspaceInstalled = true;
+
+    const baseTabs = serverWorkspaceTabs;
+    serverWorkspaceTabs = function (def) {
+      const tabs = baseTabs(def);
+      const profile = profileFor(def);
+      if (profile?.caps?.rcon && !tabs.some(x => x[0] === 'admin')) {
+        const playersIndex = tabs.findIndex(x => x[0] === 'players');
+        tabs.splice(playersIndex >= 0 ? playersIndex + 1 : Math.min(2, tabs.length), 0, ['admin', 'Admin']);
+      }
+      return tabs;
+    };
+
+    const baseRender = renderServerWorkspaceTab;
+    renderServerWorkspaceTab = async function (def, tab) {
+      if (tab !== 'admin') return baseRender(def, tab);
+      const body = $('#swTabBody');
+      if (!body) return;
+      await renderServerAdmin(def, body);
+    };
   };
   setTimeout(install, 0);
 })();
