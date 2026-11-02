@@ -19,7 +19,6 @@ requireCondition(fs.existsSync(updateTokenPath),
 
 const updateToken = read('src/GameServerControl.Agent/Auth/UpdateHealthToken.cs');
 const auth = read('src/GameServerControl.Agent/Auth/TokenAuthHandler.cs');
-const program = read('src/GameServerControl.Agent/Program.cs');
 const checker = read('src/GameServerControl.Agent/Notifications/UpdateChecker.cs');
 const windows = read('deploy/windows/install.ps1');
 const linux = read('deploy/linux/install-from-release.sh');
@@ -28,12 +27,12 @@ requireCondition(updateToken.includes('.update-health-token'),
   'BUG-02: temporary update-health credential must use the reserved local state file.');
 requireCondition(/CryptographicOperations\.FixedTimeEquals/.test(updateToken),
   'BUG-02: update-health token comparison must be constant-time.');
-requireCondition(/Request\.Path[^\n]*\/api\/health/.test(auth) && /UpdateHealthToken/.test(auth),
+requireCondition(/string\.Equals\(Request\.Path\.Value, "\/api\/health"/.test(auth) && /UpdateHealthToken\.IsValid/.test(auth),
   'BUG-02: temporary update credential must be accepted only on exact /api/health authentication.');
+requireCondition(/X-GameServerControl-Version/.test(auth) && /X-GameServerControl-Pid/.test(auth),
+  'BUG-02: authenticated update-health response must expose running version and process id metadata.');
 requireCondition(/public string CurrentVersion/.test(checker),
   'BUG-02: UpdateChecker must expose the running assembly version independently of the latest release.');
-requireCondition(/MapGet\("\/health"[\s\S]{0,500}version[\s\S]{0,200}Environment\.ProcessId/.test(program),
-  'BUG-02: authenticated /api/health must report running version and process id.');
 
 for (const [name, text] of [['Windows installer', windows], ['Linux installer', linux]]) {
   requireCondition(text.includes('.update-health-token'),
@@ -46,8 +45,10 @@ for (const [name, text] of [['Windows installer', windows], ['Linux installer', 
     `BUG-02: ${name} health gate must have a bounded 30-second verification window.`);
   requireCondition(/consecutive|Consecutive/.test(text) && /3/.test(text),
     `BUG-02: ${name} must require three consecutive successful health probes.`);
-  requireCondition(/version/i.test(text) && /expected/i.test(text),
-    `BUG-02: ${name} must compare the health response to the expected release version.`);
+  requireCondition(/X-GameServerControl-Version/.test(text) && /expected/i.test(text),
+    `BUG-02: ${name} must compare the authenticated health response to the expected release version.`);
+  requireCondition(/X-GameServerControl-Pid/.test(text),
+    `BUG-02: ${name} must verify process identity is stable across health probes.`);
 }
 
 const windowsHealth = windows.indexOf('/api/health');
