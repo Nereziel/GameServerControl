@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   resolveAccessRole,
   agentTokenForRole,
-  authorizeGatewayRequest
+  authorizeGatewayRequest,
+  hasValidBrowserOrigin
 } from '../src/index.js';
 
 const env = {
@@ -47,4 +48,28 @@ test('ReadOnly users can negotiate SignalR and control read-only live-log subscr
   assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/logs/tail').allowed, true);
   assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/start').allowed, false);
   assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/rcon/command').allowed, false);
+});
+
+test('browser writes and WebSocket upgrades require the panel origin', () => {
+  const samePost = new Request('https://panel.example.com/api/servers/example/start', {
+    method: 'POST',
+    headers: { origin: 'https://panel.example.com' }
+  });
+  const crossPost = new Request('https://panel.example.com/api/servers/example/start', {
+    method: 'POST',
+    headers: { origin: 'https://evil.example.net' }
+  });
+  const sameWs = new Request('https://panel.example.com/hubs/status?id=abc', {
+    headers: { origin: 'https://panel.example.com', upgrade: 'websocket' }
+  });
+  const crossWs = new Request('https://panel.example.com/hubs/status?id=abc', {
+    headers: { origin: 'https://evil.example.net', upgrade: 'websocket' }
+  });
+  const plainGet = new Request('https://panel.example.com/api/status');
+
+  assert.equal(hasValidBrowserOrigin(samePost), true);
+  assert.equal(hasValidBrowserOrigin(crossPost), false);
+  assert.equal(hasValidBrowserOrigin(sameWs), true);
+  assert.equal(hasValidBrowserOrigin(crossWs), false);
+  assert.equal(hasValidBrowserOrigin(plainGet), true);
 });
