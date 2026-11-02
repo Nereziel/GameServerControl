@@ -19,6 +19,10 @@ namespace GameServerControl.Agent.Auth;
 /// </summary>
 public sealed class AuditLogger
 {
+    private const string GatewayHeader = "x-gameservercontrol-gateway";
+    private const string RemoteUserHeader = "x-gameservercontrol-remote-user";
+    private const string CloudflareGateway = "cloudflare-worker";
+
     private readonly string _logDir;
     private readonly object _writeLock = new();
     private readonly ILogger<AuditLogger> _logger;
@@ -42,6 +46,11 @@ public sealed class AuditLogger
 
         try
         {
+            var gateway = ctx.Request.Headers[GatewayHeader].ToString();
+            var remoteUser = string.Equals(gateway, CloudflareGateway, StringComparison.OrdinalIgnoreCase)
+                ? NormalizeRemoteUser(ctx.Request.Headers[RemoteUserHeader].ToString())
+                : null;
+
             var entry = new
             {
                 ts = DateTimeOffset.UtcNow.ToString("O"),
@@ -49,7 +58,9 @@ public sealed class AuditLogger
                 method,
                 path = ctx.Request.Path.Value,
                 status = statusCode,
-                user = ctx.User?.Identity?.Name ?? "bearer"
+                user = ctx.User?.Identity?.Name ?? "bearer",
+                gateway = string.IsNullOrWhiteSpace(gateway) ? null : gateway,
+                remoteUser
             };
             var line = JsonSerializer.Serialize(entry);
             var path = Path.Combine(_logDir, $"audit-{DateTime.UtcNow:yyyy-MM-dd}.jsonl");
@@ -60,6 +71,16 @@ public sealed class AuditLogger
             // Audit logging must never break the request path.
             _logger.LogDebug(ex, "Audit log write failed");
         }
+    }
+
+    private static string? NormalizeRemoteUser(string? value)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized)) return null;
+        // Audit metadata must stay one compact field even if a caller sends malformed input.
+        normalized = normalized.Replace("\r", "", StringComparison.Ordinal)
+                               .Replace("\n", "", StringComparison.Ordinal);
+        return normalized.Length <= 320 ? normalized : normalized[..320];
     }
 }
 
