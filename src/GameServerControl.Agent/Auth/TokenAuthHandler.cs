@@ -77,7 +77,7 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             {
                 new Claim(ClaimTypes.Name, "Update health probe"),
                 new Claim(TokenIdClaim, "update-health-probe"),
-                new Claim(RoleClaim, TokenRole.ReadOnly.ToString())
+                new Claim(RoleClaim, "ReadOnly")
             }, Scheme.Name);
             var healthPrincipal = new ClaimsPrincipal(healthIdentity);
             return Task.FromResult(AuthenticateResult.Success(
