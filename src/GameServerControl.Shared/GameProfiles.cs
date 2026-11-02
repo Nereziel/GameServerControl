@@ -105,6 +105,11 @@ public static class GameProfiles
             new GameCapabilities(ManagedConfig: true),
             Notes: "Discovery/manual registration is supported; automatic SteamCMD installation is not enabled in the curated installer."),
 
+        new("enshrouded", "Enshrouded", "🔥", GameType.SteamGeneric, "2278520", "EnshroudedServer", "enshrouded_server.exe",
+            Array.Empty<string>(), new[]{ @"{root}\savegame" }, null, Basic,
+            Notes: "Windows dedicated server. First start creates enshrouded_server.json in the server folder; edit it from the Files tab. Automatic install is disabled because the official dedicated server is Windows-only.",
+            DefaultPorts: new[]{ new NetworkPort("Query / game", NetworkProtocol.Udp, 15637) }),
+
         new("valheim", "Valheim", "⚔", GameType.SteamGeneric, "896660", "Valheim", "valheim_server.exe",
             new[]{ "-nographics", "-batchmode", "-name", "MyServer", "-port", "2456", "-world", "MyWorld", "-password", "change-me",
                    "-savedir", @"{root}\data", "-logFile", @"{root}\logs\valheim.log" },
