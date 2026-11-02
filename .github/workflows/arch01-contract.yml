@@ -29,3 +29,5 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Validate Runner protocol behavior
         run: dotnet run --project tools/GameServerControl.RunnerCheck -c Release
+      - name: Compile Windows Runner
+        run: dotnet build src/GameServerControl.Runner -c Release
