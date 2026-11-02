@@ -71,3 +71,64 @@ async function loadPlayers(id){const p=$('#playersPane');if(!p)return;try{const 
 async function rconPlayer(id,command,payload){if(command==='BanPlayer'&&!confirm('Ban this player?'))return;try{const r=await api(`/api/servers/${encodeURIComponent(id)}/rcon/command`,{method:'POST',body:JSON.stringify({command,payload})});toast(r.success?(r.output||command+' sent'):(r.error||'RCON failed'),r.success?'ok':'err');await loadPlayers(id)}catch(e){toast('RCON failed: '+e.message,'err')}}
 function openConsole(id){const d=SERVERS.find(x=>x.id===id);openModal('RCON console — '+(d?.name||id),`<pre id="consoleOut" class="log">Connected through the Agent RCON handler.\n</pre><div class="consolebar"><input id="consoleIn" class="input mono" placeholder="Raw command" onkeydown="if(event.key==='Enter')runConsole('${jsq(id)}')"><button class="btn primary" onclick="runConsole('${jsq(id)}')">Send</button></div>`,`<button class="btn" onclick="closeModal()">Close</button>`,true);setTimeout(()=>$('#consoleIn')?.focus(),0)}
 async function runConsole(id){const input=$('#consoleIn'),out=$('#consoleOut'),cmd=input?.value.trim();if(!cmd)return;out.textContent+=`> ${cmd}\n`;input.value='';try{const r=await api(`/api/servers/${encodeURIComponent(id)}/rcon/command`,{method:'POST',body:JSON.stringify({command:'Raw',payload:cmd})});out.textContent+=(r.success?(r.output||'[OK]'):(r.error||'[Failed]'))+'\n';out.scrollTop=out.scrollHeight}catch(e){out.textContent+='[Error] '+e.message+'\n'}}
+
+/* Authenticated identity and ReadOnly UX. Backend authorization remains authoritative. */
+let AUTH={id:null,name:null,role:null};
+const ADMIN_MUTATION_CALLS=/\b(?:action|manageAction|rconPlayer|runConsole|testDiscordEdit|serverWorkspace(?:Save|Create|Restore|Delete|Send|Reset|Clear)\w*|gscFiles(?:Save|Restore)|(?:save|delete|remove|install|update|start|stop|restart|apply|backup|restore|ban|kick|send|clear|create)[A-Za-z0-9_]*)\s*\(/i;
+const ADMIN_NAV_CALLS=/\b(?:openCreate|openAddExisting|openTokens|openUpdate)\s*\(/i;
+
+function isReadOnly(){return String(AUTH?.role||'').toLowerCase()==='readonly'}
+function adminDisabled(){return isReadOnly()?'disabled':''}
+
+async function loadAuthIdentity(){
+  AUTH=await api('/api/auth/me');
+  window.GSC_AUTH=AUTH;
+  return AUTH;
+}
+
+function ensureAuthRoleBadge(){
+  let badge=document.getElementById('authRole');
+  if(!badge){
+    badge=document.createElement('span');badge.id='authRole';badge.className='tiny muted';
+    const label=document.getElementById('agentLabel');
+    if(label)label.insertAdjacentElement('afterend',badge);
+  }
+  if(!badge)return;
+  badge.textContent=AUTH?.role?`· ${AUTH.role}`:'';
+  badge.title=AUTH?.name?`${AUTH.name} · ${AUTH.role||''}`:String(AUTH?.role||'');
+}
+
+function applyAuthUi(){
+  ensureAuthRoleBadge();
+  if(!isReadOnly())return;
+  const explanation='Read-only access: this action requires an Admin token.';
+  document.querySelectorAll('button[onclick]').forEach(button=>{
+    const call=button.getAttribute('onclick')||'';
+    if(ADMIN_MUTATION_CALLS.test(call)||ADMIN_NAV_CALLS.test(call)){
+      button.disabled=true;
+      button.title=explanation;
+    }
+  });
+  document.querySelectorAll('input[onkeydown],textarea[onkeydown]').forEach(input=>{
+    const call=input.getAttribute('onkeydown')||'';
+    if(ADMIN_MUTATION_CALLS.test(call)){
+      input.disabled=true;
+      input.title=explanation;
+    }
+  });
+}
+
+const AUTH_BASE_BOOT=boot;
+boot=async function(){
+  await loadAuthIdentity();
+  await AUTH_BASE_BOOT();
+  applyAuthUi();
+  if(isReadOnly()&&typeof setNotice==='function')
+    setNotice('Read-only access: viewing is allowed, but changes and interactive commands require an Admin token.','info',true,'Read-only');
+};
+
+const AUTH_UI_OBSERVER=new MutationObserver(()=>applyAuthUi());
+window.addEventListener('DOMContentLoaded',()=>{
+  AUTH_UI_OBSERVER.observe(document.body,{childList:true,subtree:true});
+  applyAuthUi();
+});
