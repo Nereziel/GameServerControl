@@ -67,6 +67,15 @@ if systemctl is-active --quiet "$UNIT_NAME"; then
     ok "Stopped."
 fi
 
+if [[ -d "$INSTALL_DIR" ]]; then
+    step "Restricting existing Agent state before upgrade"
+    chmod 700 "$INSTALL_DIR"
+    for f in appsettings.json servers.json tokens.json public-relay.json appsettings.json.bak servers.json.bak; do
+        [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
+    done
+    ok "Existing Agent state permissions restricted."
+fi
+
 step "Installing into $INSTALL_DIR"
 preserve_dir="$tmp_dir/preserved"
 mkdir -p "$preserve_dir"
@@ -86,6 +95,7 @@ elif [[ -d "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
 fi
 mkdir -p "$INSTALL_DIR"
+chmod 700 "$INSTALL_DIR"
 tar -xzf "$tmp_dir/agent.tar.gz" -C "$INSTALL_DIR"
 
 for f in appsettings.json servers.json tokens.json public-relay.json; do
