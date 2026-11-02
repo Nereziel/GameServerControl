@@ -171,7 +171,7 @@ public sealed class LogTailService : IDisposable
     private async Task EmitAsync(string serverId, string text)
     {
         var line = new LogLine(serverId, DateTimeOffset.UtcNow, "log", text);
-        try { await _hub.Clients.All.SendAsync("logLine", line); }
+        try { await _hub.Clients.Group(StatusHub.ServerGroup(serverId)).SendAsync("logLine", line); }
         catch { /* hub may not be ready at startup */ }
     }
 

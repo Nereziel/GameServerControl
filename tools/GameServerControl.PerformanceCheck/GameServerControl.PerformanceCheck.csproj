@@ -7,5 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/GameServerControl.Shared/GameServerControl.Shared.csproj" />
+    <Compile Include="../../src/GameServerControl.Agent/Servers/InstallJobRetention.cs" Link="InstallJobRetention.cs" />
   </ItemGroup>
 </Project>

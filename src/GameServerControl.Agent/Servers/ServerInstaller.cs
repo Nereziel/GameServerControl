@@ -45,12 +45,14 @@ public sealed class ServerInstaller
 
     public InstallProgress? Get(string jobId)
     {
+        PruneCompletedJobs();
         if (!_jobs.TryGetValue(jobId, out var state)) return null;
         lock (state.Gate) return state.Snapshot with { LogLines = state.Lines.ToArray() };
     }
 
     public string StartJob(InstallServerRequest request)
     {
+        PruneCompletedJobs();
         var req = NormalizeForHost(request);
         var jobId = Guid.NewGuid().ToString("N")[..12];
         var now = DateTimeOffset.UtcNow;
@@ -340,6 +342,20 @@ public sealed class ServerInstaller
 
         try { await _hub.Clients.All.SendAsync("installProgress", snapshot); }
         catch (Exception ex) { _logger.LogDebug(ex, "Install progress SignalR broadcast failed for {JobId}", jobId); }
+
+        if (finished) PruneCompletedJobs();
+    }
+
+    private void PruneCompletedJobs()
+    {
+        var snapshots = new List<InstallProgress>(_jobs.Count);
+        foreach (var state in _jobs.Values)
+        {
+            lock (state.Gate) snapshots.Add(state.Snapshot);
+        }
+
+        foreach (var jobId in InstallJobRetention.SelectEvictions(snapshots, DateTimeOffset.UtcNow))
+            _jobs.TryRemove(jobId, out _);
     }
 
     private static string GameKey(string appId) => appId switch

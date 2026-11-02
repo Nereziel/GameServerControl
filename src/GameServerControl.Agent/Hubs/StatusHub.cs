@@ -12,6 +12,8 @@ public sealed class StatusHub : Hub
     private readonly ServerRegistry _registry;
     private readonly LocalProcessService _local;
 
+    public static string ServerGroup(string serverId) => "server:" + serverId;
+
     public StatusHub(ServerRegistry registry, LocalProcessService local)
     {
         _registry = registry;
@@ -22,6 +24,8 @@ public sealed class StatusHub : Hub
     {
         var def = _registry.Get(serverId);
         if (def is null) throw new HubException("Unknown server.");
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, ServerGroup(serverId), Context.ConnectionAborted);
 
         var profile = GameProfiles.FindFor(def);
         var mode = profile?.Capabilities.ConsoleMode ?? GameConsoleMode.None;
