@@ -9,6 +9,7 @@ const serverStore = fs.readFileSync('src/GameServerControl.Agent/Servers/ServerS
 const relay = fs.readFileSync('src/GameServerControl.Agent/Networking/PublicRelayManager.cs', 'utf8');
 const linuxUnit = fs.readFileSync('deploy/linux/gameservercontrol-agent.service', 'utf8');
 const linuxInstaller = fs.readFileSync('deploy/linux/install-from-release.sh', 'utf8');
+const linuxSourceInstaller = fs.readFileSync('deploy/linux/install.sh', 'utf8');
 const pathHelperPath = 'src/GameServerControl.Shared/PathContainment.cs';
 const secretHelperPath = 'src/GameServerControl.Shared/SecretFilePermissions.cs';
 const pathHelper = fs.existsSync(pathHelperPath) ? fs.readFileSync(pathHelperPath, 'utf8') : '';
@@ -47,8 +48,14 @@ requireToken(tokenRegistry, 'SecretFilePermissions', 'tokens.json must use the c
 requireToken(serverStore, 'SecretFilePermissions', 'servers.json must use the common secret-file helper');
 requireToken(relay, 'SecretFilePermissions', 'public-relay.json must use the common secret-file helper');
 requireToken(linuxUnit, 'UMask=0077', 'systemd must default Agent-created files to private permissions');
-requireToken(linuxInstaller, 'chmod 700 "$INSTALL_DIR"', 'Linux installer must restrict the Agent state directory');
-requireToken(linuxInstaller, 'chmod 600', 'Linux installer must restrict persisted secret files');
+requireToken(linuxInstaller, 'umask 077', 'Release Linux installer must create private temporary/state files');
+requireToken(linuxInstaller, 'chmod 700 "$INSTALL_DIR"', 'Release Linux installer must restrict the Agent state directory');
+requireToken(linuxInstaller, 'chmod 600', 'Release Linux installer must restrict persisted secret files');
+rejectToken(linuxInstaller, 'echo "   $api_token"', 'Release Linux installer must not print the persisted API token');
+requireToken(linuxSourceInstaller, 'umask 077', 'Source-build Linux installer must create private state files');
+requireToken(linuxSourceInstaller, 'chmod 700 "$INSTALL_DIR"', 'Source-build Linux installer must restrict the Agent state directory');
+requireToken(linuxSourceInstaller, 'chmod 600', 'Source-build Linux installer must restrict persisted secret files');
+rejectToken(linuxSourceInstaller, 'GENERATED NEW AGENT API TOKEN', 'Source-build Linux installer must not scrape the bootstrap token from journald');
 requireToken(installer, 'icacls', 'Windows installer must restrict the Agent directory ACL');
 requireToken(installer, 'SYSTEM:(OI)(CI)F', 'Windows Agent ACL must grant SYSTEM');
 requireToken(installer, 'BUILTIN\\Administrators:(OI)(CI)F', 'Windows Agent ACL must grant local Administrators');
