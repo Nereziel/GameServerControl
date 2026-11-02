@@ -173,7 +173,7 @@ public sealed class LocalProcessService
         if (text.Length > MaxConsoleLineChars) text = text[..MaxConsoleLineChars] + "…";
         var line = new LogLine(session.ServerId, DateTimeOffset.UtcNow, source, text);
         session.Add(line);
-        try { await _hub.Clients.All.SendAsync("logLine", line); }
+        try { await _hub.Clients.Group(StatusHub.ServerGroup(session.ServerId)).SendAsync("logLine", line); }
         catch (Exception ex) { _logger.LogDebug(ex, "Console SignalR broadcast failed for {ServerId}", session.ServerId); }
     }
 

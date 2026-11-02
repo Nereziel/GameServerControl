@@ -574,6 +574,7 @@ async function renderServerConsole(def, body) {
     }
   });
 
+  await connection.invoke('SubscribeConsole', [def.id]);
   if (readOnly) {
     await api(`/api/servers/${encodeURIComponent(def.id)}/logs/tail`, { method: 'POST', body: JSON.stringify({ action: 'start' }) });
     SERVER_WORKSPACE.console = {
@@ -584,7 +585,6 @@ async function renderServerConsole(def, body) {
     };
   } else {
     SERVER_WORKSPACE.console = connection;
-    await connection.invoke('SubscribeConsole', [def.id]);
   }
 }
 

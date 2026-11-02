@@ -25,6 +25,8 @@ public sealed class ServerInstaller
     private readonly ILogger<ServerInstaller> _logger;
     private readonly SemaphoreSlim _installGate = new(1, 1);
     private readonly ConcurrentDictionary<string, JobState> _jobs = new();
+    private readonly object _pruneGate = new();
+    private DateTimeOffset _nextPruneAt = DateTimeOffset.MinValue;
 
     private sealed class JobState
     {
@@ -45,12 +47,14 @@ public sealed class ServerInstaller
 
     public InstallProgress? Get(string jobId)
     {
+        PruneCompletedJobs();
         if (!_jobs.TryGetValue(jobId, out var state)) return null;
         lock (state.Gate) return state.Snapshot with { LogLines = state.Lines.ToArray() };
     }
 
     public string StartJob(InstallServerRequest request)
     {
+        PruneCompletedJobs(force: true);
         var req = NormalizeForHost(request);
         var jobId = Guid.NewGuid().ToString("N")[..12];
         var now = DateTimeOffset.UtcNow;
@@ -340,6 +344,27 @@ public sealed class ServerInstaller
 
         try { await _hub.Clients.All.SendAsync("installProgress", snapshot); }
         catch (Exception ex) { _logger.LogDebug(ex, "Install progress SignalR broadcast failed for {JobId}", jobId); }
+
+        if (finished) PruneCompletedJobs(force: true);
+    }
+
+    private void PruneCompletedJobs(bool force = false)
+    {
+        var now = DateTimeOffset.UtcNow;
+        lock (_pruneGate)
+        {
+            if (!force && now < _nextPruneAt) return;
+            _nextPruneAt = now.AddMinutes(1);
+        }
+
+        var snapshots = new List<InstallProgress>(_jobs.Count);
+        foreach (var state in _jobs.Values)
+        {
+            lock (state.Gate) snapshots.Add(state.Snapshot);
+        }
+
+        foreach (var jobId in InstallJobRetention.SelectEvictions(snapshots, now))
+            _jobs.TryRemove(jobId, out _);
     }
 
     private static string GameKey(string appId) => appId switch
