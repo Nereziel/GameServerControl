@@ -273,28 +273,99 @@ function renderServerMods(def, body) {
   body.innerHTML = `<div class="sw-section"><h3>Mods</h3><div class="muted tiny" style="margin-bottom:14px">The existing game-specific mod manager opens from here. Unsupported games do not get this tab.</div><button class="btn primary" onclick="openMods('${jsq(def.id)}')">Open mod manager</button></div>`;
 }
 
-async function renderServerBackups(def, body) {
-  const list = await api(`/api/servers/${encodeURIComponent(def.id)}/backups`);
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Backups</b><div class="tiny muted">Save snapshots managed by GameServerControl.</div></div><div class="spacer"></div><button class="btn primary" onclick="serverWorkspaceBackup('${jsq(def.id)}')">Backup now</button></div>${list?.length ? list.map(backup => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(backup.checkpointName)}</div><div class="sw-row-meta">${new Date(backup.createdAt).toLocaleString()} · ${Math.round((backup.sizeBytes || 0) / 1024 / 1024)} MB</div></div><button class="btn" onclick="serverWorkspaceRestore('${jsq(def.id)}','${encodeURIComponent(backup.checkpointName)}')">Restore</button><button class="btn danger" onclick="serverWorkspaceDeleteBackup('${jsq(def.id)}','${encodeURIComponent(backup.checkpointName)}')">Delete</button></div>`).join('') : '<div class="sw-empty">No backups yet.</div>'}`;
+function serverWorkspaceBackupSize(bytes) {
+  const n = Number(bytes);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(n < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
-async function serverWorkspaceBackup(id) { await action(id, 'backup'); serverWorkspaceRefreshTab('backups'); }
-async function serverWorkspaceRestore(id, name) {
-  if (!confirm('Restore this backup? Stop the server first.')) return;
+function serverWorkspaceBackupKind(backup) {
+  const kind = String(backup.kind || 'Archive');
+  if (kind === 'SafetyArchive') return ['Safety archive', 'warn'];
+  if (kind === 'SafetyCheckpoint') return ['Safety checkpoint', 'warn'];
+  if (kind === 'HyperVCheckpoint') return ['Hyper-V checkpoint', 'up'];
+  return ['Archive', 'up'];
+}
+
+async function renderServerBackups(def, body) {
+  const [list, settings] = await Promise.all([
+    api(`/api/servers/${encodeURIComponent(def.id)}/backups`),
+    api(`/api/servers/${encodeURIComponent(def.id)}/backups/settings`)
+  ]);
+  const backups = list || [];
+  const status = serverWorkspaceStatus(def.id);
+  const restoreDisabled = def.hostingMode === 'Vm'
+    ? String(status.vmState || '') !== 'Off'
+    : String(status.processState || '') !== 'NotRunning';
+  const normal = backups.filter(x => !String(x.kind || '').startsWith('Safety'));
+  const safety = backups.filter(x => String(x.kind || '').startsWith('Safety'));
+  const knownBytes = backups.reduce((sum, x) => sum + (Number(x.sizeBytes) || 0), 0);
+  const last = backups[0];
+  const restoreHint = def.hostingMode === 'Vm'
+    ? 'Turn the Hyper-V VM fully off before restore.'
+    : 'Stop the game server before restore.';
+
+  const rows = backups.length ? backups.map(backup => {
+    const [kindLabel, kindClass] = serverWorkspaceBackupKind(backup);
+    const skipped = Number(backup.skippedFiles) || 0;
+    const details = [
+      new Date(backup.createdAt).toLocaleString(),
+      serverWorkspaceBackupSize(backup.sizeBytes),
+      backup.fileCount != null ? `${backup.fileCount} files` : null
+    ].filter(Boolean).join(' · ');
+    const title = backup.label || backup.checkpointName;
+    return `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(title)}</div><div class="sw-row-meta mono">${esc(backup.checkpointName)}</div><div class="sw-row-meta">${esc(details)}</div>${skipped ? `<div class="tiny" style="color:var(--warn);margin-top:4px">Warning: backup.skippedFiles = ${skipped}; locked/unavailable files were skipped.</div>` : ''}</div><span class="state ${kindClass}">${esc(kindLabel)}</span><button class="btn" ${restoreDisabled || backup.restorable === false ? 'disabled' : ''} onclick="serverWorkspaceRestore('${jsq(def.id)}','${jsq(backup.checkpointName)}')">Restore</button><button class="btn danger" onclick="serverWorkspaceDeleteBackup('${jsq(def.id)}','${jsq(backup.checkpointName)}')">Delete</button></div>`;
+  }).join('') : '<div class="sw-empty">No backups yet.</div>';
+
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Backups</b><div class="tiny muted">Archives/checkpoints stay on the server. Cloud access sends only control requests.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('backups')">Refresh</button></div><div class="sw-metrics"><div class="sw-metric"><span>Normal backups</span><b>${normal.length}</b></div><div class="sw-metric"><span>Safety copies</span><b>${safety.length}</b></div><div class="sw-metric"><span>Known storage</span><b>${serverWorkspaceBackupSize(knownBytes)}</b></div><div class="sw-metric"><span>Newest</span><b>${last ? new Date(last.createdAt).toLocaleString() : '—'}</b></div></div><div class="sw-section"><h3>Create backup</h3><div class="formgrid"><div class="field"><label>Backup name (optional)</label><input id="swBackupLabel" maxlength="80" placeholder="Before mod update"><div class="help">Human-readable label only. GameServerControl keeps the archive/checkpoint identifier machine-safe.</div></div><div class="field"><label>Retention</label><div style="display:flex;gap:8px"><input id="swBackupRetention" type="number" min="1" max="200" value="${settings.retention ?? 10}"><button class="btn" onclick="serverWorkspaceSaveBackupRetention('${jsq(def.id)}')">Save</button></div><div class="help">Keep ${settings.retention ?? 10} normal backups.${settings.isOverride ? ' Per-server override.' : ` Agent default: ${settings.defaultRetention ?? 10}.`} Safety copies are retained separately.</div></div></div><div class="sw-toolbar" style="margin-top:10px;margin-bottom:0"><div class="tiny muted">${esc(restoreHint)}</div><div class="spacer"></div><button class="btn primary" onclick="serverWorkspaceCreateBackup('${jsq(def.id)}')">Backup now</button></div></div><div class="callout info"><b>Safety copy:</b> before every restore, GameServerControl must create a complete pre-restore backup/checkpoint. If that safety copy fails, restore is aborted before current saves are replaced.${restoreDisabled ? `<br><b>Restore disabled:</b> ${esc(restoreHint)}` : ''}</div>${rows}`;
+}
+
+async function serverWorkspaceCreateBackup(id) {
+  const label = $('#swBackupLabel')?.value.trim() || null;
   try {
-    const result = await api(`/api/servers/${encodeURIComponent(id)}/backups/${name}/restore`, { method: 'POST' });
+    const result = await api(`/api/servers/${encodeURIComponent(id)}/backups`, { method: 'POST', body: JSON.stringify({ label: label }) });
+    toast(result.success ? result.message : (result.message || 'Backup failed'), result.success ? 'ok' : 'err');
+    if (result.success) serverWorkspaceRefreshTab('backups');
+  } catch (e) { toast('Backup failed: ' + e.message, 'err'); }
+}
+
+async function serverWorkspaceSaveBackupRetention(id) {
+  const retention = Number($('#swBackupRetention')?.value);
+  if (!Number.isInteger(retention) || retention < 1 || retention > 200) return toast('Retention must be between 1 and 200.', 'err');
+  try {
+    await api(`/api/servers/${encodeURIComponent(id)}/backups/settings`, { method: 'PUT', body: JSON.stringify({ retention, isOverride: true, defaultRetention: retention }) });
+    toast('Backup retention saved.', 'ok');
+    serverWorkspaceRefreshTab('backups');
+  } catch (e) { toast('Retention save failed: ' + e.message, 'err'); }
+}
+
+async function serverWorkspaceBackup(id) { await serverWorkspaceCreateBackup(id); }
+async function serverWorkspaceRestore(id, name) {
+  const def = SERVERS.find(x => x.id === id);
+  const status = serverWorkspaceStatus(id);
+  const restoreDisabled = def?.hostingMode === 'Vm'
+    ? String(status.vmState || '') !== 'Off'
+    : String(status.processState || '') !== 'NotRunning';
+  if (restoreDisabled) return toast(def?.hostingMode === 'Vm' ? 'Turn the Hyper-V VM off before restore.' : 'Stop the server before restore.', 'err');
+  if (!confirm(`Restore ${name}?\n\nSafety copy: GameServerControl will create a mandatory pre-restore backup/checkpoint first. If it fails, restore will not start.`)) return;
+  try {
+    const result = await api(`/api/servers/${encodeURIComponent(id)}/backups/${encodeURIComponent(name)}/restore`, { method: 'POST' });
     toast(result.success ? result.message : (result.message || 'Restore failed'), result.success ? 'ok' : 'err');
     serverWorkspaceRefreshTab('backups');
   } catch (e) { toast('Restore failed: ' + e.message, 'err'); }
 }
 async function serverWorkspaceDeleteBackup(id, name) {
-  if (!confirm('Delete this backup?')) return;
+  if (!confirm(`Delete backup ${name}?`)) return;
   try {
-    await api(`/api/servers/${encodeURIComponent(id)}/backups/${name}`, { method: 'DELETE' });
+    await api(`/api/servers/${encodeURIComponent(id)}/backups/${encodeURIComponent(name)}`, { method: 'DELETE' });
     toast('Backup deleted.', 'ok');
     serverWorkspaceRefreshTab('backups');
   } catch (e) { toast('Delete failed: ' + e.message, 'err'); }
 }
+window.serverWorkspaceCreateBackup = serverWorkspaceCreateBackup;
+window.serverWorkspaceSaveBackupRetention = serverWorkspaceSaveBackupRetention;
 window.serverWorkspaceBackup = serverWorkspaceBackup;
 window.serverWorkspaceRestore = serverWorkspaceRestore;
 window.serverWorkspaceDeleteBackup = serverWorkspaceDeleteBackup;
