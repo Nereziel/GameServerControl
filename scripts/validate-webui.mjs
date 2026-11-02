@@ -71,6 +71,7 @@ try {
   runNode(path.resolve('scripts/validate-server-admin.mjs'), 'server admin capability contract');
   runNode(path.resolve('scripts/validate-monitoring.mjs'), 'monitoring history contract');
   runNode(path.resolve('scripts/validate-profile-contract.mjs'), 'scalable game-profile contract');
+  runNode(path.resolve('scripts/validate-audit-sec07.mjs'), 'audit SEC-07 WebUI XSS/CSP contract');
   console.log(`Validated ${files.length} Agent JavaScript files, ${agentInlineCount} Agent inline scripts, ${cloudInlineCount} Cloud inline scripts and the Cloudflare Web UI staging build.`);
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
