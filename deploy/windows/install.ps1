@@ -74,6 +74,17 @@ function Assert-ReleaseAssetHash {
     }
 }
 
+function Set-AgentDirectoryAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    # Stable well-known SIDs avoid localized account-name issues. The managed service runs
+    # as LocalSystem, so these correspond to SYSTEM:(OI)(CI)F and
+    # BUILTIN\Administrators:(OI)(CI)F and are inherited by secret state files.
+    $aclOutput = & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Agent directory ACL: $($aclOutput -join ' | ')" }
+}
+
 Write-Host ''
 Write-Host 'GameServerControl installer (Windows)'
 Write-Host '-------------------------------------'
@@ -133,6 +144,12 @@ if ($svc -and $svc.Status -eq 'Running') {
     Write-Ok 'Stopped.'
 }
 
+if (Test-Path -LiteralPath $agentDir) {
+    Write-Step 'Restricting existing Agent state before upgrade'
+    Set-AgentDirectoryAcl -Path $agentDir
+    Write-Ok 'Existing Agent directory restricted to SYSTEM and local Administrators.'
+}
+
 Write-Step "Installing Agent to $agentDir"
 $preserve = @('appsettings.json', 'servers.json', 'tokens.json', 'public-relay.json')
 $backupDir = Join-Path $tmpRoot 'preserved'
@@ -152,6 +169,7 @@ if (Test-Path $agentDir) {
     $hadPreviousAgent = $true
 }
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
+Set-AgentDirectoryAcl -Path $agentDir
 Expand-Archive -Path $agentZip -DestinationPath $agentDir -Force
 foreach ($f in $preserve) {
     $src = Join-Path $backupDir $f
@@ -212,11 +230,8 @@ try {
     Write-Ok 'Configured Agent:SteamCmdPath and Agent:Repo.'
 } catch { throw "Failed to update $appSettings : $_" }
 
-Write-Step 'Restricting Agent state permissions'
-# Stable well-known SIDs avoid localized account-name issues. These correspond to
-# SYSTEM:(OI)(CI)F and BUILTIN\Administrators:(OI)(CI)F and are inherited by state files.
-$aclOutput = & icacls.exe $agentDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Agent directory ACL: $($aclOutput -join ' | ')" }
+Write-Step 'Restricting installed Agent state permissions'
+Set-AgentDirectoryAcl -Path $agentDir
 Write-Ok 'Agent directory restricted to SYSTEM and local Administrators.'
 
 function Invoke-Sc {
