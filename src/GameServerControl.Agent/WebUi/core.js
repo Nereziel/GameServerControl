@@ -1,7 +1,58 @@
 const $=s=>document.querySelector(s);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const jsq=s=>String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+const uiAction=(()=>{
+  const cap=(globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random()}`).replace(/[^a-zA-Z0-9-]/g,'');
+  const encode=value=>encodeURIComponent(JSON.stringify(value));
+  const decode=value=>JSON.parse(decodeURIComponent(value));
+  const attr=(name,value)=>`${name}="${esc(value)}"`;
+
+  function render(name,args=[],opts={}){
+    const attrs=[attr('data-gsc-cap',cap),attr('data-gsc-action',name)];
+    if(args.length)attrs.push(attr('data-gsc-args',encode(args)));
+    if(opts.event&&opts.event!=='click')attrs.push(attr('data-gsc-event',opts.event));
+    if(opts.key)attrs.push(attr('data-gsc-key',opts.key));
+    if(opts.pass)attrs.push(attr('data-gsc-pass',opts.pass));
+    if(opts.selector)attrs.push(attr('data-gsc-selector',opts.selector));
+    if(opts.self)attrs.push('data-gsc-self="1"');
+    return attrs.join(' ');
+  }
+
+  async function dispatch(event){
+    const el=event.target?.closest?.('[data-gsc-action]');
+    if(!el||el.getAttribute('data-gsc-cap')!==cap)return;
+    const expected=el.getAttribute('data-gsc-event')||'click';
+    if(event.type!==expected)return;
+    const key=el.getAttribute('data-gsc-key');
+    if(key&&event.key!==key)return;
+    if(el.getAttribute('data-gsc-self')==='1'&&event.target!==el)return;
+    if(el.disabled)return;
+
+    const name=el.getAttribute('data-gsc-action');
+    const fn=globalThis[name];
+    if(typeof fn!=='function')return;
+    let args=[];
+    const encoded=el.getAttribute('data-gsc-args');
+    if(encoded){try{args=decode(encoded)}catch{return}}
+    const pass=el.getAttribute('data-gsc-pass');
+    if(pass==='value')args.push(el.value);
+    else if(pass==='checked')args.push(!!el.checked);
+    else if(pass==='element')args.push(el);
+    else if(pass==='event')args.push(event);
+    else if(pass==='selectorValue'){
+      const selector=el.getAttribute('data-gsc-selector');
+      args.push(selector?document.querySelector(selector)?.value:undefined);
+    }
+    try{await fn(...args)}catch(e){console.error('UI action failed',name,e)}
+  }
+
+  for(const type of ['click','change','input','keydown'])document.addEventListener(type,dispatch);
+  return render;
+})();
+
+function uiActions(actions,opts={}){return uiAction('runUiActions',[actions],opts)}
+async function runUiActions(actions){for(const [name,args=[]] of actions||[]){const fn=globalThis[name];if(typeof fn==='function')await fn(...args)}}
 
 let CFG={url:'',token:''};
 let SERVERS=[],STATUS={},CURRENT_VIEW='servers',JOB_CACHE={},MOD_CTX=null,MOD_RESULTS=[],MOD_UPDATES=[],MODAL_CLEANUP=null;
@@ -88,10 +139,10 @@ function serverMeta(d){const g=profileFor(d);return g?{icon:g.icon,label:g.label
 
 function renderServers(){
   const root=$('#servers');
-  if(!SERVERS.length){root.innerHTML='<div class="empty">No servers registered yet.<br><br><button class="btn primary" onclick="openCreate()">Create your first server</button> <button class="btn" onclick="openDiscover()">Discover installed servers</button> <button class="btn" onclick="openAddExisting()">Add existing server</button></div>';return}
+  if(!SERVERS.length){root.innerHTML=`<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')}>Create your first server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')}>Add existing server</button></div>`;return}
   root.innerHTML='<div class="grid">'+SERVERS.map(d=>{
     const s=STATUS[d.id]||{},m=serverMeta(d),up=s.processState==='Running',busy=['Starting','Stopping'].includes(s.processState),caps=m.profile.caps||{};
-    return `<div class="card"><div class="cardhead"><div class="icon">${m.icon}</div><div class="grow"><div class="title">${esc(d.name)}</div><div class="sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V':'This machine'} · ${esc(d.guestWorkingDir||'')}</div></div><div class="state ${up?'up':busy?'warn':'down'}">${esc(s.processState||'Unknown')}</div></div><div class="metrics"><span>PID <b>${s.pidInGuest??'—'}</b></span><span>CPU <b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></span><span>RAM <b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></span>${caps.rcon&&d.rconPort?`<span>RCON <b>${esc(d.rconHost||'auto')}:${d.rconPort}</b></span>`:''}</div>${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="actions"><button class="btn" ${up||busy?'disabled':''} onclick="action('${jsq(d.id)}','start')">Start</button><button class="btn danger" ${!up||busy?'disabled':''} onclick="action('${jsq(d.id)}','stop')">Stop</button><button class="btn" ${!up||busy?'disabled':''} onclick="action('${jsq(d.id)}','restart')">Restart</button><button class="btn primary" onclick="openManage('${jsq(d.id)}')">Manage</button></div></div>`
+    return `<div class="card"><div class="cardhead"><div class="icon">${m.icon}</div><div class="grow"><div class="title">${esc(d.name)}</div><div class="sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V':'This machine'} · ${esc(d.guestWorkingDir||'')}</div></div><div class="state ${up?'up':busy?'warn':'down'}">${esc(s.processState||'Unknown')}</div></div><div class="metrics"><span>PID <b>${s.pidInGuest??'—'}</b></span><span>CPU <b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></span><span>RAM <b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></span>${caps.rcon&&d.rconPort?`<span>RCON <b>${esc(d.rconHost||'auto')}:${d.rconPort}</b></span>`:''}</div>${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="actions"><button class="btn" ${up||busy?'disabled':''} ${uiAction('action',[d.id,'start'])}>Start</button><button class="btn danger" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'stop'])}>Stop</button><button class="btn" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'restart'])}>Restart</button><button class="btn primary" ${uiAction('openManage',[d.id])}>Manage</button></div></div>`
   }).join('')+'</div>';
 }
 
@@ -112,7 +163,7 @@ async function openUpdate(){
   if(!s)return toast('Could not check for updates.','err');
   const available=!!s.updateAvailable;
   const body=`<div class="kv"><div>Running</div><div class="mono">${esc(s.currentVersion||'unknown')}</div><div>Latest</div><div class="mono">${esc(s.latestVersion||'unknown')}</div><div>Checked</div><div>${s.checkedAt?new Date(s.checkedAt).toLocaleString():'—'}</div></div>${available?'<div class="callout info">The Agent will restart briefly. Server processes are not stopped.</div>':'<div class="callout info">This Agent is up to date.</div>'}`;
-  const foot=`<button class="btn" onclick="closeModal()">Close</button>${available?'<button class="btn primary" onclick="startSelfUpdate()">Install update</button>':''}`;
+  const foot=`<button class="btn" ${uiAction('closeModal')}>Close</button>${available?`<button class="btn primary" ${uiAction('startSelfUpdate')}>Install update</button>`:''}`;
   openModal('GameServerControl update',body,foot);
 }
 
@@ -136,8 +187,10 @@ async function waitForAgentRestart(){
     }catch{sawOffline=true}
   }
   $('#modalBody').innerHTML='<div class="callout">The Agent did not return within three minutes. Check the service and installer log.</div>';
-  $('#modalFoot').innerHTML='<button class="btn" onclick="location.reload()">Reload</button>';
+  $('#modalFoot').innerHTML=`<button class="btn" ${uiAction('reloadPage')}>Reload</button>`;
 }
+
+function reloadPage(){location.reload()}
 
 function slugify(s){return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}
 function expandRoot(value,root){return String(value||'').replaceAll('{root}',root.replace(/[\\/]+$/,''))}
@@ -188,11 +241,11 @@ function openNetwork(id){
         ? `<div class="callout info"><b>Windows Firewall:</b> GameServerControl manages persistent inbound and outbound Allow rules for <span class="mono">${esc(d.guestExePath)}</span>. The ports below are currently used for collision detection, not firewall filtering.</div>`
         : '<div class="callout info">This server launches through a script/JAR rather than an .exe, so a reliable Windows program rule cannot be created yet. Port reservations still prevent accidental conflicts.</div>';
   const managedHint=managed?`<div class="callout info"><b>${esc(g.label)} ports are profile-managed.</b> Change them in Configuration. GameServerControl will update the game launch arguments and these reservations together.</div>`:'';
-  const defaults=!managed&&(g?.ports||[]).length?`<button class="btn" onclick="resetNetworkDefaults('${jsq(id)}')">Reset to ${esc(g.label)} defaults</button>`:'';
+  const defaults=!managed&&(g?.ports||[]).length?`<button class="btn" ${uiAction('resetNetworkDefaults',[id])}>Reset to ${esc(g.label)} defaults</button>`:'';
   const readOnly=managed?' readonly':'';
   const footer=managed
-    ? `<button class="btn" onclick="closeModal()">Close</button><button class="btn primary" onclick="closeModal();openConfig('${jsq(id)}')">Edit Configuration</button>`
-    : `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveNetwork('${jsq(id)}')">Save network settings</button>`;
+    ? `<button class="btn" ${uiAction('closeModal')}>Close</button><button class="btn primary" ${uiActions([['closeModal',[]],['openConfig',[id]]])}>Edit Configuration</button>`
+    : `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button class="btn primary" ${uiAction('saveNetwork',[id])}>Save network settings</button>`;
   openModal('Network — '+d.name,`${fw}${managedHint}<div class="section">Reserved/listening ports</div><div class="field"><label>One port or range per line</label><textarea id="networkPorts" class="mono" style="min-height:180px"${readOnly}>${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: <span class="mono">UDP 2456-2457 Game</span> or <span class="mono">TCP 7777 Game/API</span>. BareMetal servers on this Agent may not reserve overlapping ports of the same protocol.</div></div>${defaults}<div class="section">Profile defaults</div><div class="tiny muted">${(g?.ports||[]).length?(g.ports.map(formatNetworkPort).map(esc).join('<br>')):'No curated port defaults are defined for this game yet.'}</div>`,footer,true)
 }
 async function saveNetwork(id){
@@ -239,7 +292,7 @@ function installNetworkUiHooks(){
       original(id);
       const grid=document.querySelector('.manage-grid');
       if(grid&&!grid.querySelector('[data-network-tile]')){
-        const b=document.createElement('button');b.className='manage-tile';b.dataset.networkTile='1';b.onclick=()=>openNetwork(id);
+        const b=document.createElement('button');b.className='manage-tile';b.dataset.networkTile='1';b.addEventListener('click',()=>openNetwork(id));
         b.innerHTML='<span class="manage-icon">🌐</span><span><b>Network & firewall</b><small>Ports, conflicts and Windows Firewall</small></span>';
         grid.appendChild(b);
       }
@@ -294,3 +347,92 @@ function installNetworkUiHooks(){
   }
 }
 window.addEventListener('DOMContentLoaded',installNetworkUiHooks);
+
+/* Control-room overrides externalized from index.html for CSP. */
+window.GSCUX={booted:false,selected:null,actions:{},refreshing:false,noticeTimer:null};
+
+function clearNotice(){const n=$('#noticeBar');if(n)n.classList.add('hidden');if(GSCUX.noticeTimer){clearTimeout(GSCUX.noticeTimer);GSCUX.noticeTimer=null}}
+function setNotice(msg,kind='info',persistent=false,title=null){
+  const n=$('#noticeBar'),text=$('#noticeText'),head=$('#noticeTitle');if(!n||!text||!head)return;
+  clearNotice();n.className='noticebar '+(kind||'info');text.textContent=msg||'';head.textContent=title||(kind==='err'?'Error':kind==='ok'?'Done':'Status');n.classList.remove('hidden');
+  if(!persistent)GSCUX.noticeTimer=setTimeout(clearNotice,kind==='err'?9000:5000);
+}
+toast=function(msg,kind=''){setNotice(msg,kind==='err'?'err':kind==='ok'?'ok':'info',false)};
+
+boot=async function(){
+  if(GSCUX.booted)return;GSCUX.booted=true;
+  $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
+  try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
+  await Promise.allSettled([loadServers(),refreshJobs(false)]);
+  await checkForUpdate(false);
+  setInterval(()=>loadServers(true),2000);
+  setInterval(()=>{try{const active=loadJobRefs().some(r=>!(JOB_CACHE[r.jobId]?.finished));if(CURRENT_VIEW==='installs'||active)refreshJobs(false)}catch{}},1000);
+  setInterval(()=>checkForUpdate(false),30*60*1000);
+};
+
+loadServers=async function(silent=false){
+  if(GSCUX.refreshing)return;GSCUX.refreshing=true;
+  try{
+    const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;
+    if(GSCUX.selected&&!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=null;
+    if(!GSCUX.selected&&SERVERS.length)GSCUX.selected=SERVERS[0].id;
+    renderServers();
+  }catch(e){if(!silent)setNotice('Refresh failed: '+e.message,'err',false)}finally{GSCUX.refreshing=false}
+};
+
+window.selectServer=function(id){GSCUX.selected=id;renderServers()};
+function actionVisual(id,actual){const a=GSCUX.actions[id];return a?.state||actual||'Unknown'}
+function stateClass(state){return state==='Running'?'up':['Starting','Stopping','Restarting','Working'].includes(state)?'warn':'down'}
+function quickTile(icon,title,desc,actionName,args=[]){return `<button class="manage-tile" ${uiAction(actionName,args)}><span class="manage-icon">${icon}</span><span><b>${esc(title)}</b><small>${esc(desc)}</small></span></button>`}
+
+renderServers=function(){
+  const root=$('#servers');if(!root)return;
+  if(!SERVERS.length){root.innerHTML=`<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')}>Create your first server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')}>Add existing server</button></div>`;return}
+  if(!GSCUX.selected||!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=SERVERS[0].id;
+  const rows=SERVERS.map(d=>{const s=STATUS[d.id]||{},m=serverMeta(d),state=actionVisual(d.id,s.processState),selected=d.id===GSCUX.selected;return `<button class="server-row ${selected?'selected':''}" ${uiAction('selectServer',[d.id])}><span class="server-row-icon">${m.icon}</span><span class="server-row-main"><span class="server-row-name">${esc(d.name)}</span><span class="server-row-meta">${esc(m.label)} · ${s.pidInGuest?'PID '+s.pidInGuest:(d.hostingMode==='Vm'?'Hyper-V':'This machine')}</span></span><span class="server-row-state ${stateClass(state)}">${esc(state)}</span></button>`}).join('');
+  root.innerHTML=`<div class="server-control-layout"><aside class="server-list">${rows}</aside><div id="serverControlPanel"></div></div>`;
+  renderServerControlPanel();
+};
+
+window.renderServerControlPanel=function(){
+  const host=$('#serverControlPanel'),d=SERVERS.find(x=>x.id===GSCUX.selected);if(!host||!d)return;
+  const s=STATUS[d.id]||{},m=serverMeta(d),g=m.profile||{},caps=g.caps||{},pending=GSCUX.actions[d.id],actual=s.processState||'Unknown',display=actionVisual(d.id,actual),up=actual==='Running',busy=!!pending||['Starting','Stopping'].includes(actual);
+  let op='';if(pending){op=`<div class="operation-banner ${pending.error?'err':pending.done?'ok':''}">${pending.done||pending.error?'':'<span class="spinner"></span>'}<div><b>${esc(pending.label)}</b>${pending.detail?`<div class="tiny muted">${esc(pending.detail)}</div>`:''}</div></div>`}
+  const consoleTile=caps.console==='rcon'?(d.rconPort&&d.rconPassword?quickTile('⌨','Console','Interactive RCON console','openConsole',[d.id]):quickTile('⌨','Set up console','RCON port/password required','openEdit',[d.id])):caps.console==='log'&&d.logPathInGuest?quickTile('▤','Live log','Follow server output live','openLog',[d.id]):'';
+  const configTile=caps.config?quickTile('⚙','Configuration','Game-specific settings','openConfig',[d.id]):'';
+  const modsTile=caps.mods?quickTile('◇','Mods','Browse, install and update','openMods',[d.id]):'';
+  const network=(typeof effectiveNetworkPorts==='function'?effectiveNetworkPorts(d):d.networkPorts||[]).map(formatNetworkPort).join(', ');
+  host.innerHTML=`<div class="server-detail-panel"><div class="server-detail-head"><div class="server-detail-icon">${m.icon}</div><div class="grow"><div class="server-detail-title">${esc(d.name)}</div><div class="server-detail-sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V virtual machine':'This machine'}</div></div><div class="server-state-large ${stateClass(display)}">${esc(display)}</div></div><div class="server-detail-body">${op}${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="control-buttons"><button class="btn primary control-btn" ${up||busy?'disabled':''} ${uiAction('action',[d.id,'start'])}>Start</button><button class="btn danger control-btn stop" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'stop'])}>Stop</button><button class="btn control-btn restart" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'restart'])}>Restart</button></div><div class="detail-metrics"><div class="metric-box"><span>PID</span><b>${s.pidInGuest??'—'}</b></div><div class="metric-box"><span>CPU</span><b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></div><div class="metric-box"><span>RAM</span><b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></div><div class="metric-box"><span>Last backup</span><b>${s.lastBackupAt?new Date(s.lastBackupAt).toLocaleString():'—'}</b></div></div><div class="quick-panel">${consoleTile}${configTile}${modsTile}${quickTile('▣','Backups','Create and restore saves','openBackups',[d.id])}${quickTile('◎','Network','Ports and Windows Firewall','openNetwork',[d.id])}${quickTile('⋯','More settings','Schedule, update, edit, delete…','openManage',[d.id])}</div><div class="server-path"><div><b>Folder:</b> <span class="mono">${esc(d.guestWorkingDir||'')}</span></div>${network?`<div style="margin-top:4px"><b>Ports:</b> ${esc(network)}</div>`:''}</div></div></div>`;
+};
+
+action=async function(id,a){
+  if(GSCUX.actions[id])return;
+  const labels={start:['Starting server…','Starting'],stop:['Stopping server…','Stopping'],restart:['Restarting server…','Restarting'],backup:['Creating backup…','Working'],update:['Updating server…','Working'],apply:['Applying configuration…','Working']};
+  const spec=labels[a]||['Working…','Working'];GSCUX.selected=id;GSCUX.actions[id]={kind:a,label:spec[0],state:spec[1],detail:a==='stop'?'Waiting for the server process to exit.':a==='restart'?'Stopping first, then starting again.':''};renderServers();setNotice(spec[0],'info',true);
+  try{
+    const r=await api(`/api/servers/${encodeURIComponent(id)}/${a}`,{method:'POST'});
+    if(!r?.success)throw new Error(r?.message||`${a} failed`);
+    GSCUX.actions[id]={kind:a,label:r.message||'Completed',state:a==='stop'?'NotRunning':a==='start'||a==='restart'?'Running':'Working',done:true};
+    await loadServers(true);setNotice(r.message||`${a} completed`,'ok',false);
+    setTimeout(()=>{delete GSCUX.actions[id];renderServers()},1200);
+  }catch(e){GSCUX.actions[id]={kind:a,label:`${a} failed`,state:STATUS[id]?.processState||'Unknown',error:true,detail:e.message};renderServers();setNotice(`${a} failed: ${e.message}`,'err',false);setTimeout(()=>{delete GSCUX.actions[id];renderServers()},5000)}
+};
+
+function bindStaticUi(){
+  const bind=(selector,event,handler)=>{const el=$(selector);if(el)el.addEventListener(event,handler)};
+  bind('#loginConnectBtn','click',()=>login());
+  bind('#updateBtn','click',()=>openUpdate());
+  bind('#createServerBtn','click',()=>openCreate());
+  bind('#discoverBtn','click',()=>openDiscover());
+  bind('#addExistingBtn','click',()=>openAddExisting());
+  bind('#tokensBtn','click',()=>openTokens());
+  bind('#refreshBtn','click',()=>refreshAll());
+  bind('#logoutBtn','click',()=>logout());
+  bind('#tabServers','click',()=>showView('servers'));
+  bind('#tabInstalls','click',()=>showView('installs'));
+  bind('#noticeCloseBtn','click',()=>clearNotice());
+  bind('#clearFinishedJobsBtn','click',()=>clearFinishedJobs());
+  bind('#modalCloseBtn','click',()=>closeModal());
+  bind('#overlay','click',event=>{if(event.target===event.currentTarget)closeModal()});
+}
+bindStaticUi();
