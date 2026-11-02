@@ -66,6 +66,38 @@ function hasValidBrowserOrigin(request) {
   return request.headers.get('origin') === requestUrl.origin;
 }
 
+export async function fetchAgentHealth(env) {
+  const target = new URL('/api/health', normalizedOrigin(env.AGENT_ORIGIN));
+  const headers = new Headers();
+  headers.set('authorization', `Bearer ${env.AGENT_API_TOKEN}`);
+  headers.set('cf-access-client-id', env.ORIGIN_ACCESS_CLIENT_ID);
+  headers.set('cf-access-client-secret', env.ORIGIN_ACCESS_CLIENT_SECRET);
+  headers.set('accept', 'application/json');
+
+  let response;
+  try {
+    response = await fetch(target.toString(), {
+      method: 'GET',
+      headers,
+      redirect: 'manual'
+    });
+  } catch {
+    return { ok: false, status: 0, ts: null };
+  }
+
+  if (!response.ok) return { ok: false, status: response.status, ts: null };
+
+  let body;
+  try { body = await response.json(); }
+  catch { return { ok: false, status: response.status, ts: null }; }
+
+  return {
+    ok: body?.ok === true,
+    status: response.status,
+    ts: typeof body?.ts === 'string' ? body.ts : null
+  };
+}
+
 function relayWebSocket(upstreamResponse) {
   const upstream = upstreamResponse.webSocket;
   if (!upstream) return upstreamResponse;
@@ -151,6 +183,17 @@ async function proxyToAgent(request, env, accessPayload) {
   });
 }
 
+async function authenticatedAccess(request, env) {
+  try {
+    return { payload: await verifyPanelAccess(request, env), error: null };
+  } catch (error) {
+    return {
+      payload: null,
+      error: jsonError(403, 'Cloudflare Access authentication failed.', error instanceof Error ? error.message : String(error))
+    };
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -163,6 +206,30 @@ export default {
       }, { headers: { 'cache-control': 'no-store' } });
     }
 
+    if (url.pathname === '/gateway/status') {
+      const missing = requiredConfig(env);
+      if (missing.length) return jsonError(503, 'Cloud gateway is not configured.', missing.join(', '));
+
+      const access = await authenticatedAccess(request, env);
+      if (access.error) return access.error;
+
+      const agent = await fetchAgentHealth(env);
+      const remoteUser = access.payload?.email || access.payload?.sub || null;
+      return Response.json({
+        ok: agent.ok,
+        mode: 'cloudflare',
+        user: remoteUser ? String(remoteUser) : null,
+        agent: {
+          reachable: agent.ok,
+          status: agent.status,
+          timestamp: agent.ts
+        }
+      }, {
+        status: agent.ok ? 200 : 503,
+        headers: { 'cache-control': 'no-store' }
+      });
+    }
+
     if (isGatewayPath(url.pathname)) {
       const missing = requiredConfig(env);
       if (missing.length) return jsonError(503, 'Cloud gateway is not configured.', missing.join(', '));
@@ -170,14 +237,10 @@ export default {
       if (!hasValidBrowserOrigin(request))
         return jsonError(403, 'Cross-origin state-changing requests are not allowed.');
 
-      let accessPayload;
-      try {
-        accessPayload = await verifyPanelAccess(request, env);
-      } catch (error) {
-        return jsonError(403, 'Cloudflare Access authentication failed.', error instanceof Error ? error.message : String(error));
-      }
+      const access = await authenticatedAccess(request, env);
+      if (access.error) return access.error;
 
-      return proxyToAgent(request, env, accessPayload);
+      return proxyToAgent(request, env, access.payload);
     }
 
     return env.ASSETS.fetch(request);
