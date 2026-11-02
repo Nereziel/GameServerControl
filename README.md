@@ -135,6 +135,8 @@ The Web UI is the primary control surface. It supports:
 - API token management
 - Agent update checks and Windows self-update
 
+The Web UI reads the current authenticated identity from `/api/auth/me`. A `ReadOnly` token can inspect status, configuration, backups and supported live output, but mutation controls and interactive commands are disabled. The Agent remains the authorization authority even if a browser control is missed.
+
 ## Game profiles
 
 Per-game defaults and capabilities live in:
@@ -160,7 +162,7 @@ Examples of profile-controlled capabilities:
 
 ## API authentication
 
-All `/api/*` endpoints require a bearer token. Tokens can have Admin or ReadOnly roles. Write operations require Admin.
+All `/api/*` endpoints require a bearer token. Tokens can have `Admin` or `ReadOnly` roles. State-changing operations require `Admin`; SignalR console input is also explicitly Admin-only.
 
 Example:
 
@@ -168,9 +170,64 @@ Example:
 Authorization: Bearer <token>
 ```
 
+Managed tokens created from the Tokens UI are shown in plaintext only when created. `tokens.json` stores a SHA-256 hash plus a short display prefix rather than a reusable bearer credential. Existing older plaintext managed-token records are migrated to the hashed format when loaded. The legacy bootstrap `Agent:ApiToken` in `appsettings.json` remains supported as an Admin token for backward compatibility.
+
 Do not expose the Agent API directly to the public Internet. For remote administration use Tailscale or an authenticated reverse proxy such as Cloudflare Access.
 
 The optional Relay API is also bearer-token protected and is intended to be reachable over Tailscale, not the public Internet.
+
+### Cloudflare remote administration
+
+Cloudflare remote administration is optional. Local/LAN/Tailscale access continues to talk directly to the same Agent and keeps working independently of the Worker/Tunnel path.
+
+Recommended paths:
+
+```text
+Local / Tailscale:
+Browser -> Agent Web UI -> Agent
+
+Remote:
+Browser -> Cloudflare Access -> GameServerControl Worker -> protected Tunnel origin -> Agent
+```
+
+Use **two dedicated managed Agent tokens** for the Worker instead of reusing the bootstrap Admin token:
+
+- `cloud-admin` with role `Admin`
+- `cloud-readonly` with role `ReadOnly`
+
+Configure the Agent so only those dedicated token IDs may attach a Cloudflare human identity to audit records:
+
+```json
+{
+  "Agent": {
+    "AuditRetentionDays": 90,
+    "CloudGateway": {
+      "TrustedTokenIds": "cloud-admin,cloud-readonly"
+    }
+  }
+}
+```
+
+Configure these Worker secrets/variables with your own values:
+
+```text
+AGENT_ORIGIN
+AGENT_ADMIN_TOKEN
+AGENT_READONLY_TOKEN
+ORIGIN_ACCESS_CLIENT_ID
+ORIGIN_ACCESS_CLIENT_SECRET
+ACCESS_TEAM_DOMAIN
+ACCESS_POLICY_AUD
+ACCESS_ADMIN_EMAILS
+```
+
+`ACCESS_ADMIN_EMAILS` is a comma/semicolon/newline-separated list of verified Cloudflare Access email identities that should receive the Worker-side `Admin` role. Matching is case-insensitive. Every other successfully authenticated Access user is mapped to `ReadOnly`. If `ACCESS_ADMIN_EMAILS` is empty, the gateway fails closed for writes: all Access users are ReadOnly.
+
+The Worker validates the Access JWT, selects the Agent token that matches the mapped role, strips browser-supplied authorization/gateway identity headers, and adds the protected-origin Access service credentials. ReadOnly users may perform GET requests, SignalR negotiation and the narrow live-log subscription control; normal POST/PUT/PATCH/DELETE operations remain blocked. The Agent repeats role enforcement as defense in depth.
+
+Protect the human-facing panel hostname with Cloudflare Access. Protect the Tunnel origin hostname separately with an Access service-token policy used only by the Worker. Do not make the Agent origin publicly reachable without Access/Tunnel protection.
+
+Audit logs are written under the Agent audit directory (default `Logs/audit`) and retained for 90 days by default. The remote-user header is accepted only when the request is authenticated with an Agent token ID listed in `Agent:CloudGateway:TrustedTokenIds`; sending the same header with an ordinary token does not make it trusted cloud identity.
 
 ## Updates
 
