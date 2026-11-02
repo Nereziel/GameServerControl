@@ -2,6 +2,7 @@ import fs from 'node:fs';
 
 const program = fs.readFileSync('src/GameServerControl.Agent/Program.cs', 'utf8');
 const audit = fs.readFileSync('src/GameServerControl.Agent/Auth/AuditLogger.cs', 'utf8');
+const roles = fs.readFileSync('src/GameServerControl.Agent/Auth/RoleEnforcementMiddleware.cs', 'utf8');
 const hub = fs.readFileSync('src/GameServerControl.Agent/Hubs/StatusHub.cs', 'utf8');
 const example = fs.readFileSync('src/GameServerControl.Agent/appsettings.json.example', 'utf8');
 const agentSurface = program + '\n' + audit;
@@ -17,6 +18,8 @@ requireToken(audit, 'IsAuthenticated', 'Identity endpoint must reject unauthenti
 
 requireToken(hub, '[Authorize(Policy = "admin")]', 'Interactive SignalR console input must remain Admin-only');
 requireToken(hub, 'SendConsoleInput', 'Interactive SignalR console input contract is required');
+requireToken(roles, 'IsReadOnlyControlPost', 'ReadOnly API policy must explicitly identify safe control-plane POSTs');
+requireToken(roles, '/logs/tail', 'ReadOnly tokens must be able to start/stop their live-log subscription');
 
 requireToken(audit, 'Agent:CloudGateway:TrustedTokenIds', 'Cloud audit identity must be bound to explicitly trusted Agent token ids');
 requireToken(audit, '_trustedGatewayTokenIds.Contains(tokenId)', 'Cloud audit headers must be tied to the authenticated trusted token id');
