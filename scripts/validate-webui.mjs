@@ -60,17 +60,22 @@ try {
     }
 
     const stagedHtml = fs.readFileSync(stagedIndex, 'utf8');
-    if (!stagedHtml.includes('window.GSC_CLOUD_MODE=true') || !stagedHtml.includes('/webui/cloud-adapter.js')) {
-      console.error('Cloudflare Web UI build is missing its cloud bootstrap/adapter.');
+    if (!stagedHtml.includes('/webui/cloud-adapter.js')) {
+      console.error('Cloudflare Web UI build is missing its external cloud adapter.');
       process.exit(1);
     }
     cloudInlineCount = checkInlineScripts(stagedHtml, tempDir, 'Cloud index.html');
+    if (cloudInlineCount !== 0) {
+      console.error(`Cloudflare Web UI staging emitted ${cloudInlineCount} inline executable script(s).`);
+      process.exit(1);
+    }
   }
 
   runNode(path.resolve('scripts/validate-update-ux.mjs'), 'update/install UX contract');
   runNode(path.resolve('scripts/validate-server-admin.mjs'), 'server admin capability contract');
   runNode(path.resolve('scripts/validate-monitoring.mjs'), 'monitoring history contract');
   runNode(path.resolve('scripts/validate-profile-contract.mjs'), 'scalable game-profile contract');
+  runNode(path.resolve('scripts/validate-sec07-ui-actions.mjs'), 'SEC-07 delegated UI action behavior');
   runNode(path.resolve('scripts/validate-audit-sec07.mjs'), 'audit SEC-07 WebUI XSS/CSP contract');
   console.log(`Validated ${files.length} Agent JavaScript files, ${agentInlineCount} Agent inline scripts, ${cloudInlineCount} Cloud inline scripts and the Cloudflare Web UI staging build.`);
 } finally {
