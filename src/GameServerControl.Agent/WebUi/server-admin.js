@@ -74,8 +74,8 @@ async function runConsole(id){const input=$('#consoleIn'),out=$('#consoleOut'),c
 
 /* Authenticated identity and ReadOnly UX. Backend authorization remains authoritative. */
 let AUTH={id:null,name:null,role:null};
-const ADMIN_MUTATION_CALLS=/\b(?:action|manageAction|rconPlayer|runConsole|testDiscordEdit|serverWorkspace(?:Save|Create|Restore|Delete|Send|Reset|Clear)\w*|gscFiles(?:Save|Restore)|(?:save|delete|remove|install|update|start|stop|restart|apply|backup|restore|ban|kick|send|clear|create)[A-Za-z0-9_]*)\s*\(/i;
-const ADMIN_NAV_CALLS=/\b(?:openCreate|openAddExisting|openTokens|openUpdate)\s*\(/i;
+const ADMIN_MUTATION_CALLS=/^(?:action|manageAction|rconPlayer|runConsole|testDiscordEdit|serverWorkspace(?:Save|Create|Restore|Delete|Send|Reset|Clear|PlayerAction)\w*|gscFiles(?:Save|Restore)|(?:save|delete|remove|install|update|start|stop|restart|apply|backup|restore|ban|kick|send|clear|create)[A-Za-z0-9_]*)$/i;
+const ADMIN_NAV_CALLS=/^(?:openCreate|openAddExisting|openTokens|openUpdate)$/i;
 
 function isReadOnly(){return String(AUTH?.role||'').toLowerCase()==='readonly'}
 function adminDisabled(){return isReadOnly()?'disabled':''}
@@ -98,22 +98,28 @@ function ensureAuthRoleBadge(){
   badge.title=AUTH?.name?`${AUTH.name} · ${AUTH.role||''}`:String(AUTH?.role||'');
 }
 
+function delegatedActionNames(control){
+  const name=control.getAttribute('data-gsc-action')||'';
+  if(name!=='runUiActions')return name?[name]:[];
+  try{
+    const encoded=control.getAttribute('data-gsc-args');
+    const args=encoded?JSON.parse(decodeURIComponent(encoded)):[];
+    const actions=Array.isArray(args?.[0])?args[0]:[];
+    return actions.map(x=>Array.isArray(x)?String(x[0]||''):'').filter(Boolean);
+  }catch{return[name]}
+}
+function delegatedActionRequiresAdmin(control){
+  return delegatedActionNames(control).some(name=>ADMIN_MUTATION_CALLS.test(name)||ADMIN_NAV_CALLS.test(name));
+}
+
 function applyAuthUi(){
   ensureAuthRoleBadge();
   if(!isReadOnly())return;
   const explanation='Read-only access: this action requires an Admin token.';
-  document.querySelectorAll('button[onclick]').forEach(button=>{
-    const call=button.getAttribute('onclick')||'';
-    if(ADMIN_MUTATION_CALLS.test(call)||ADMIN_NAV_CALLS.test(call)){
-      button.disabled=true;
-      button.title=explanation;
-    }
-  });
-  document.querySelectorAll('input[onkeydown],textarea[onkeydown]').forEach(input=>{
-    const call=input.getAttribute('onkeydown')||'';
-    if(ADMIN_MUTATION_CALLS.test(call)){
-      input.disabled=true;
-      input.title=explanation;
+  document.querySelectorAll('[data-gsc-action]').forEach(control=>{
+    if(delegatedActionRequiresAdmin(control)){
+      control.disabled=true;
+      control.title=explanation;
     }
   });
 }
