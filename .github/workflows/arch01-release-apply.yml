@@ -26,6 +26,10 @@ jobs:
           python scripts/arch01-release-apply.py
           if ($LASTEXITCODE -ne 0) { throw "ARCH-01 installer transform failed with exit code $LASTEXITCODE." }
 
+          $installer = Get-Content -LiteralPath 'deploy/windows/install.ps1' -Raw
+          $installer = $installer.Replace('access to $serviceAccount:', 'access to ${serviceAccount}:')
+          Set-Content -LiteralPath 'deploy/windows/install.ps1' -Value $installer -Encoding UTF8
+
           $tokens = $null
           $parseErrors = $null
           [System.Management.Automation.Language.Parser]::ParseFile('deploy/windows/install.ps1', [ref]$tokens, [ref]$parseErrors) | Out-Null
