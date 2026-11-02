@@ -142,7 +142,7 @@ public static class ServerConfigSyntaxValidator
                     Fail("TOML", lineNumber, "array-table header is malformed.");
                 continue;
             }
-            if (line.StartsWith('[', StringComparison.Ordinal))
+            if (line.StartsWith("[", StringComparison.Ordinal))
             {
                 if (!line.EndsWith(']') || line.Length <= 2)
                     Fail("TOML", lineNumber, "table header is malformed.");
