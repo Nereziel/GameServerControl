@@ -101,8 +101,10 @@ function isGatewayPath(pathname) {
   return pathname === '/api' || pathname.startsWith('/api/') || pathname.startsWith('/hubs/');
 }
 
-function hasValidBrowserOrigin(request) {
-  if (!WRITE_METHODS.has(request.method)) return true;
+export function hasValidBrowserOrigin(request) {
+  const method = String(request.method || '').toUpperCase();
+  const isWebSocketUpgrade = String(request.headers.get('upgrade') || '').toLowerCase() === 'websocket';
+  if (!WRITE_METHODS.has(method) && !isWebSocketUpgrade) return true;
   const requestUrl = new URL(request.url);
   return request.headers.get('origin') === requestUrl.origin;
 }
