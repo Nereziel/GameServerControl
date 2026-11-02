@@ -1,0 +1,31 @@
+name: PERF-01 + PERF-02 contract
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  signalr-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Validate PERF-01 SignalR scoping
+        run: node scripts/validate-perf01-perf02.mjs
+
+  retention-behavior:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '8.0.x'
+      - name: Validate PERF-02 retention behavior
+        run: dotnet run --project tools/GameServerControl.PerformanceCheck -c Release
