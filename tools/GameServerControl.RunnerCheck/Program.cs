@@ -31,8 +31,9 @@ var snapshotType = RequireType("GameServerControl.Shared.RunnerConsoleSnapshot")
 
 if (identityType != typeof(object) && identityInfoType != typeof(object))
 {
-    var forServer = identityType.GetMethod("ForServer", BindingFlags.Public | BindingFlags.Static, [typeof(string)]);
-    Check(forServer is not null, "ARCH-01: RunnerIdentity.ForServer(string) is missing.");
+    var forServer = identityType.GetMethod("ForServer", BindingFlags.Public | BindingFlags.Static);
+    Check(forServer is not null && forServer.GetParameters() is [{ ParameterType: var p }] && p == typeof(string),
+        "ARCH-01: RunnerIdentity.ForServer(string) is missing.");
     if (forServer is not null)
     {
         object? Invoke(string id) => forServer.Invoke(null, [id]);
@@ -62,9 +63,10 @@ if (identityType != typeof(object) && identityInfoType != typeof(object))
 if (manifestType != typeof(object))
 {
     var ctor = manifestType.GetConstructors().SingleOrDefault();
-    var validate = manifestType.GetMethod("Validate", BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes);
+    var validate = manifestType.GetMethod("Validate", BindingFlags.Public | BindingFlags.Instance);
     Check(ctor is not null, "ARCH-01: RunnerManifest primary constructor is missing.");
-    Check(validate is not null && validate.ReturnType == typeof(string), "ARCH-01: RunnerManifest.Validate() must return string?.");
+    Check(validate is not null && validate.GetParameters().Length == 0 && validate.ReturnType == typeof(string),
+        "ARCH-01: RunnerManifest.Validate() must return string?.");
     if (ctor is not null && validate is not null)
     {
         object NewManifest(string exe, string working) => ctor.Invoke([
@@ -94,9 +96,10 @@ if (requestType != typeof(object) && commandType != typeof(object))
     Check(properties.SequenceEqual(expected), "ARCH-01: RunnerRequest must not carry executable, path, argument, server-id or arbitrary command fields.");
 
     var ctor = requestType.GetConstructors().SingleOrDefault();
-    var validate = requestType.GetMethod("Validate", BindingFlags.Public | BindingFlags.Instance, Type.EmptyTypes);
+    var validate = requestType.GetMethod("Validate", BindingFlags.Public | BindingFlags.Instance);
     Check(ctor is not null, "ARCH-01: RunnerRequest primary constructor is missing.");
-    Check(validate is not null && validate.ReturnType == typeof(string), "ARCH-01: RunnerRequest.Validate() must return string?.");
+    Check(validate is not null && validate.GetParameters().Length == 0 && validate.ReturnType == typeof(string),
+        "ARCH-01: RunnerRequest.Validate() must return string?.");
     if (ctor is not null && validate is not null)
     {
         object Cmd(string name, bool force = false, string? input = null)
