@@ -104,6 +104,9 @@ jobs:
       - name: Validate mod/plugin management
         run: node scripts/validate-mod-management.mjs
 
+      - name: Validate audit SEC-03 through SEC-06
+        run: node scripts/validate-audit-sec03-sec06.mjs
+
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
 
@@ -300,6 +303,20 @@ jobs:
           cp deploy/linux/install-from-release.sh               GameServerControl-Install-Linux.sh
           cp deploy/relay/install-from-release.sh               GameServerControl-Install-Relay.sh
 
+      - name: Create SHA-256 manifest
+        run: |
+          sha256sum \
+            GameServerControl-Agent-windows.zip \
+            GameServerControl-Tray-windows.zip \
+            GameServerControl-Agent-linux.tar.gz \
+            GameServerControl-Relay-linux.tar.gz \
+            GameServerControl-Install-Windows.ps1 \
+            GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1 \
+            GameServerControl-Install-Linux.sh \
+            GameServerControl-Install-Relay.sh \
+            > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
@@ -318,6 +335,7 @@ jobs:
             GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1
             GameServerControl-Install-Linux.sh
             GameServerControl-Install-Relay.sh
+            SHA256SUMS
           body: |
             GameServerControl uses Agent + API + Web UI for administration. The optional Linux Relay exposes game ports from a public VPS through Tailscale to the game host. Optional Cloudflare remote management exposes the same Web UI through Cloudflare Access and Tunnel without opening the Agent port to the Internet.
             Releases are self-contained; no preinstalled .NET runtime is required on target hosts.
@@ -325,7 +343,9 @@ jobs:
             Install commands:
 
                 # Windows Agent (admin PowerShell)
-                iwr https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/windows/install.ps1 | iex
+                # Download GameServerControl-Install-Windows.ps1 and SHA256SUMS from this release,
+                # verify the installer SHA-256, then execute the verified local file:
+                powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\GameServerControl-Install-Windows.ps1
 
                 # Linux Agent
                 curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/linux/install-from-release.sh | sudo bash
@@ -335,5 +355,5 @@ jobs:
 
             The Cloudflare Tunnel Windows bootstrap is included as GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1. It requires a remotely-managed Cloudflare Tunnel token and keeps the Agent origin on loopback.
 
-            Release binaries are stamped with version ${{ needs.prepare.outputs.version }} from the release tag.
+            Release binaries are stamped with version ${{ needs.prepare.outputs.version }} from the release tag. SHA256SUMS binds every published package and installer to this release.
             The Relay installer detects the VPS public interface and Tailscale IPv4, enables IPv4 forwarding, reconciles its Tailscale-only UFW API rule, installs the systemd service, and prints the Tailscale API URL plus token to configure on the Agent.
