@@ -58,15 +58,23 @@ export function agentTokenForRole(role, env) {
   return value;
 }
 
-export function authorizeGatewayRequest(method, role) {
-  if (WRITE_METHODS.has(String(method || '').toUpperCase()) && role !== ADMIN_ROLE) {
-    return {
-      allowed: false,
-      status: 403,
-      error: 'Read-only access cannot modify GameServerControl.'
-    };
-  }
-  return { allowed: true, status: 200, error: null };
+function isReadOnlyControlPost(method, pathname) {
+  if (String(method || '').toUpperCase() !== 'POST') return false;
+  const path = String(pathname || '');
+  if (path === '/hubs/status/negotiate') return true;
+  return /^\/api\/servers\/[^/]+\/logs\/tail$/i.test(path);
+}
+
+export function authorizeGatewayRequest(method, role, pathname = '') {
+  const normalizedMethod = String(method || '').toUpperCase();
+  if (!WRITE_METHODS.has(normalizedMethod) || role === ADMIN_ROLE || isReadOnlyControlPost(normalizedMethod, pathname))
+    return { allowed: true, status: 200, error: null };
+
+  return {
+    allowed: false,
+    status: 403,
+    error: 'Read-only access cannot modify GameServerControl.'
+  };
 }
 
 async function verifyPanelAccess(request, env) {
@@ -281,7 +289,7 @@ export default {
       if (access.error) return access.error;
 
       const role = resolveAccessRole(access.payload, env);
-      const authorization = authorizeGatewayRequest(request.method, role);
+      const authorization = authorizeGatewayRequest(request.method, role, url.pathname);
       if (!authorization.allowed)
         return jsonError(authorization.status, authorization.error);
 
