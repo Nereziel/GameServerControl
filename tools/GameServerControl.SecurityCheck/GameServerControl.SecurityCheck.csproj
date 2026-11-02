@@ -14,5 +14,6 @@
     <Compile Include="../../src/GameServerControl.Agent/Auth/FirstRunTokenGenerator.cs" Link="FirstRunTokenGenerator.cs" />
     <Compile Include="../../src/GameServerControl.Agent/Security/SecretProtector.cs" Link="SecretProtector.cs" />
     <Compile Include="../../src/GameServerControl.Agent/Security/ConfigurationSecretStore.cs" Link="ConfigurationSecretStore.cs" />
+    <Compile Include="../../src/GameServerControl.Agent/Servers/ServerSecretProtection.cs" Link="ServerSecretProtection.cs" />
   </ItemGroup>
 </Project>
