@@ -7,7 +7,7 @@ const required = (text, token, message) => {
 
 const endpoints = read('src/GameServerControl.Agent/Servers/OperationalEndpoints.cs');
 const updater = read('src/GameServerControl.Agent/Notifications/AgentUpdateService.cs');
-const ui = read('src/GameServerControl.Agent/WebUi/core.js');
+const ui = read('src/GameServerControl.Agent/WebUi/core.js') + '\n' + read('src/GameServerControl.Agent/WebUi/server-admin.js');
 const windowsInstaller = read('deploy/windows/install.ps1');
 const linuxInstaller = read('deploy/linux/install-from-release.sh');
 
