@@ -1,8 +1,12 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using GameServerControl.Agent.Networking;
 using GameServerControl.Agent.Security;
+using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Logging;
 
 static void Require(bool condition, string message)
 {
@@ -99,9 +103,62 @@ try
     Require(runtimeDef.RconPassword == def.RconPassword, "RCON password round-trip failed.");
     Require(runtimeDef.DiscordWebhookUrl == def.DiscordWebhookUrl, "Discord webhook round-trip failed.");
 
-    Console.WriteLine("SEC-08 encrypted-at-rest behavior checks OK.");
+    var serversPath = Path.Combine(root, "servers.json");
+    var serverFileJson = JsonSerializer.Serialize(new { Servers = new[] { def } }, new JsonSerializerOptions { WriteIndented = true });
+    File.WriteAllText(serversPath, serverFileJson);
+    File.WriteAllText(serversPath + ".bak", serverFileJson);
+    var persistenceCfg = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Agent:DataDir"] = root,
+            ["Agent:ServersJsonPath"] = serversPath,
+            ["Agent:PublicRelay:StatePath"] = Path.Combine(root, "public-relay.json")
+        })
+        .Build();
+    using var loggerFactory = LoggerFactory.Create(_ => { });
+    using var fileProvider = new PhysicalFileProvider(root);
+    var environment = new TestHostEnvironment(root, fileProvider);
+    var registry = new ServerRegistry(persistenceCfg, environment, loggerFactory.CreateLogger<ServerRegistry>());
+    Require(registry.Get(def.Id)?.RconPassword == def.RconPassword, "ServerRegistry did not expose decrypted RCON credentials at runtime.");
+    Require(registry.Get(def.Id)?.DiscordWebhookUrl == def.DiscordWebhookUrl, "ServerRegistry did not expose decrypted webhook at runtime.");
+    foreach (var path in new[] { serversPath, serversPath + ".bak" })
+    {
+        var stored = File.ReadAllText(path);
+        Require(!stored.Contains("rcon-password", StringComparison.Ordinal), $"{Path.GetFileName(path)} still contains plaintext RCON password.");
+        Require(!stored.Contains("https://discord.invalid/api/webhooks/secret", StringComparison.Ordinal), $"{Path.GetFileName(path)} still contains plaintext webhook.");
+        Require(stored.Contains("enc:v1:", StringComparison.Ordinal), $"{Path.GetFileName(path)} was not migrated to encrypted envelopes.");
+    }
+
+    const string relayToken = "relay-state-token-01234567890123456789";
+    var relayStatePath = Path.Combine(root, "public-relay.json");
+    File.WriteAllText(relayStatePath, JsonSerializer.Serialize(new
+    {
+        Global = new
+        {
+            Url = "https://relay.invalid",
+            ApiToken = relayToken,
+            TargetAddress = "100.64.0.10",
+            PublicAddress = "203.0.113.10"
+        },
+        Servers = new Dictionary<string, object>()
+    }, new JsonSerializerOptions { WriteIndented = true }));
+    var relay = new PublicRelayManager(persistenceCfg, environment, registry, loggerFactory.CreateLogger<PublicRelayManager>());
+    Require(relay.Configured, "PublicRelayManager lost its decrypted relay token during migration.");
+    var storedRelay = File.ReadAllText(relayStatePath);
+    Require(!storedRelay.Contains(relayToken, StringComparison.Ordinal), "public-relay.json still contains a plaintext relay API token.");
+    Require(storedRelay.Contains("enc:v1:", StringComparison.Ordinal), "public-relay.json was not migrated to an encrypted token envelope.");
+
+    Console.WriteLine("SEC-08 encrypted-at-rest behavior and persistence wiring checks OK.");
 }
 finally
 {
     try { Directory.Delete(root, recursive: true); } catch { }
+}
+
+sealed class TestHostEnvironment(string root, IFileProvider provider) : Microsoft.Extensions.Hosting.IHostEnvironment
+{
+    public string EnvironmentName { get; set; } = "Test";
+    public string ApplicationName { get; set; } = "GameServerControl.SecretProtectionCheck";
+    public string ContentRootPath { get; set; } = root;
+    public IFileProvider ContentRootFileProvider { get; set; } = provider;
 }
