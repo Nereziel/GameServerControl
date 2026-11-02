@@ -5,6 +5,7 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using GameServerControl.Agent.Security;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 
@@ -22,6 +23,7 @@ public sealed class PublicRelayManager
 
     private readonly ServerRegistry _registry;
     private readonly ILogger<PublicRelayManager> _logger;
+    private readonly SecretProtector _protector;
     private string _baseUrl;
     private string _apiToken;
     private string? _configuredTarget;
@@ -57,6 +59,8 @@ public sealed class PublicRelayManager
     {
         _registry = registry;
         _logger = logger;
+        var dataDir = cfg["Agent:DataDir"] ?? env.ContentRootPath;
+        _protector = new SecretProtector(dataDir);
         var configuredState = cfg["Agent:PublicRelay:StatePath"] ?? "public-relay.json";
         _statePath = Path.IsPathRooted(configuredState) ? configuredState : Path.Combine(env.ContentRootPath, configuredState);
 
@@ -436,7 +440,22 @@ public sealed class PublicRelayManager
         {
             if (!File.Exists(_statePath)) return new StateDocument();
             SecretFilePermissions.RestrictExisting(_statePath);
-            return JsonSerializer.Deserialize<StateDocument>(File.ReadAllText(_statePath), JsonOptions) ?? new StateDocument();
+            var state = JsonSerializer.Deserialize<StateDocument>(File.ReadAllText(_statePath), JsonOptions) ?? new StateDocument();
+            if (state.Global is null || string.IsNullOrEmpty(state.Global.ApiToken)) return state;
+
+            if (_protector.IsProtected(state.Global.ApiToken))
+            {
+                state.Global = state.Global with { ApiToken = _protector.Unprotect(state.Global.ApiToken) };
+                return state;
+            }
+
+            var plaintext = state.Global.ApiToken;
+            var stored = state.Global with { ApiToken = _protector.Protect(plaintext) };
+            SecretFilePermissions.WriteAllTextAtomic(
+                _statePath,
+                JsonSerializer.Serialize(new StateDocument { Global = stored, Servers = state.Servers }, JsonOptions));
+            _logger.LogInformation("Migrated public relay API token to encrypted storage in {Path}", _statePath);
+            return state;
         }
         catch (Exception ex)
         {
@@ -447,7 +466,8 @@ public sealed class PublicRelayManager
 
     private void SaveStateLocked()
     {
-        var global = new StoredGlobalSettings(_baseUrl, _apiToken, _configuredTarget, _publicAddress);
+        var storedToken = string.IsNullOrEmpty(_apiToken) ? "" : _protector.Protect(_apiToken);
+        var global = new StoredGlobalSettings(_baseUrl, storedToken, _configuredTarget, _publicAddress);
         var json = JsonSerializer.Serialize(new StateDocument { Global = global, Servers = _settings }, JsonOptions);
         SecretFilePermissions.WriteAllTextAtomic(_statePath, json);
     }

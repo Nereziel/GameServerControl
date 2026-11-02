@@ -53,6 +53,9 @@ jobs:
       - name: Validate token storage security
         run: dotnet run --project tools/GameServerControl.SecurityCheck -c Release
 
+      - name: Validate SEC-08 encrypted secret storage
+        run: dotnet run --project tools/GameServerControl.SecretProtectionCheck -c Release
+
       - name: Validate Agent security access
         run: node scripts/validate-security-access.mjs
 
@@ -142,6 +145,9 @@ jobs:
 
       - name: Validate token storage security
         run: dotnet run --project tools/GameServerControl.SecurityCheck -c Release
+
+      - name: Validate SEC-08 encrypted secret storage
+        run: dotnet run --project tools/GameServerControl.SecretProtectionCheck -c Release
 
       - name: Validate Agent security access
         run: node scripts/validate-security-access.mjs

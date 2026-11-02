@@ -14,6 +14,8 @@ GAME_ROOT="${GAME_ROOT:-/srv/gameservers}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/gameservercontrol/backups}"
 UNIT_NAME="gameservercontrol-agent.service"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+STATE_TMP="$(mktemp -d)"
+trap 'rm -rf "$STATE_TMP"' EXIT
 
 echo "=== GameServerControl Agent — Linux install ==="
 echo "Install dir : $INSTALL_DIR"
@@ -53,12 +55,28 @@ if systemctl is-active --quiet "$UNIT_NAME"; then
   systemctl stop "$UNIT_NAME"
 fi
 
+# Preserve restricted Agent state before replacing the build payload. The Linux encryption
+# master key must travel with its ciphertext or existing encrypted state becomes unrecoverable.
+if [[ -d "$INSTALL_DIR" ]]; then
+  chmod 700 "$INSTALL_DIR"
+  for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+    if [[ -f "$INSTALL_DIR/$f" ]]; then
+      chmod 600 "$INSTALL_DIR/$f"
+      cp "$INSTALL_DIR/$f" "$STATE_TMP/$f"
+    fi
+  done
+fi
+
 # 5) Move into place
 echo "=== Installing into $INSTALL_DIR ==="
 mkdir -p "$(dirname "$INSTALL_DIR")"
 rm -rf "$INSTALL_DIR"
 mv "$INSTALL_DIR.tmp" "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/GameServerControl.Agent" 2>/dev/null || true
+
+for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+  [[ -f "$STATE_TMP/$f" ]] && cp "$STATE_TMP/$f" "$INSTALL_DIR/$f"
+done
 
 # Managed roots match GameProfile.DefaultInstallPath + the systemd BackupRoot override.
 mkdir -p "$GAME_ROOT" "$BACKUP_ROOT"
@@ -75,7 +93,7 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
-for f in appsettings.json servers.json tokens.json public-relay.json; do
+for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
   [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
 done
 
@@ -94,7 +112,7 @@ systemctl start "$UNIT_NAME"
 sleep 2
 echo
 echo "=== Secret state ==="
-echo "API credentials remain in restricted local state files and are not printed to installer/service stdout."
+echo "API credentials and the Linux secret-protection key remain in restricted local state files and are not printed to installer/service stdout."
 
 echo
 echo "=== Done ==="

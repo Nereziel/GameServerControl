@@ -1,13 +1,16 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// On first startup, if Agent:ApiToken is empty or a known placeholder, generates a
-/// random 32-byte token and persists it to the restricted appsettings.json state file.
+/// random 32-byte token and persists an encrypted envelope to appsettings.json.
+/// Existing reversible appsettings secrets are migrated to encrypted envelopes here so
+/// runtime configuration is plaintext only in memory before dependent services start.
 /// </summary>
 public static class FirstRunTokenGenerator
 {
@@ -22,55 +25,91 @@ public static class FirstRunTokenGenerator
 
     public static bool EnsureToken(IConfiguration cfg, string baseDir, ILogger logger, out string token)
     {
-        var current = cfg["Agent:ApiToken"] ?? "";
-        if (!IsPlaceholder(current))
-        {
-            token = current;
-            return false;
-        }
-
-        token = GenerateToken();
+        var dataDir = cfg["Agent:DataDir"] ?? baseDir;
+        var protector = new SecretProtector(dataDir);
         var appsettingsPath = Path.Combine(baseDir, "appsettings.json");
 
         try
         {
-            EnsureAppSettingsExists(baseDir, appsettingsPath, token, logger);
-
-            var json = File.ReadAllText(appsettingsPath);
-            var updated = Regex.Replace(
-                json,
-                "\"ApiToken\"\\s*:\\s*\"[^\"]*\"",
-                $"\"ApiToken\": \"{token}\"",
-                RegexOptions.Singleline);
-
-            if (updated == json && !json.Contains("\"ApiToken\"", StringComparison.OrdinalIgnoreCase))
-            {
-                logger.LogWarning("Could not find ApiToken field in appsettings.json to update.");
-                return true;
-            }
-
-            var backup = appsettingsPath + ".bak";
-            File.Copy(appsettingsPath, backup, overwrite: true);
-            SecretFilePermissions.RestrictExisting(backup);
-            SecretFilePermissions.WriteAllTextAtomic(appsettingsPath, updated);
-
-            logger.LogInformation("Generated a new agent API token. The credential was saved to the restricted appsettings.json state file.");
-            Console.WriteLine();
-            Console.WriteLine("====================================================================");
-            Console.WriteLine("  Generated a new Agent API token and saved it to the restricted state file:");
-            Console.WriteLine("  " + appsettingsPath);
-            Console.WriteLine("  The credential itself is intentionally not written to service stdout.");
-            Console.WriteLine("====================================================================");
-            Console.WriteLine();
+            // Migrate all existing reversible secrets before any bootstrap backup is created.
+            // Runtime values from higher-precedence providers (environment/CLI) are preserved.
+            AppSettingsSecretProtection.ProtectAndLoad(cfg, appsettingsPath, protector);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to persist generated token to appsettings.json");
+            logger.LogError(ex, "Failed to migrate/decrypt protected appsettings secrets");
+            throw;
         }
-        return true;
+
+        var current = cfg["Agent:ApiToken"] ?? "";
+        var generated = false;
+
+        if (protector.IsProtected(current))
+        {
+            token = protector.Unprotect(current);
+            cfg["Agent:ApiToken"] = token;
+        }
+        else if (!IsPlaceholder(current))
+        {
+            token = current;
+        }
+        else
+        {
+            generated = true;
+            token = GenerateToken();
+            try
+            {
+                EnsureAppSettingsExists(baseDir, appsettingsPath, token, protector, logger);
+
+                var json = File.ReadAllText(appsettingsPath);
+                var persisted = protector.Protect(token);
+                var updated = Regex.Replace(
+                    json,
+                    "\"ApiToken\"\\s*:\\s*\"[^\"]*\"",
+                    $"\"ApiToken\": \"{persisted}\"",
+                    RegexOptions.Singleline);
+
+                if (updated == json && !json.Contains("\"ApiToken\"", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("Could not find ApiToken field in appsettings.json to update.");
+
+                var backup = appsettingsPath + ".bak";
+                File.Copy(appsettingsPath, backup, overwrite: true);
+                SecretFilePermissions.RestrictExisting(backup);
+                SecretFilePermissions.WriteAllTextAtomic(appsettingsPath, updated);
+
+                cfg["Agent:ApiToken"] = token;
+                logger.LogInformation("Generated a new agent API token. The encrypted credential was saved to the restricted appsettings.json state file.");
+                Console.WriteLine();
+                Console.WriteLine("====================================================================");
+                Console.WriteLine("  Generated a new Agent API token and saved it encrypted at rest in:");
+                Console.WriteLine("  " + appsettingsPath);
+                Console.WriteLine("  The credential itself is intentionally not written to service stdout.");
+                Console.WriteLine("====================================================================");
+                Console.WriteLine();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to persist generated token to appsettings.json");
+                throw;
+            }
+        }
+
+        try
+        {
+            // Covers a just-created example/fallback file and verifies encrypted envelopes are readable.
+            AppSettingsSecretProtection.ProtectAndLoad(cfg, appsettingsPath, protector);
+            token = cfg["Agent:ApiToken"] ?? token;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Failed to migrate/decrypt protected appsettings secrets");
+            throw;
+        }
+
+        return generated;
     }
 
-    private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, string token, ILogger logger)
+    private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, string token, SecretProtector protector, ILogger logger)
     {
         if (File.Exists(appsettingsPath))
         {
@@ -103,7 +142,7 @@ public static class FirstRunTokenGenerator
                 Bind = "http://127.0.0.1:5099",
                 BindHttps = "",
                 CertPassword = "",
-                ApiToken = token,
+                ApiToken = protector.Protect(token),
                 Repo = "Nereziel/GameServerControl",
                 ServersJsonPath = "servers.json",
                 AuditLogPath = "",
