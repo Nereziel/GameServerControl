@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using GameServerControl.Agent.Networking;
+using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Servers;
@@ -20,6 +21,7 @@ public sealed class ServerStore
     private readonly string _path;
     private readonly ServerRegistry _registry;
     private readonly ILogger<ServerStore> _logger;
+    private readonly SecretProtector _protector;
     private readonly object _lock = new();
 
     public ServerStore(IConfiguration cfg, IHostEnvironment env, ServerRegistry registry, ILogger<ServerStore> logger)
@@ -28,6 +30,8 @@ public sealed class ServerStore
         _logger = logger;
         var configured = cfg["Agent:ServersJsonPath"] ?? "servers.json";
         _path = Path.IsPathRooted(configured) ? configured : Path.Combine(env.ContentRootPath, configured);
+        var dataDir = cfg["Agent:DataDir"] ?? env.ContentRootPath;
+        _protector = new SecretProtector(dataDir);
         try { SecretFilePermissions.RestrictExisting(_path); }
         catch (Exception ex) { _logger.LogWarning(ex, "Could not restrict server state permissions for {Path}", _path); }
     }
@@ -179,12 +183,15 @@ public sealed class ServerStore
         if (!File.Exists(_path)) return new List<ServerDef>();
         var json = File.ReadAllText(_path);
         var doc = JsonSerializer.Deserialize<ServersFile>(json, JsonOpts);
-        return (doc?.Servers ?? Array.Empty<ServerDef>()).Select(Normalize).ToList();
+        return (doc?.Servers ?? Array.Empty<ServerDef>())
+            .Select(s => Normalize(ServerSecretStorage.UnprotectFromStorage(s, _protector)))
+            .ToList();
     }
 
     private void SaveAll(List<ServerDef> list)
     {
-        var doc = new ServersFile { Servers = list.ToArray() };
+        var stored = list.Select(s => ServerSecretStorage.ProtectForStorage(s, _protector)).ToArray();
+        var doc = new ServersFile { Servers = stored };
         var json = JsonSerializer.Serialize(doc, JsonOpts);
         SecretFilePermissions.WriteAllTextAtomic(_path, json, _path + ".bak");
     }
