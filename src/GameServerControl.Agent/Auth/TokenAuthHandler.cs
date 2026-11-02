@@ -62,6 +62,19 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
+        // Installers use a short-lived local credential to prove that the replacement
+        // Agent is actually serving authenticated API traffic. This credential is valid
+        // only for the exact health endpoint and cannot be used for any other API route.
+        if (string.Equals(Request.Path.Value, "/api/health", StringComparison.Ordinal) &&
+            UpdateHealthToken.IsValid(AppContext.BaseDirectory, presented))
+        {
+            if (clientKey is not null) _failureThrottle.RecordSuccess(clientKey);
+            return Task.FromResult(Success(
+                id: "update-health-probe",
+                name: "Update health probe",
+                role: TokenRole.ReadOnly));
+        }
+
         var match = _registry.Lookup(presented);
         if (match is null)
         {
@@ -72,15 +85,7 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
         if (clientKey is not null) _failureThrottle.RecordSuccess(clientKey);
 
         var (id, name, role) = match.Value;
-        var identity = new ClaimsIdentity(new[]
-        {
-            new Claim(ClaimTypes.Name, name),
-            new Claim(TokenIdClaim, id),
-            new Claim(RoleClaim, role.ToString())
-        }, Scheme.Name);
-        var principal = new ClaimsPrincipal(identity);
-        var ticket = new AuthenticationTicket(principal, Scheme.Name);
-        return Task.FromResult(AuthenticateResult.Success(ticket));
+        return Task.FromResult(Success(id, name, role));
     }
 
     protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
@@ -96,6 +101,19 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
         }
 
         await base.HandleChallengeAsync(properties);
+    }
+
+    private AuthenticateResult Success(string id, string name, TokenRole role)
+    {
+        var identity = new ClaimsIdentity(new[]
+        {
+            new Claim(ClaimTypes.Name, name),
+            new Claim(TokenIdClaim, id),
+            new Claim(RoleClaim, role.ToString())
+        }, Scheme.Name);
+        var principal = new ClaimsPrincipal(identity);
+        var ticket = new AuthenticationTicket(principal, Scheme.Name);
+        return AuthenticateResult.Success(ticket);
     }
 
     private string? ProtectedClientKey()
