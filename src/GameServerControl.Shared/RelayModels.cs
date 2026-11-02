@@ -12,10 +12,9 @@ public record RelayPublicPort(
     int? EndPort = null);
 
 /// <summary>
-/// Per-server public relay settings. The optional Agent-level fields are accepted by the
-/// existing server relay endpoint so the Web UI can configure the Relay connection without
-/// exposing a second unauthenticated configuration surface. RelayApiToken is write-only:
-/// status responses only expose whether a token is configured.
+/// Per-server public relay settings. Agent-level fields remain optional for backwards
+/// compatibility with older clients; new clients should use PublicRelayGlobalSettings instead.
+/// RelayApiToken is write-only: status responses never expose the stored token.
 /// </summary>
 public record PublicRelayServerSettings(
     bool Enabled,
@@ -24,6 +23,27 @@ public record PublicRelayServerSettings(
     string? RelayApiToken = null,
     string? TargetAddress = null,
     string? PublicAddress = null);
+
+/// <summary>
+/// Agent-wide Relay connection settings. A null RelayApiToken means "keep the current token";
+/// an empty RelayApiToken explicitly clears it. Blank TargetAddress/PublicAddress clear those
+/// optional overrides. The token is never returned in PublicRelayGlobalStatus.
+/// </summary>
+public record PublicRelayGlobalSettings(
+    string? RelayUrl = null,
+    string? RelayApiToken = null,
+    string? TargetAddress = null,
+    string? PublicAddress = null);
+
+public record PublicRelayGlobalStatus(
+    bool Configured,
+    bool Reachable,
+    string? RelayUrl,
+    bool ApiTokenConfigured,
+    string? ConfiguredTargetAddress,
+    string? TargetAddress,
+    string? PublicAddress,
+    string? Error = null);
 
 public record RelayRoutePort(
     string Name,
