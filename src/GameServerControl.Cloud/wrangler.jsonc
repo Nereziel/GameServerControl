@@ -12,9 +12,14 @@
     "directory": "./dist",
     "binding": "ASSETS"
   },
-  "vars": {
-    "AGENT_ORIGIN": "https://gsc-origin.example.com",
-    "ACCESS_TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
-    "ACCESS_POLICY_AUD": "replace-with-panel-access-aud"
+  "secrets": {
+    "required": [
+      "AGENT_ORIGIN",
+      "ACCESS_TEAM_DOMAIN",
+      "ACCESS_POLICY_AUD",
+      "AGENT_API_TOKEN",
+      "ORIGIN_ACCESS_CLIENT_ID",
+      "ORIGIN_ACCESS_CLIENT_SECRET"
+    ]
   }
 }
