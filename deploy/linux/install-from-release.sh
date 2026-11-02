@@ -14,9 +14,11 @@ set -euo pipefail
 
 REPO="${GSC_REPO:-Nereziel/GameServerControl}"
 INSTALL_DIR="${GSC_INSTALL:-/opt/gameservercontrol/agent}"
+PREVIOUS_DIR="${INSTALL_DIR}.previous"
 SERVICE_USER="${GSC_USER:-gsc}"
 VERSION="${GSC_VERSION:-}"
 UNIT_NAME="gameservercontrol-agent.service"
+HAD_PREVIOUS=0
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; GRAY='\033[0;90m'; NC='\033[0m'
 step()  { echo -e "\n${CYAN}==>${NC} $*"; }
@@ -74,8 +76,15 @@ for f in appsettings.json servers.json tokens.json public-relay.json; do
     fi
 done
 
+# Rollback previous Agent payload: keep the complete old directory until the replacement service is healthy.
+rm -rf "$PREVIOUS_DIR"
+if [[ -d "$INSTALL_DIR" ]] && [[ -f "$INSTALL_DIR/GameServerControl.Agent" ]]; then
+    mv "$INSTALL_DIR" "$PREVIOUS_DIR"
+    HAD_PREVIOUS=1
+elif [[ -d "$INSTALL_DIR" ]]; then
+    rm -rf "$INSTALL_DIR"
+fi
 mkdir -p "$INSTALL_DIR"
-find "$INSTALL_DIR" -mindepth 1 -delete
 tar -xzf "$tmp_dir/agent.tar.gz" -C "$INSTALL_DIR"
 
 for f in appsettings.json servers.json tokens.json public-relay.json; do
@@ -122,12 +131,33 @@ unit_src="$INSTALL_DIR/$UNIT_NAME"
 cp "$unit_src" "/etc/systemd/system/$UNIT_NAME"
 systemctl daemon-reload
 systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
-systemctl start "$UNIT_NAME"
+systemctl start "$UNIT_NAME" || true
 sleep 2
 if systemctl is-active --quiet "$UNIT_NAME"; then
     ok "$UNIT_NAME running."
+    if [[ $HAD_PREVIOUS -eq 1 ]]; then
+        rm -rf "$PREVIOUS_DIR"
+        skip "Removed previous Agent payload after successful startup."
+    fi
 else
-    warn "Service did not become active. Check: journalctl -u $UNIT_NAME -n 50"
+    if [[ $HAD_PREVIOUS -eq 1 ]] && [[ -d "$PREVIOUS_DIR" ]]; then
+        warn "New Agent did not become healthy. Rolling back the previous payload."
+        systemctl stop "$UNIT_NAME" >/dev/null 2>&1 || true
+        rm -rf "$INSTALL_DIR"
+        mv "$PREVIOUS_DIR" "$INSTALL_DIR"
+        old_unit="$INSTALL_DIR/$UNIT_NAME"
+        if [[ -f "$old_unit" ]]; then
+            cp "$old_unit" "/etc/systemd/system/$UNIT_NAME"
+            systemctl daemon-reload
+        fi
+        systemctl start "$UNIT_NAME" || true
+        if systemctl is-active --quiet "$UNIT_NAME"; then
+            ok "Previous Agent payload restored and service restarted."
+            fail "New Agent failed to start. The previous Agent payload was restored."
+        fi
+        fail "New Agent failed to start and rollback could not restart the previous service."
+    fi
+    fail "Service did not become active. Check: journalctl -u $UNIT_NAME -n 50"
 fi
 
 step "Reading the persisted API token"
