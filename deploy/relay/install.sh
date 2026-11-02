@@ -9,6 +9,7 @@ ENV_FILE="/etc/gameservercontrol-relay.env"
 API_PORT="${API_PORT:-5100}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR}"
+UFW_HELPER="$SOURCE_DIR/ufw-reconcile.sh"
 
 if [[ $EUID -ne 0 ]]; then
   echo "Run as root: sudo $0" >&2
@@ -30,6 +31,12 @@ if [[ ! -f "$SOURCE_DIR/$UNIT_NAME" ]]; then
   echo "$UNIT_NAME not found in $SOURCE_DIR." >&2
   exit 1
 fi
+if [[ ! -f "$UFW_HELPER" ]]; then
+  echo "ufw-reconcile.sh not found in $SOURCE_DIR." >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+source "$UFW_HELPER"
 
 has_icu() {
   if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -qE 'libicu(uc|i18n)\.so'; then
@@ -65,6 +72,21 @@ TAILSCALE_INTERFACE="${TAILSCALE_INTERFACE:-tailscale0}"
 if [[ -z "$TAILSCALE_IP" || -z "$PUBLIC_INTERFACE" ]]; then
   echo "Could not detect Tailscale IPv4 address or public interface." >&2
   exit 1
+fi
+
+# Capture the previous Relay API endpoint before replacing the env file. This lets
+# the installer remove only its own stale UFW rule when the Tailscale endpoint moves.
+PREVIOUS_RELAY_BIND=""
+PREVIOUS_TAILSCALE_INTERFACE=""
+PREVIOUS_TAILSCALE_IP=""
+PREVIOUS_API_PORT=""
+if [[ -f "$ENV_FILE" ]]; then
+  PREVIOUS_RELAY_BIND="$(sed -n 's/^Relay__Bind=//p' "$ENV_FILE" | head -n1)"
+  PREVIOUS_TAILSCALE_INTERFACE="$(sed -n 's/^Relay__TailscaleInterface=//p' "$ENV_FILE" | head -n1)"
+  if [[ "$PREVIOUS_RELAY_BIND" =~ ^https?://([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):([0-9]+)$ ]]; then
+    PREVIOUS_TAILSCALE_IP="${BASH_REMATCH[1]}"
+    PREVIOUS_API_PORT="${BASH_REMATCH[2]}"
+  fi
 fi
 
 # Updates must not silently rotate the Relay API token because the Agent stores it.
@@ -109,11 +131,12 @@ net.ipv4.ip_forward = 1
 EOF
 sysctl -p /etc/sysctl.d/99-gameservercontrol-relay.conf >/dev/null
 
-# The Relay API is intentionally reachable only over Tailscale. If UFW is active,
-# explicitly allow the API on the Tailscale interface; no public-interface API rule is added.
-if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
-  ufw allow in on "$TAILSCALE_INTERFACE" to "$TAILSCALE_IP" port "$API_PORT" proto tcp comment 'GameServerControl Relay API' >/dev/null
-fi
+# Keep the Relay API reachable only through the current Tailscale endpoint. The
+# helper removes only GameServerControl-owned rules and cleans stale endpoint rules
+# even if UFW is currently inactive; a new allow rule is added only when UFW is active.
+gsc_reconcile_relay_api_ufw \
+  "$TAILSCALE_INTERFACE" "$TAILSCALE_IP" "$API_PORT" \
+  "$PREVIOUS_TAILSCALE_INTERFACE" "$PREVIOUS_TAILSCALE_IP" "$PREVIOUS_API_PORT"
 
 cp "$SOURCE_DIR/$UNIT_NAME" "/etc/systemd/system/$UNIT_NAME"
 systemctl daemon-reload
@@ -148,7 +171,8 @@ echo "  Tailscale iface:  ${TAILSCALE_INTERFACE}"
 echo "  State:             ${STATE_DIR}/routes.json"
 echo "  API token:         ${RELAY_TOKEN}"
 echo
-echo "Configure the Relay URL + token in the Agent Web UI under Server -> Network -> Public VPS relay."
+echo "Configure the Relay URL + token in the Agent Web UI under Settings -> Public VPS relay."
+echo "Enable public exposure and public ports per server under Server -> Network -> Public VPS relay."
 echo "The relay manages only its GSC_RELAY_* chains; it does not rewrite /etc/ufw/before.rules."
-echo "If UFW is active, TCP ${API_PORT} is allowed only on ${TAILSCALE_INTERFACE}."
+echo "If UFW is active, TCP ${API_PORT} is allowed only on ${TAILSCALE_INTERFACE} to ${TAILSCALE_IP}."
 echo "Remember to allow the public game ports in your VPS provider/cloud firewall as well."
