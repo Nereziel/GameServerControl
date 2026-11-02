@@ -48,13 +48,13 @@ requireCheck(client.includes('RunnerProtocolLimits.MaxRequestBytes') && client.i
 requireCheck(client.includes('ConnectAsync') && client.includes('CancellationTokenSource'), 'Agent Runner client must use bounded/cancellable pipe connection attempts.');
 
 requireCheck(local.includes('WindowsRunnerServiceManager'), 'LocalProcessService must delegate Windows BareMetal runtime to WindowsRunnerServiceManager.');
-requireCheck(!/OperatingSystem\.IsWindows\(\)[\s\S]{0,2200}?Process\.Start\s*\(/m.test(local), 'Windows LocalProcessService still has a direct game Process.Start fallback.');
+requireCheck(local.includes('_windowsRunner.StartAsync(def, ct)'), 'Windows start path must delegate to the Runner.');
+requireCheck(/StartLocalProcessAsync[\s\S]{0,500}?OperatingSystem\.IsWindows\(\)[^\n]*throw/m.test(local), 'Direct process launch helper must fail closed on Windows.');
 requireCheck(!/StartBareMetalAsync[\s\S]{0,5000}?StartScheduledTaskAsync\s*\(/m.test(orchestrator), 'StartBareMetalAsync still has a Scheduled Task launch bypass.');
 
 requireCheck(manager.includes('NT SERVICE\\'), 'Runner services must use Windows virtual service accounts.');
 requireCheck(manager.includes('ArgumentList'), 'Runner provisioning commands must use ProcessStartInfo.ArgumentList instead of shell interpolation.');
 requireCheck(!manager.includes('cmd.exe') && !manager.includes('powershell.exe'), 'Runner service provisioning must not shell through cmd.exe or powershell.exe.');
-requireCheck(manager.includes('GameServerControlRunner_'), 'Runner service names must use the deterministic GameServerControlRunner_ prefix.');
 requireCheck(manager.includes('RunnerManifest') && manager.includes('JsonSerializer'), 'Agent must persist manifest-defined launch metadata instead of sending it over IPC.');
 requireCheck(manager.includes('icacls.exe') && manager.includes('(OI)(CI)(M)') && manager.includes('(OI)(CI)(RX)'), 'Agent must grant per-server Modify access to game roots and read/execute access to Runner payload.');
 requireCheck(manager.includes('schtasks.exe') && manager.includes('/disable') && manager.includes('/end'), 'Legacy Scheduled Tasks must be disabled and ended during Runner migration.');

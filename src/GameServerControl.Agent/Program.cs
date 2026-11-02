@@ -48,6 +48,8 @@ if (!string.IsNullOrWhiteSpace(bindHttps))
 builder.Services.AddSingleton<PowerShellRunner>();
 builder.Services.AddSingleton<HypervService>();
 builder.Services.AddSingleton<GuestProcessService>();
+builder.Services.AddSingleton<WindowsRunnerPipeClient>();
+builder.Services.AddSingleton<WindowsRunnerServiceManager>();
 builder.Services.AddSingleton<LocalProcessService>();
 builder.Services.AddSingleton<ServerRegistry>();
 builder.Services.AddSingleton<ServerStore>();
@@ -295,23 +297,23 @@ api.MapPost("/servers/{id}/logs/tail", (string id, LogTailRequest req, ServerReg
 api.MapGet("/servers/{id}/logs/tail", (string id, LogTailService tail) =>
     Results.Ok(new { tailing = tail.IsTailing(id) }));
 
-api.MapGet("/servers/{id}/autostart", async (string id, ServerRegistry reg, LocalProcessService local, CancellationToken ct) =>
+api.MapGet("/servers/{id}/autostart", async (string id, ServerRegistry reg, WindowsRunnerServiceManager runners, CancellationToken ct) =>
 {
     var def = reg.Get(id);
     if (def is null) return Results.NotFound();
-    if (string.IsNullOrWhiteSpace(def.ScheduledTaskName))
+    if (!runners.Supports(def))
         return Results.Ok(new { supported = false, enabled = (bool?)null });
-    var enabled = await local.GetAutostartAsync(def.ScheduledTaskName, ct);
+    var enabled = await runners.GetAutostartAsync(def, ct);
     return Results.Ok(new { supported = true, enabled });
 });
-api.MapPost("/servers/{id}/autostart", async (string id, AutostartRequest req, ServerRegistry reg, LocalProcessService local, CancellationToken ct) =>
+api.MapPost("/servers/{id}/autostart", async (string id, AutostartRequest req, ServerRegistry reg, WindowsRunnerServiceManager runners, CancellationToken ct) =>
 {
     var def = reg.Get(id);
     if (def is null) return Results.NotFound();
-    if (string.IsNullOrWhiteSpace(def.ScheduledTaskName))
-        return Results.BadRequest(new { error = "Server has no ScheduledTaskName set." });
-    var ok = await local.SetAutostartAsync(def.ScheduledTaskName, req.Enabled, ct);
-    return ok ? Results.Ok(new { enabled = req.Enabled }) : Results.StatusCode(502);
+    if (!runners.Supports(def))
+        return Results.BadRequest(new { error = "Autostart is supported for Windows BareMetal Runner servers." });
+    var (ok, error) = await runners.SetAutostartAsync(def, req.Enabled, ct);
+    return ok ? Results.Ok(new { enabled = req.Enabled }) : Results.BadRequest(new { error });
 });
 
 static string ModUnsupportedReason(ServerDef def) => def.SteamAppId switch
