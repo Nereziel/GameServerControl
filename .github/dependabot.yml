@@ -23,7 +23,7 @@ updates:
 
   # Cloudflare Worker tooling. Wrangler stays pinned to a tested major.
   - package-ecosystem: "npm"
-    directory: "/worker"
+    directory: "/src/GameServerControl.Cloud"
     schedule:
       interval: "weekly"
     groups:
