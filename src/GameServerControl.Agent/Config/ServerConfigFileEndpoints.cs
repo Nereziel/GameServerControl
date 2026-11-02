@@ -1,3 +1,5 @@
+using GameServerControl.Agent.Servers;
+
 namespace GameServerControl.Agent.Config;
 
 public sealed record ServerConfigFileValidationRequest(string Path, string Content);
