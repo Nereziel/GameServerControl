@@ -107,11 +107,22 @@ public sealed class BackupService
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);
         if (def is null) return new ActionResult(false, "Unknown server", corr);
-        label = NormalizeLabel(label);
+
+        try { label = NormalizeLabel(label); }
+        catch (ArgumentException ex) { return new ActionResult(false, ex.Message, corr); }
 
         if (def.HostingMode == HostingMode.BareMetal)
         {
-            var created = await CreateBareMetalArchiveAsync(def, label, BackupKind.Archive, requireComplete: false, ct);
+            ArchiveCreateResult created;
+            try
+            {
+                created = await CreateBareMetalArchiveAsync(def, label, BackupKind.Archive, requireComplete: false, ct);
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DirectoryNotFoundException)
+            {
+                return new ActionResult(false, ex.Message, corr);
+            }
+
             if (!created.Success)
                 return new ActionResult(false, created.Error ?? "Backup failed", corr);
 
@@ -119,7 +130,7 @@ public sealed class BackupService
             _tracker.Update(id, s => s with { LastBackupAt = DateTimeOffset.UtcNow });
             var mb = (created.SizeBytes ?? 0) / 1024d / 1024d;
             var warning = created.Metadata?.SkippedFiles > 0
-                ? $" Warning: skipped {created.Metadata.SkippedFiles} locked file(s)."
+                ? $" Warning: skipped {created.Metadata.SkippedFiles} locked file(s); this backup is not restorable."
                 : "";
             return new ActionResult(true,
                 $"Backup created: {Path.GetFileName(created.Path)} ({mb:0.##} MB).{warning}", corr);
@@ -169,7 +180,7 @@ public sealed class BackupService
                 ? await RestoreBareMetalFromArchiveAsync(def, backupName, corr, ct)
                 : await RestoreHyperVAsync(def, backupName, corr, ct);
         }
-        catch (Exception ex) when (ex is ArgumentException or InvalidDataException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidDataException or InvalidOperationException or DirectoryNotFoundException)
         {
             return new ActionResult(false, ex.Message, corr);
         }
@@ -222,6 +233,8 @@ public sealed class BackupService
             string.Equals(x.CheckpointName, safeName, StringComparison.OrdinalIgnoreCase));
         if (owned is null)
             return new ActionResult(false, "Backup not found or not owned by GameServerControl: " + safeName, corr);
+        if (!owned.Restorable || owned.SkippedFiles is > 0)
+            return new ActionResult(false, "Backup is incomplete because files were skipped during creation; restore is disabled to prevent data loss.", corr);
 
         var zipPath = BackupSafety.ResolveUnderRoot(ServerBackupDir(def), safeName);
         var targets = GetSaveTargets(def, requireAnyExisting: false);
@@ -411,7 +424,7 @@ public sealed class BackupService
                 meta?.Label,
                 meta?.FileCount,
                 meta?.SkippedFiles,
-                Restorable: true));
+                Restorable: meta?.SkippedFiles is not > 0));
         }
 
         return result.OrderByDescending(x => x.CreatedAt).ToList();
@@ -588,9 +601,9 @@ public sealed class BackupService
     private string ServerBackupDir(ServerDef def)
         => Path.Combine(BackupRoot, def.Id);
 
-    private static string NormalizeLabel(string? label)
+    private static string? NormalizeLabel(string? label)
     {
-        if (string.IsNullOrWhiteSpace(label)) return null!;
+        if (string.IsNullOrWhiteSpace(label)) return null;
         var value = label.Trim();
         if (value.Length > 80 || value.Any(char.IsControl))
             throw new ArgumentException("Backup label must be 80 characters or fewer and contain no control characters.", nameof(label));
