@@ -56,14 +56,15 @@ jobs:
           AGENT_ORIGIN: ${{ inputs.agent_origin }}
           ACCESS_TEAM_DOMAIN: ${{ inputs.access_team_domain }}
           ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
-          AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
+          AGENT_ADMIN_TOKEN: ${{ secrets.GSC_CF_AGENT_ADMIN_TOKEN }}
+          AGENT_READONLY_TOKEN: ${{ secrets.GSC_CF_AGENT_READONLY_TOKEN }}
           ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
           ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           for name in \
             CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN PANEL_HOSTNAME \
-            AGENT_ORIGIN ACCESS_TEAM_DOMAIN ACCESS_POLICY_AUD AGENT_API_TOKEN \
+            AGENT_ORIGIN ACCESS_TEAM_DOMAIN ACCESS_POLICY_AUD AGENT_ADMIN_TOKEN AGENT_READONLY_TOKEN \
             ORIGIN_ACCESS_CLIENT_ID ORIGIN_ACCESS_CLIENT_SECRET; do
             if [ -z "${!name:-}" ]; then
               echo "::error::Required deployment value ${name} is missing."
@@ -143,7 +144,7 @@ jobs:
         shell: bash
         env:
           AGENT_ORIGIN: ${{ inputs.agent_origin }}
-          AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
+          AGENT_READONLY_TOKEN: ${{ secrets.GSC_CF_AGENT_READONLY_TOKEN }}
           ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
           ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
         run: |
@@ -154,10 +155,10 @@ jobs:
             --connect-timeout 10 --max-time 20 \
             --header "CF-Access-Client-Id: $ORIGIN_ACCESS_CLIENT_ID" \
             --header "CF-Access-Client-Secret: $ORIGIN_ACCESS_CLIENT_SECRET" \
-            --header "Authorization: Bearer $AGENT_API_TOKEN" \
+            --header "Authorization: Bearer $AGENT_READONLY_TOKEN" \
             "$AGENT_ORIGIN/api/health")"
           if [ "$status" != "200" ]; then
-            echo "::error::Private Agent origin health check failed with HTTP $status. Check Tunnel routing, the origin Service Auth policy, service-token credentials, and Agent API token."
+            echo "::error::Private Agent origin health check failed with HTTP $status. Check Tunnel routing, the origin Service Auth policy, service-token credentials, and ReadOnly Agent token."
             exit 1
           fi
           node - "$health_file" <<'NODE'
@@ -184,7 +185,8 @@ jobs:
           AGENT_ORIGIN: ${{ inputs.agent_origin }}
           ACCESS_TEAM_DOMAIN: ${{ inputs.access_team_domain }}
           ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
-          AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
+          AGENT_ADMIN_TOKEN: ${{ secrets.GSC_CF_AGENT_ADMIN_TOKEN }}
+          AGENT_READONLY_TOKEN: ${{ secrets.GSC_CF_AGENT_READONLY_TOKEN }}
           ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
           ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
         run: |
@@ -198,7 +200,8 @@ jobs:
             'AGENT_ORIGIN',
             'ACCESS_TEAM_DOMAIN',
             'ACCESS_POLICY_AUD',
-            'AGENT_API_TOKEN',
+            'AGENT_ADMIN_TOKEN',
+            'AGENT_READONLY_TOKEN',
             'ORIGIN_ACCESS_CLIENT_ID',
             'ORIGIN_ACCESS_CLIENT_SECRET'
           ];
@@ -220,5 +223,5 @@ jobs:
             echo "- Private origin: $AGENT_ORIGIN"
             echo '- workers.dev: disabled'
             echo '- preview URLs: disabled'
-            echo '- Origin health preflight: passed'
+            echo '- Origin health preflight: passed with ReadOnly Agent token'
           } >> "$GITHUB_STEP_SUMMARY"

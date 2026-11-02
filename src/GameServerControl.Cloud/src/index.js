@@ -111,7 +111,7 @@ export function hasValidBrowserOrigin(request) {
 
 export async function fetchAgentHealth(env) {
   const target = new URL('/api/health', normalizedOrigin(env.AGENT_ORIGIN));
-  const token = env.AGENT_READONLY_TOKEN || env.AGENT_API_TOKEN;
+  const token = env.AGENT_READONLY_TOKEN;
   if (!token) return { ok: false, status: 0, ts: null };
 
   const headers = new Headers();

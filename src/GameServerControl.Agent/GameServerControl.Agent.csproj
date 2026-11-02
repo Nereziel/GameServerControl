@@ -11,7 +11,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.SignalR" Version="1.2.13" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
-    <PackageReference Include="System.Management.Automation" Version="7.4.6" />
+    <PackageReference Include="System.Management.Automation" Version="7.4.21" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\GameServerControl.Shared\GameServerControl.Shared.csproj" />
