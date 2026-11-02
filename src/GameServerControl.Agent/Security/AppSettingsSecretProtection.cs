@@ -89,11 +89,11 @@ public static class AppSettingsSecretProtection
         if (protector.IsProtected(stored))
         {
             var plaintext = protector.Unprotect(stored);
-            if (runtimeConfiguration is not null) runtimeConfiguration[configPath] = plaintext;
+            if (runtimeConfiguration is not null && string.Equals(runtimeConfiguration[configPath], stored, StringComparison.Ordinal))
+                runtimeConfiguration[configPath] = plaintext;
             return false;
         }
 
-        if (runtimeConfiguration is not null) runtimeConfiguration[configPath] = stored;
         parent[actualName] = protector.Protect(stored);
         return true;
     }
