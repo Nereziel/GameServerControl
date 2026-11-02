@@ -29,6 +29,7 @@ rejectToken(admin, "button[onclick]", 'ReadOnly UX must not depend on removed in
 rejectToken(admin, "input[onkeydown]", 'ReadOnly UX must not depend on removed inline key handlers');
 requireToken(admin, "[data-gsc-action]", 'ReadOnly UX must inspect delegated SEC-07 action metadata');
 requireToken(admin, "getAttribute('data-gsc-action')", 'ReadOnly UX must classify delegated action names');
-requireToken(admin, 'serverWorkspacePlayerAction', 'ReadOnly UX must disable delegated player kick/ban controls');
+requireToken(workspace, 'serverWorkspacePlayerAction', 'Workspace must expose delegated player kick/ban controls');
+requireToken(admin, 'PlayerAction', 'ReadOnly mutation classification must cover workspace player actions');
 
 console.log('ReadOnly Web UI contract OK.');
