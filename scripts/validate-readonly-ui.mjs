@@ -31,5 +31,10 @@ requireToken(admin, "[data-gsc-action]", 'ReadOnly UX must inspect delegated SEC
 requireToken(admin, "getAttribute('data-gsc-action')", 'ReadOnly UX must classify delegated action names');
 requireToken(workspace, 'serverWorkspacePlayerAction', 'Workspace must expose delegated player kick/ban controls');
 requireToken(admin, 'PlayerAction', 'ReadOnly mutation classification must cover workspace player actions');
+requireToken(admin, 'Admin', 'ReadOnly mutation classification must cover workspace RCON admin commands');
+requireToken(admin, "'add'", 'ReadOnly mutation classification must cover add/discovery mutations');
+for (const id of ['updateBtn','createServerBtn','addExistingBtn','tokensBtn']) {
+  requireToken(admin, id, `ReadOnly UX must disable static Admin control ${id}`);
+}
 
 console.log('ReadOnly Web UI contract OK.');
