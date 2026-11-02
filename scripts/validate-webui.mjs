@@ -21,24 +21,30 @@ function runNode(file, label = file) {
   if (r.status !== 0) process.exit(r.status ?? 1);
 }
 
+function checkInlineScripts(html, tempDir, labelPrefix) {
+  const scripts = [...html.matchAll(/<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi)];
+  scripts.forEach((match, index) => {
+    const file = path.join(tempDir, `${labelPrefix.replace(/[^a-z0-9]+/gi, '-')}-${index + 1}.js`);
+    fs.writeFileSync(file, match[1], 'utf8');
+    check(file, `${labelPrefix} inline script #${index + 1}`);
+  });
+  return scripts.length;
+}
+
 for (const file of files) check(file);
 
 const htmlPath = path.join(webUiDir, 'index.html');
 const html = fs.readFileSync(htmlPath, 'utf8');
-const scripts = [...html.matchAll(/<script(?![^>]*\bsrc\s*=)[^>]*>([\s\S]*?)<\/script>/gi)];
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsc-webui-'));
 
 try {
-  scripts.forEach((match, index) => {
-    const file = path.join(tempDir, `inline-${index + 1}.js`);
-    fs.writeFileSync(file, match[1], 'utf8');
-    check(file, `index.html inline script #${index + 1}`);
-  });
+  const agentInlineCount = checkInlineScripts(html, tempDir, 'Agent index.html');
 
   const cloudRoot = path.resolve('src/GameServerControl.Cloud');
   const cloudWorker = path.join(cloudRoot, 'src/index.js');
   const cloudAdapter = path.join(cloudRoot, 'static/cloud-adapter.js');
   const cloudBuild = path.join(cloudRoot, 'scripts/build.mjs');
+  let cloudInlineCount = 0;
 
   if (fs.existsSync(cloudWorker)) check(cloudWorker, 'Cloudflare Worker');
   if (fs.existsSync(cloudAdapter)) check(cloudAdapter, 'Cloudflare Web UI adapter');
@@ -58,9 +64,10 @@ try {
       console.error('Cloudflare Web UI build is missing its cloud bootstrap/adapter.');
       process.exit(1);
     }
+    cloudInlineCount = checkInlineScripts(stagedHtml, tempDir, 'Cloud index.html');
   }
 
-  console.log(`Validated ${files.length} Agent JavaScript files, ${scripts.length} inline script blocks and the Cloudflare Web UI staging build.`);
+  console.log(`Validated ${files.length} Agent JavaScript files, ${agentInlineCount} Agent inline scripts, ${cloudInlineCount} Cloud inline scripts and the Cloudflare Web UI staging build.`);
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
 }
