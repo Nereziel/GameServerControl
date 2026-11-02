@@ -142,7 +142,7 @@ public sealed class ValheimBepInExModManager : IModManager
             if (sourceDir is not null)
             {
                 modId = SanitizeFolderName(displayName ?? Path.GetFileName(sourceDir.TrimEnd('\\', '/')) ?? "mod");
-                var destDir = Path.Combine(modsDir, modId);
+                var destDir = PathContainment.ResolveDirectChild(modsDir, modId);
                 if (Directory.Exists(destDir)) Directory.Delete(destDir, recursive: true);
                 CopyDirectory(sourceDir, destDir);
                 installedFiles.AddRange(Directory.EnumerateFiles(destDir, "*", SearchOption.AllDirectories)
@@ -152,7 +152,8 @@ public sealed class ValheimBepInExModManager : IModManager
             {
                 foreach (var dll in copyDlls!)
                 {
-                    var dst = Path.Combine(modsDir, Path.GetFileName(dll));
+                    var dllName = Path.GetFileName(dll);
+                    var dst = PathContainment.ResolveDirectChild(modsDir, dllName);
                     File.Copy(dll, dst, overwrite: true);
                     installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
                 }
@@ -193,7 +194,9 @@ public sealed class ValheimBepInExModManager : IModManager
                     continue;
 
                 var depKey = SanitizeFolderName(depName);
-                if (Directory.Exists(Path.Combine(modsDir, depKey)) || File.Exists(Path.Combine(modsDir, depKey + ".dll")))
+                var depDir = PathContainment.ResolveDirectChild(modsDir, depKey);
+                var depDll = PathContainment.ResolveDirectChild(modsDir, depKey + ".dll");
+                if (Directory.Exists(depDir) || File.Exists(depDll))
                     continue;
 
                 var pkg = await _thunderstore.FindPackageAsync("valheim", depOwner, depName, ct);
@@ -315,25 +318,38 @@ exec ./valheim_server.x86_64 "$@"
         var modsDir = ModsFolder(def);
         if (!Directory.Exists(modsDir)) return Task.FromResult(false);
 
+        string modPath;
+        try { modPath = PathContainment.ResolveDirectChild(modsDir, modId); }
+        catch (ArgumentException ex)
+        {
+            _logger.LogWarning(ex, "Rejected unsafe Valheim mod id {ModId} during uninstall", modId);
+            return Task.FromResult(false);
+        }
+
         var meta = LoadMetadata(def);
         var ok = false;
         if (meta.TryGetValue(modId, out var sidecar) && sidecar.Files is { Length: > 0 } files)
         {
             foreach (var rel in files)
             {
-                var abs = Path.Combine(def.GuestWorkingDir, rel);
+                string abs;
+                try { abs = Path.GetFullPath(Path.Combine(def.GuestWorkingDir, rel)); }
+                catch { continue; }
+                if (!PathContainment.IsWithinRoot(modsDir, abs))
+                {
+                    _logger.LogWarning("Skipping out-of-root file from Valheim mod metadata: {Path}", rel);
+                    continue;
+                }
                 try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { }
             }
-            var modFolder = Path.Combine(modsDir, modId);
-            if (Directory.Exists(modFolder) && !Directory.EnumerateFileSystemEntries(modFolder).Any())
-                try { Directory.Delete(modFolder); } catch { }
+            if (Directory.Exists(modPath) && !Directory.EnumerateFileSystemEntries(modPath).Any())
+                try { Directory.Delete(modPath); } catch { }
             UpdateMetadata(def, m => m.Remove(modId));
             return Task.FromResult(ok);
         }
 
-        var path = Path.Combine(modsDir, modId);
-        if (File.Exists(path)) try { File.Delete(path); ok = true; } catch { }
-        if (Directory.Exists(path)) try { Directory.Delete(path, recursive: true); ok = true; } catch { }
+        if (File.Exists(modPath)) try { File.Delete(modPath); ok = true; } catch { }
+        if (Directory.Exists(modPath)) try { Directory.Delete(modPath, recursive: true); ok = true; } catch { }
         return Task.FromResult(ok);
     }
 
