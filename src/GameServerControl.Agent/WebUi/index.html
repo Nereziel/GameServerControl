@@ -129,6 +129,170 @@ action=async function(id,a){
 <script src="/webui/config-backups.js"></script>
 <script src="/webui/server-workspace.js"></script>
 <script>
+/* Safe config-file workspace. The Agent API remains the filesystem authority. */
+(() => {
+  const state={serverId:null,list:[],selected:null,content:null,history:[],dirty:false,filter:'',validationTimer:null,validationSeq:0};
+  window.GSC_FILES=state;
+
+  const style=document.createElement('style');
+  style.id='gscFilesEditorStyles';
+  style.textContent=`
+    .fse-layout{display:grid;grid-template-columns:minmax(250px,330px) minmax(0,1fr);gap:12px;min-height:520px}.fse-sidebar,.fse-main{border:1px solid var(--line);border-radius:9px;background:#101318;overflow:hidden}.fse-filter{padding:10px;border-bottom:1px solid var(--line)}.fse-filter input{width:100%}.fse-list{max-height:650px;overflow:auto;padding:8px}.fse-group{margin:10px 5px 5px;color:var(--muted);font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.55px}.fse-file{display:block;width:100%;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;border-radius:7px;padding:8px 9px;margin:2px 0;cursor:pointer}.fse-file:hover{background:#171c23;border-color:#2c3440}.fse-file.active{background:#1a2028;border-color:#536171}.fse-file-name{font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-meta{font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-badges{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap}.fse-badge{font-size:9px;border:1px solid var(--line);border-radius:999px;padding:2px 6px;color:var(--muted)}.fse-badge.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-main{padding:12px}.fse-head{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px}.fse-title{font-size:14px;font-weight:850}.fse-path{font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted);overflow-wrap:anywhere;margin-top:3px}.fse-head-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}.fse-statusbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:9px}.fse-status{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:3px 7px;color:var(--muted)}.fse-status.ok{color:var(--ok);border-color:rgba(63,185,80,.45)}.fse-status.err{color:var(--danger);border-color:rgba(248,81,73,.55)}.fse-status.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-editgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px}.fse-pane-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:0 0 5px}.fse-editor{box-sizing:border-box;width:100%;min-height:390px;max-height:58vh;resize:vertical;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}.fse-preview{box-sizing:border-box;min-height:390px;max-height:58vh;overflow:auto;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;margin:0;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;tab-size:2}.fse-history{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}.fse-history-row{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}.fse-history-row:last-child{border-bottom:0}.fse-history-row .grow{min-width:0}.fse-token-comment{color:#7f8b99}.fse-token-string{color:#a5d6ff}.fse-token-number{color:#d2a8ff}.fse-token-literal{color:#ff7b72}.fse-token-key{color:#79c0ff}.fse-token-section{color:#ffa657;font-weight:700}.fse-token-tag{color:#7ee787}.fse-empty{padding:45px 20px;text-align:center;color:var(--muted)}
+    @media(max-width:1000px){.fse-layout{grid-template-columns:1fr}.fse-list{max-height:260px}.fse-editgrid{grid-template-columns:1fr}.fse-preview{min-height:220px;max-height:360px}}
+  `;
+  document.head.appendChild(style);
+
+  const baseTabs=serverWorkspaceTabs;
+  serverWorkspaceTabs=function(def){
+    const tabs=baseTabs(def);
+    if(!tabs.some(x=>x[0]==='files')){
+      const at=tabs.findIndex(x=>x[0]==='backups');
+      tabs.splice(at<0?tabs.length:at,0,['files','Files']);
+    }
+    return tabs;
+  };
+
+  const baseRenderTab=renderServerWorkspaceTab;
+  renderServerWorkspaceTab=async function(def,tab){
+    if(tab!=='files')return baseRenderTab(def,tab);
+    const token=++SERVER_WORKSPACE.renderToken,body=$('#swTabBody');
+    if(!body)return;
+    body.innerHTML='<div class="muted">Loading config files…</div>';
+    try{await renderServerFiles(def,body);if(token!==SERVER_WORKSPACE.renderToken)return}
+    catch(e){body.innerHTML=`<div class="callout">${esc(e.message)}</div>`}
+  };
+
+  function sizeText(bytes){
+    const n=Number(bytes)||0;if(n<1024)return n+' B';if(n<1024*1024)return (n/1024).toFixed(n<10240?1:0)+' KB';return (n/1024/1024).toFixed(1)+' MB';
+  }
+
+  function fileOwner(file){
+    const path=String(file.path||'').replace(/\\/g,'/'),parts=path.split('/').filter(Boolean),lower=parts.map(x=>x.toLowerCase());
+    const patterns=[['bepinex','plugins'],['factorygame','mods'],['pal','binaries','win64','mods']];
+    for(const pattern of patterns){
+      for(let i=0;i<=lower.length-pattern.length;i++){
+        if(pattern.every((p,j)=>lower[i+j]===p)&&parts[i+pattern.length])return parts[i+pattern.length];
+      }
+    }
+    for(const root of ['plugins','mods']){const i=lower.indexOf(root);if(i>=0&&parts[i+1])return parts[i+1]}
+    for(const root of ['config','configs']){const i=lower.indexOf(root);if(i>=0&&parts[i+2])return parts[i+1]}
+    const bi=lower.indexOf('bepinex');
+    if(bi>=0&&lower[bi+1]==='config'&&parts[bi+2])return parts[bi+2].replace(/\.[^.]+$/,'');
+    if(String(file.group||'').toLowerCase().includes('mod'))return String(file.name||'').replace(/\.[^.]+$/,'');
+    return '';
+  }
+
+  function groupLabel(file){const owner=fileOwner(file);return owner?`${file.group||'Config'} · ${owner}`:(file.group||'Config')}
+
+  function renderSidebar(){
+    const host=$('#fseList');if(!host)return;
+    const q=state.filter.trim().toLowerCase();
+    const files=state.list.filter(file=>!q||[file.name,file.path,file.group,fileOwner(file),file.format].some(v=>String(v||'').toLowerCase().includes(q)));
+    if(!files.length){host.innerHTML='<div class="fse-empty">No matching config files.</div>';return}
+    const groups=new Map();
+    for(const file of files){const label=groupLabel(file);if(!groups.has(label))groups.set(label,[]);groups.get(label).push(file)}
+    host.innerHTML=[...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([label,items])=>`<div class="fse-group">${esc(label)}</div>${items.sort((a,b)=>String(a.path).localeCompare(String(b.path))).map(file=>`<button class="fse-file ${state.selected===file.path?'active':''}" onclick="gscFilesOpen('${jsq(state.serverId)}','${jsq(file.path)}')"><div class="fse-file-name">${esc(file.name)}</div><div class="fse-file-meta">${esc(file.path)}</div><div class="fse-file-badges"><span class="fse-badge">${esc(String(file.format||'text').toUpperCase())}</span><span class="fse-badge">${esc(sizeText(file.sizeBytes))}</span>${file.restartRecommended?'<span class="fse-badge warn">restart</span>':''}</div></button>`).join('')}`).join('');
+  }
+
+  function tokenSpan(cls,value){return `<span class="${cls}">${esc(value)}</span>`}
+  function tokenizedLine(line,format){
+    const trimmed=line.trimStart();
+    if(/^(#|;|\/\/)/.test(trimmed))return tokenSpan('fse-token-comment',line);
+    if(format==='xml'||format==='config'){
+      let out='',at=0;for(const match of line.matchAll(/<[^>]+>/g)){out+=esc(line.slice(at,match.index))+tokenSpan('fse-token-tag',match[0]);at=match.index+match[0].length}return out+esc(line.slice(at));
+    }
+    if(format==='json'||format==='jsonc'){
+      const re=/"(?:\\.|[^"\\])*"|-?(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(?:true|false|null)\b|\/\/.*$/g;let out='',at=0;
+      for(const match of line.matchAll(re)){out+=esc(line.slice(at,match.index));const v=match[0];let cls='fse-token-literal';if(v.startsWith('//'))cls='fse-token-comment';else if(v.startsWith('"'))cls=/^\s*:/.test(line.slice(match.index+v.length))?'fse-token-key':'fse-token-string';else if(/^[-\d]/.test(v))cls='fse-token-number';out+=tokenSpan(cls,v);at=match.index+v.length}return out+esc(line.slice(at));
+    }
+    if(/^\s*\[.*\]\s*$/.test(line))return tokenSpan('fse-token-section',line);
+    const separator=format==='yaml'?line.indexOf(':'):Math.max(line.indexOf('='),line.indexOf(':'));
+    if(separator>0){const key=line.slice(0,separator),rest=line.slice(separator);return tokenSpan('fse-token-key',key)+esc(rest).replace(/\b(true|false|null)\b/g,'<span class="fse-token-literal">$1</span>')}
+    return esc(line);
+  }
+
+  function highlight(content,format){
+    const text=String(content||''),limit=140000,visible=text.length>limit?text.slice(0,limit):text;
+    const rendered=visible.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').map(line=>tokenizedLine(line,String(format||'').toLowerCase())).join('\n');
+    return rendered+(text.length>limit?'\n\n<span class="fse-token-comment">[Highlighted preview truncated; the editor still contains the complete file.]</span>':'');
+  }
+
+  function currentInfo(){return state.list.find(x=>x.path===state.selected)||null}
+  function setValidation(kind,text){const el=$('#fseValidation');if(!el)return;el.className='fse-status '+(kind||'');el.textContent=text}
+  function updatePreview(){const input=$('#fseText'),preview=$('#fsePreview');if(!input||!preview)return;preview.innerHTML=highlight(input.value,state.content?.format||currentInfo()?.format);}
+
+  function editorHtml(){
+    const info=currentInfo(),c=state.content;
+    if(!c||!info)return '<div class="fse-empty">Select a config file.</div>';
+    const running=serverWorkspaceStatus(state.serverId).processState==='Running';
+    const restart=info.restartRecommended?`<span class="fse-status warn">Restart recommended${running?' · server running':''}</span>`:'<span class="fse-status ok">Reload usually not required</span>';
+    const history=state.history.length?state.history.map(x=>`<div class="fse-history-row"><div class="grow"><div class="fse-file-name">${new Date(x.createdAt).toLocaleString()}</div><div class="fse-file-meta">${esc(sizeText(x.sizeBytes))} · ${esc(x.id)}</div></div><button class="btn" onclick="gscFilesRestore('${jsq(x.id)}')">Restore</button></div>`).join(''):'<div class="muted tiny">No edit history yet. A snapshot is created automatically before every save or restore.</div>';
+    return `<div class="fse-head"><div class="grow"><div class="fse-title">${esc(info.name)}</div><div class="fse-path">${esc(info.path)}</div></div><div class="fse-head-actions"><button class="btn" onclick="gscFilesReload()">Reload</button><button id="fseSave" class="btn primary" ${state.dirty?'':'disabled'} onclick="gscFilesSave()">Save</button></div></div><div class="fse-statusbar"><span class="fse-status">${esc(String(c.format||info.format||'text').toUpperCase())}</span><span class="fse-status">${esc(sizeText(c.sizeBytes))}</span><span class="fse-status">${new Date(c.modifiedAt).toLocaleString()}</span>${restart}<span id="fseValidation" class="fse-status">Unchanged</span></div>${info.restartRecommended&&running?'<div class="callout info">This file is normally read when the server/plugin starts. Save is allowed while running, but a restart is recommended for the change to take effect.</div>':''}<div class="fse-editgrid"><div><div class="fse-pane-title">Editor · Ctrl+S to save</div><textarea id="fseText" class="fse-editor" spellcheck="false" oninput="gscFilesInput()" onkeydown="gscFilesKeydown(event)">${esc(c.content)}</textarea></div><div><div class="fse-pane-title">Syntax-highlighted preview</div><pre id="fsePreview" class="fse-preview">${highlight(c.content,c.format||info.format)}</pre></div></div><div class="fse-history"><div class="sw-toolbar"><div><b>Edit history</b><div class="tiny muted">Last ${state.history.length} snapshots for this file.</div></div><div class="spacer"></div></div>${history}</div>`;
+  }
+
+  function renderEditor(){const host=$('#fseMain');if(host)host.innerHTML=editorHtml()}
+
+  window.gscFilesFilter=function(value){state.filter=String(value||'');renderSidebar()};
+
+  window.gscFilesOpen=async function(serverId,path,force=false){
+    if(state.dirty&&!force&&state.selected&&state.selected!==path&&!confirm('Discard unsaved changes in the current config file?'))return;
+    state.serverId=serverId;state.selected=path;state.dirty=false;renderSidebar();
+    const host=$('#fseMain');if(host)host.innerHTML='<div class="fse-empty">Loading file…</div>';
+    try{
+      const encoded=encodeURIComponent(path);const [content,history]=await Promise.all([api(`/api/servers/${encodeURIComponent(serverId)}/files/content?path=${encoded}`),api(`/api/servers/${encodeURIComponent(serverId)}/files/history?path=${encoded}`)]);
+      if(state.selected!==path)return;state.content=content;state.history=history||[];renderEditor();
+    }catch(e){if(host)host.innerHTML=`<div class="callout">${esc(e.message)}</div>`}
+  };
+
+  window.gscFilesInput=function(){
+    if(!state.content)return;state.dirty=true;const save=$('#fseSave');if(save)save.disabled=false;updatePreview();setValidation('','Checking syntax…');
+    clearTimeout(state.validationTimer);const seq=++state.validationSeq;
+    state.validationTimer=setTimeout(async()=>{const input=$('#fseText');if(!input||seq!==state.validationSeq)return;try{await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify({path:state.selected,content:input.value})});if(seq===state.validationSeq)setValidation('ok','Syntax valid')}catch(e){if(seq===state.validationSeq)setValidation('err',e.message)}},650);
+  };
+
+  window.gscFilesKeydown=function(event){if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();gscFilesSave()}};
+
+  async function refreshList(){
+    const list=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files`);state.list=list.files||[];renderSidebar();
+  }
+  async function refreshHistory(){state.history=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/history?path=${encodeURIComponent(state.selected)}`)||[];renderEditor()}
+
+  window.gscFilesSave=async function(){
+    const input=$('#fseText');if(!input||!state.content||!state.selected||!state.dirty)return;
+    const save=$('#fseSave');if(save){save.disabled=true;save.textContent='Saving…'}
+    try{
+      const payload={path:state.selected,content:input.value};
+      await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify(payload)});
+      const result=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/content`,{method:'PUT',body:JSON.stringify({...payload,expectedSha256:state.content.sha256})});
+      state.content={...state.content,content:input.value,sha256:result.sha256,sizeBytes:result.sizeBytes,modifiedAt:result.modifiedAt};state.dirty=false;setValidation('ok','Saved · syntax valid');
+      await refreshList();await refreshHistory();const info=currentInfo();setNotice(info?.restartRecommended?'Config saved. Restart recommended for this change.':'Config saved.','ok',false);
+    }catch(e){setValidation('err',e.message);setNotice('Config save failed: '+e.message,'err',false);if(save)save.disabled=false}
+    finally{if(save)save.textContent='Save'}
+  };
+
+  window.gscFilesReload=function(){if(!state.selected)return;if(state.dirty&&!confirm('Discard unsaved changes and reload this file?'))return;gscFilesOpen(state.serverId,state.selected,true)};
+
+  window.gscFilesRestore=async function(backupId){
+    if(!state.selected||!state.content)return;if(!confirm('Restore this config snapshot? The current file will be saved as an undo snapshot first.'))return;
+    try{
+      await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/restore`,{method:'POST',body:JSON.stringify({path:state.selected,backupId,expectedSha256:state.content.sha256})});
+      setNotice('Config snapshot restored. An undo snapshot was created.','ok',false);await refreshList();await gscFilesOpen(state.serverId,state.selected,true);
+    }catch(e){setNotice('Restore failed: '+e.message,'err',false)}
+  };
+
+  window.renderServerFiles=async function(def,body){
+    if(state.serverId!==def.id){clearTimeout(state.validationTimer);state.serverId=def.id;state.list=[];state.selected=null;state.content=null;state.history=[];state.dirty=false;state.filter=''}
+    const result=await api(`/api/servers/${encodeURIComponent(def.id)}/files`);
+    if(!result.supported){body.innerHTML=`<div class="callout info"><b>Files editor unavailable.</b><br>${esc(result.reason||'This server does not support safe config-file access.')}</div>`;return}
+    state.list=result.files||[];
+    if(state.selected&&!state.list.some(x=>x.path===state.selected)){state.selected=null;state.content=null;state.history=[];state.dirty=false}
+    if(!state.selected&&state.list.length)state.selected=state.list[0].path;
+    body.innerHTML=`<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Only existing text configs inside allowlisted server/mod roots are exposed. Arbitrary filesystem access is not available.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('files')">Rescan</button></div><div class="fse-layout"><aside class="fse-sidebar"><div class="fse-filter"><input placeholder="Filter files, paths or plugins…" value="${esc(state.filter)}" oninput="gscFilesFilter(this.value)"></div><div id="fseList" class="fse-list"></div></aside><main id="fseMain" class="fse-main"></main></div>`;
+    renderSidebar();renderEditor();if(state.selected&&!state.content)await gscFilesOpen(def.id,state.selected,true);
+  };
+})();
+</script>
+<script>
 /* Parallel install polling + live detail log. */
 refreshJobs=async function(render=true){
   const refs=loadJobRefs();let active=0;
