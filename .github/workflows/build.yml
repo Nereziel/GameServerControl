@@ -82,6 +82,8 @@ jobs:
           bash -n deploy/linux/install.sh
           bash -n deploy/relay/install-from-release.sh
           bash -n deploy/relay/install.sh
+          bash -n deploy/relay/ufw-reconcile.sh
+          bash -n scripts/test-relay-ufw-reconcile.sh
 
       - name: Test Relay UFW reconciliation
         run: bash scripts/test-relay-ufw-reconcile.sh
@@ -144,6 +146,7 @@ jobs:
           cp deploy/relay/gameservercontrol-relay.service publish/Relay-linux/
           cp deploy/relay/install.sh publish/Relay-linux/
           cp deploy/relay/install-from-release.sh publish/Relay-linux/
+          cp deploy/relay/ufw-reconcile.sh publish/Relay-linux/
           chmod +x publish/Relay-linux/install.sh publish/Relay-linux/install-from-release.sh
           chmod +x publish/Relay-linux/GameServerControl.Relay
 
