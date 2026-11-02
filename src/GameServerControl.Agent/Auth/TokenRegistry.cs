@@ -70,6 +70,7 @@ public sealed class TokenRegistry
                     return;
                 }
 
+                SecretFilePermissions.RestrictExisting(_path);
                 var loaded = JsonSerializer.Deserialize<List<StoredTokenRecord>>(File.ReadAllText(_path), JsonOpts) ?? new();
                 var migrated = false;
                 var valid = new List<StoredTokenRecord>(loaded.Count);
@@ -122,10 +123,6 @@ public sealed class TokenRegistry
                 {
                     SaveLocked();
                     _logger.LogInformation("Migrated managed API token storage to hashed credentials in {Path}", _path);
-                }
-                else
-                {
-                    RestrictFilePermissions();
                 }
             }
             catch (Exception ex)
@@ -209,27 +206,7 @@ public sealed class TokenRegistry
 
     private void SaveLocked()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        var tmp = _path + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(_tokens, JsonOpts));
-        if (File.Exists(_path))
-            File.Move(tmp, _path, overwrite: true);
-        else
-            File.Move(tmp, _path);
-        RestrictFilePermissions();
-    }
-
-    private void RestrictFilePermissions()
-    {
-        if (OperatingSystem.IsWindows() || !File.Exists(_path)) return;
-        try
-        {
-            File.SetUnixFileMode(_path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Could not restrict Unix permissions for {Path}", _path);
-        }
+        SecretFilePermissions.WriteAllTextAtomic(_path, JsonSerializer.Serialize(_tokens, JsonOpts));
     }
 
     private static string TokenPrefix(string token) =>
