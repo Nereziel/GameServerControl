@@ -34,6 +34,9 @@ jobs:
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
 
+      - name: Validate ReadOnly Web UI
+        run: node scripts/validate-readonly-ui.mjs
+
       - name: Validate global Settings ownership
         run: node scripts/validate-global-settings.mjs
 
@@ -108,6 +111,9 @@ jobs:
 
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
+
+      - name: Validate ReadOnly Web UI
+        run: node scripts/validate-readonly-ui.mjs
 
       - name: Validate global Settings ownership
         run: node scripts/validate-global-settings.mjs
