@@ -4,7 +4,8 @@ import {
   resolveAccessRole,
   agentTokenForRole,
   authorizeGatewayRequest,
-  hasValidBrowserOrigin
+  hasValidBrowserOrigin,
+  withBrowserSecurityHeaders
 } from '../src/index.js';
 
 const env = {
@@ -72,4 +73,19 @@ test('browser writes and WebSocket upgrades require the panel origin', () => {
   assert.equal(hasValidBrowserOrigin(sameWs), true);
   assert.equal(hasValidBrowserOrigin(crossWs), false);
   assert.equal(hasValidBrowserOrigin(plainGet), true);
+});
+
+test('static WebUI responses receive a CSP that disables inline script execution', async () => {
+  const response = withBrowserSecurityHeaders(new Response('<!doctype html>', {
+    headers: { 'content-type': 'text/html; charset=utf-8' }
+  }));
+  const csp = response.headers.get('content-security-policy') || '';
+  assert.match(csp, /script-src 'self'/);
+  assert.match(csp, /script-src-attr 'none'/);
+  assert.match(csp, /object-src 'none'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(response.headers.get('x-frame-options'), 'DENY');
+  assert.equal(await response.text(), '<!doctype html>');
 });
