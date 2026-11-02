@@ -10,8 +10,20 @@ namespace GameServerControl.Agent.Rcon;
 /// </summary>
 public sealed class PalworldRcon : IGameRcon
 {
+    private static readonly RconStandardCommand[] Commands =
+    [
+        RconStandardCommand.ListPlayers,
+        RconStandardCommand.Save,
+        RconStandardCommand.BroadcastMessage,
+        RconStandardCommand.KickPlayer,
+        RconStandardCommand.BanPlayer,
+        RconStandardCommand.Shutdown
+    ];
+
     private readonly SourceRconClient _rcon;
     public PalworldRcon(SourceRconClient rcon) { _rcon = rcon; }
+
+    public IReadOnlyCollection<RconStandardCommand> SupportedCommands => Commands;
 
     public bool Supports(ServerDef def) =>
         def.GameType == GameType.SteamGeneric && def.SteamAppId == "2394010";
@@ -26,6 +38,9 @@ public sealed class PalworldRcon : IGameRcon
     {
         try
         {
+            if (cmd != RconStandardCommand.Raw && !Commands.Contains(cmd))
+                return new RconResponse(false, "", $"RCON command {cmd} is not supported by this handler.");
+
             var command = cmd switch
             {
                 RconStandardCommand.ListPlayers      => "ShowPlayers",
