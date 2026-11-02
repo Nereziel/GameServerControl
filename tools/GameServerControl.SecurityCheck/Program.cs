@@ -141,6 +141,21 @@ static void VerifySecretFilePermissions(string root)
     Require(File.GetUnixFileMode(file) == expectedFileMode, "RestrictExisting did not restore secret file mode 0600.");
 }
 
+static void VerifyUpdateHealthToken(string root)
+{
+    var probeRoot = Path.Combine(root, "update-health");
+    Directory.CreateDirectory(probeRoot);
+    const string token = "update-health-token-0123456789abcdef";
+
+    Require(!UpdateHealthToken.IsValid(probeRoot, token), "Missing update-health credential was accepted.");
+    File.WriteAllText(Path.Combine(probeRoot, UpdateHealthToken.FileName), token);
+    Require(UpdateHealthToken.IsValid(probeRoot, token), "Exact update-health credential was rejected.");
+    Require(!UpdateHealthToken.IsValid(probeRoot, token + "x"), "Suffixed update-health credential was accepted.");
+    Require(!UpdateHealthToken.IsValid(probeRoot, "wrong-update-health-token"), "Wrong update-health credential was accepted.");
+    File.WriteAllText(Path.Combine(probeRoot, UpdateHealthToken.FileName), new string('x', 513));
+    Require(!UpdateHealthToken.IsValid(probeRoot, new string('x', 513)), "Oversized update-health credential was accepted.");
+}
+
 var root = Path.Combine(Path.GetTempPath(), "gsc-security-check-" + Guid.NewGuid().ToString("n"));
 Directory.CreateDirectory(root);
 try
@@ -184,7 +199,8 @@ try
     VerifyAuthenticationThrottle();
     VerifyPathContainment(root);
     VerifySecretFilePermissions(root);
-    Console.WriteLine("Security token storage, authentication throttle, path containment, and secret file permission checks OK.");
+    VerifyUpdateHealthToken(root);
+    Console.WriteLine("Security token storage, authentication throttle, path containment, secret file permission, and update-health token checks OK.");
 }
 finally
 {
