@@ -112,6 +112,9 @@ jobs:
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
 
+      - name: Validate release workflow gate
+        run: node scripts/validate-release-workflow.mjs
+
       - name: Validate ReadOnly Web UI
         run: node scripts/validate-readonly-ui.mjs
 
