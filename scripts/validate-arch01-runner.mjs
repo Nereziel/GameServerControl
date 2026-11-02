@@ -26,6 +26,7 @@ requireCheck(fs.existsSync(clientPath), 'missing WindowsRunnerPipeClient.');
 const runnerProgram = read(runnerProgramPath);
 const runnerHost = read(runnerHostPath);
 const runnerPipe = read(runnerPipePath);
+const client = read(clientPath);
 const local = read(localPath);
 const orchestrator = read(orchestratorPath);
 const manager = read(managerPath);
@@ -42,6 +43,10 @@ requireCheck(runnerPipe.includes('NamedPipeServerStream'), 'Runner IPC must use 
 requireCheck(runnerPipe.includes('PipeSecurity') && runnerPipe.includes('WellKnownSidType.LocalSystemSid') && runnerPipe.includes('WellKnownSidType.BuiltinAdministratorsSid'), 'Runner pipe ACL must explicitly authorize only SYSTEM and local Administrators.');
 requireCheck(runnerPipe.includes('RunnerProtocolLimits.MaxRequestBytes') && runnerPipe.includes('RunnerProtocolLimits.MaxResponseBytes'), 'Runner pipe must enforce bounded request and response sizes.');
 
+requireCheck(client.includes('NamedPipeClientStream'), 'Agent Runner client must use the local named-pipe transport.');
+requireCheck(client.includes('RunnerProtocolLimits.MaxRequestBytes') && client.includes('RunnerProtocolLimits.MaxResponseBytes'), 'Agent Runner client must enforce protocol frame limits.');
+requireCheck(client.includes('ConnectAsync') && client.includes('CancellationTokenSource'), 'Agent Runner client must use bounded/cancellable pipe connection attempts.');
+
 requireCheck(local.includes('WindowsRunnerServiceManager'), 'LocalProcessService must delegate Windows BareMetal runtime to WindowsRunnerServiceManager.');
 requireCheck(!/OperatingSystem\.IsWindows\(\)[\s\S]{0,2200}?Process\.Start\s*\(/m.test(local), 'Windows LocalProcessService still has a direct game Process.Start fallback.');
 requireCheck(!/StartBareMetalAsync[\s\S]{0,5000}?StartScheduledTaskAsync\s*\(/m.test(orchestrator), 'StartBareMetalAsync still has a Scheduled Task launch bypass.');
@@ -50,6 +55,11 @@ requireCheck(manager.includes('NT SERVICE\\'), 'Runner services must use Windows
 requireCheck(manager.includes('ArgumentList'), 'Runner provisioning commands must use ProcessStartInfo.ArgumentList instead of shell interpolation.');
 requireCheck(!manager.includes('cmd.exe') && !manager.includes('powershell.exe'), 'Runner service provisioning must not shell through cmd.exe or powershell.exe.');
 requireCheck(manager.includes('GameServerControlRunner_'), 'Runner service names must use the deterministic GameServerControlRunner_ prefix.');
+requireCheck(manager.includes('RunnerManifest') && manager.includes('JsonSerializer'), 'Agent must persist manifest-defined launch metadata instead of sending it over IPC.');
+requireCheck(manager.includes('icacls.exe') && manager.includes('(OI)(CI)(M)') && manager.includes('(OI)(CI)(RX)'), 'Agent must grant per-server Modify access to game roots and read/execute access to Runner payload.');
+requireCheck(manager.includes('schtasks.exe') && manager.includes('/disable') && manager.includes('/end'), 'Legacy Scheduled Tasks must be disabled and ended during Runner migration.');
+requireCheck(manager.includes('1690800') && manager.includes('FactoryGame') && manager.includes('CreateSymbolicLink'), 'Satisfactory must preserve its existing SystemProfile data through an idempotent directory link.');
+requireCheck(manager.includes('SetAutostartAsync') && manager.includes('GetAutostartAsync'), 'Runner manager must own Windows BareMetal autostart state.');
 
 requireCheck(build.includes('GameServerControl.Runner'), 'Build workflow must build/publish the Windows Runner.');
 requireCheck(release.includes('GameServerControl.Runner'), 'Release workflow must publish the Windows Runner.');
