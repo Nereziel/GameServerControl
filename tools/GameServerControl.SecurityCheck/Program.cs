@@ -1,5 +1,7 @@
+using System.Security.Cryptography;
 using System.Text.Json;
 using GameServerControl.Agent.Auth;
+using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -141,6 +143,54 @@ static void VerifySecretFilePermissions(string root)
     Require(File.GetUnixFileMode(file) == expectedFileMode, "RestrictExisting did not restore secret file mode 0600.");
 }
 
+static void VerifySecretProtector(string root)
+{
+    var secretRoot = Path.Combine(root, "secret-protector");
+    Directory.CreateDirectory(secretRoot);
+    var protector = new SecretProtector(secretRoot);
+    const string plaintext = "synthetic-secret-value-SEC08";
+    const string purpose = "test:primary";
+
+    var protectedValue = protector.Protect(plaintext, purpose);
+    Require(SecretProtector.IsProtected(protectedValue), "Protected value does not carry the SEC-08 envelope marker.");
+    Require(!protectedValue.Contains(plaintext, StringComparison.Ordinal), "Protected envelope contains plaintext secret material.");
+    Require(protector.Unprotect(protectedValue, purpose) == plaintext, "Secret protector round-trip failed.");
+
+    var wrongPurposeRejected = false;
+    try { _ = protector.Unprotect(protectedValue, "test:other"); }
+    catch (CryptographicException) { wrongPurposeRejected = true; }
+    Require(wrongPurposeRejected, "Purpose-bound AES-GCM ciphertext was accepted under another purpose.");
+
+    var payload = protectedValue[SecretProtector.ValuePrefix.Length..];
+    var bytes = Convert.FromBase64String(payload);
+    bytes[^1] ^= 0x01;
+    var tampered = SecretProtector.ValuePrefix + Convert.ToBase64String(bytes);
+    var tamperRejected = false;
+    try { _ = protector.Unprotect(tampered, purpose); }
+    catch (CryptographicException) { tamperRejected = true; }
+    Require(tamperRejected, "Tampered AES-GCM ciphertext was accepted.");
+
+    var keyPath = Path.Combine(secretRoot, "secret.key");
+    var keyEnvelope = File.ReadAllText(keyPath);
+    if (OperatingSystem.IsWindows())
+        Require(keyEnvelope.StartsWith("gsc-key-v1:dpapi:", StringComparison.Ordinal), "Windows secret.key is not DPAPI LocalMachine wrapped.");
+    else
+    {
+        Require(keyEnvelope.StartsWith("gsc-key-v1:raw:", StringComparison.Ordinal), "Linux secret.key has an unexpected envelope format.");
+        Require(File.GetUnixFileMode(keyPath) == (UnixFileMode.UserRead | UnixFileMode.UserWrite), "Linux secret.key must be mode 0600.");
+    }
+
+    var brokenRoot = Path.Combine(root, "broken-secret-key");
+    Directory.CreateDirectory(brokenRoot);
+    var brokenKeyPath = Path.Combine(brokenRoot, "secret.key");
+    SecretFilePermissions.WriteAllTextAtomic(brokenKeyPath, "gsc-key-v1:raw:not-valid-base64!");
+    var brokenRejected = false;
+    try { _ = new SecretProtector(brokenRoot); }
+    catch (Exception ex) when (ex is InvalidOperationException or FormatException or CryptographicException) { brokenRejected = true; }
+    Require(brokenRejected, "Malformed existing master key was silently replaced instead of failing closed.");
+    Require(File.ReadAllText(brokenKeyPath) == "gsc-key-v1:raw:not-valid-base64!", "Malformed existing master key was overwritten.");
+}
+
 var root = Path.Combine(Path.GetTempPath(), "gsc-security-check-" + Guid.NewGuid().ToString("n"));
 Directory.CreateDirectory(root);
 try
@@ -184,7 +234,8 @@ try
     VerifyAuthenticationThrottle();
     VerifyPathContainment(root);
     VerifySecretFilePermissions(root);
-    Console.WriteLine("Security token storage, authentication throttle, path containment, and secret file permission checks OK.");
+    VerifySecretProtector(root);
+    Console.WriteLine("Security token storage, authentication throttle, path containment, secret file permission, and secret protector checks OK.");
 }
 finally
 {
