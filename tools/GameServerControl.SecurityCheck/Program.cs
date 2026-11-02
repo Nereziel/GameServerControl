@@ -114,14 +114,23 @@ static void VerifySecretFilePermissions(string root)
 {
     var stateDir = Path.Combine(root, "secret-state");
     var file = Path.Combine(stateDir, "state.json");
-    SecretFilePermissions.WriteAllTextAtomic(file, "{\"secret\":true}");
-    Require(File.ReadAllText(file) == "{\"secret\":true}", "Atomic secret-state write changed file contents.");
+    var backup = Path.Combine(stateDir, "state.json.bak");
+    const string first = "{\"secret\":true}";
+    const string second = "{\"secret\":false}";
+
+    SecretFilePermissions.WriteAllTextAtomic(file, first);
+    Require(File.ReadAllText(file) == first, "Atomic secret-state write changed file contents.");
+
+    SecretFilePermissions.WriteAllTextAtomic(file, second, backup);
+    Require(File.ReadAllText(file) == second, "Atomic secret-state replacement did not persist the new contents.");
+    Require(File.ReadAllText(backup) == first, "Atomic secret-state replacement did not preserve the previous contents in the backup.");
 
     if (OperatingSystem.IsWindows()) return;
 
     var fileMode = File.GetUnixFileMode(file);
     var expectedFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
     Require(fileMode == expectedFileMode, $"Secret file mode must be 0600, got {fileMode}.");
+    Require(File.GetUnixFileMode(backup) == expectedFileMode, "Secret backup file mode must be 0600.");
 
     var dirMode = File.GetUnixFileMode(stateDir);
     var expectedDirMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
