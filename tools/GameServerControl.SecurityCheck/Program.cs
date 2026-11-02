@@ -64,6 +64,22 @@ static void VerifyAuthenticationThrottle()
     bounded.RecordFailure("client-d", now.AddSeconds(1));
     Require(!bounded.TryGetRetryAfter("client-d", now.AddSeconds(2), out _),
         "Throttle exceeded its configured client-state memory bound.");
+
+    var concurrent = new AuthenticationFailureThrottle(
+        maxFailures: 2,
+        window: TimeSpan.FromSeconds(10),
+        blockDuration: TimeSpan.FromSeconds(10),
+        maxTrackedClients: 4);
+    Parallel.For(0, 64, i =>
+    {
+        var key = $"concurrent-{i}";
+        concurrent.RecordFailure(key, now);
+        concurrent.RecordFailure(key, now.AddSeconds(1));
+    });
+    var blockedClients = Enumerable.Range(0, 64)
+        .Count(i => concurrent.TryGetRetryAfter($"concurrent-{i}", now.AddSeconds(2), out _));
+    Require(blockedClients == 4,
+        $"Concurrent client creation violated the hard memory bound: expected 4 tracked clients, got {blockedClients}.");
 }
 
 var root = Path.Combine(Path.GetTempPath(), "gsc-security-check-" + Guid.NewGuid().ToString("n"));
