@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gameservercontrol-cloud",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-02",
+  "workers_dev": false,
+  "observability": {
+    "enabled": true
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS"
+  },
+  "vars": {
+    "AGENT_ORIGIN": "https://gsc-origin.example.com",
+    "ACCESS_TEAM_DOMAIN": "https://your-team.cloudflareaccess.com",
+    "ACCESS_POLICY_AUD": "replace-with-panel-access-aud"
+  }
+}
