@@ -137,6 +137,9 @@ jobs:
           bash -n deploy/linux/install-from-release.sh
           bash -n deploy/relay/install-from-release.sh
           bash -n deploy/relay/install.sh
+          bash -n deploy/relay/ufw-reconcile.sh
+          bash -n scripts/test-relay-ufw-reconcile.sh
+          bash scripts/test-relay-ufw-reconcile.sh
 
       - name: Publish agent (linux-x64, self-contained)
         run: >-
@@ -165,6 +168,7 @@ jobs:
           cp deploy/relay/gameservercontrol-relay.service publish/Relay-linux/
           cp deploy/relay/install.sh publish/Relay-linux/
           cp deploy/relay/install-from-release.sh publish/Relay-linux/
+          cp deploy/relay/ufw-reconcile.sh publish/Relay-linux/
           chmod +x publish/Relay-linux/install.sh publish/Relay-linux/install-from-release.sh publish/Relay-linux/GameServerControl.Relay
 
       - name: Create Linux tarballs
@@ -244,4 +248,4 @@ jobs:
             The Cloudflare Tunnel Windows bootstrap is included as GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1. It requires a remotely-managed Cloudflare Tunnel token and keeps the Agent origin on loopback.
 
             Release binaries are stamped with version ${{ needs.prepare.outputs.version }} from the release tag.
-            The Relay installer detects the VPS public interface and Tailscale IPv4, enables IPv4 forwarding, installs the systemd service, and prints the Tailscale API URL plus token to configure on the Agent.
+            The Relay installer detects the VPS public interface and Tailscale IPv4, enables IPv4 forwarding, reconciles its Tailscale-only UFW API rule, installs the systemd service, and prints the Tailscale API URL plus token to configure on the Agent.
