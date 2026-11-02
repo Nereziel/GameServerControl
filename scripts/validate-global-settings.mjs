@@ -3,7 +3,7 @@ import path from 'node:path';
 
 const root = process.cwd();
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
-const program = read('src/GameServerControl.Agent/Program.cs');
+const endpoints = read('src/GameServerControl.Agent/Config/AgentSettingsEndpoints.cs');
 const index = read('src/GameServerControl.Agent/WebUi/index.html');
 const relayUi = read('src/GameServerControl.Agent/WebUi/jobs-mods.js');
 
@@ -12,8 +12,8 @@ const requireText = (source, needle, label) => {
   if (!source.includes(needle)) failures.push(`Missing ${label}: ${needle}`);
 };
 
-requireText(program, 'api.MapGet("/settings/public-relay"', 'global Relay settings GET endpoint');
-requireText(program, 'api.MapPut("/settings/public-relay"', 'global Relay settings PUT endpoint');
+requireText(endpoints, 'api.MapGet("/settings/public-relay"', 'global Relay settings GET endpoint');
+requireText(endpoints, 'api.MapPut("/settings/public-relay"', 'global Relay settings PUT endpoint');
 requireText(index, 'id="tabSettings"', 'top-level Settings tab');
 requireText(index, 'id="settingsView"', 'top-level Settings view');
 requireText(index, '/api/settings/public-relay', 'Settings UI Relay API usage');
