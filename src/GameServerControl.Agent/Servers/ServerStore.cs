@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using GameServerControl.Agent.Networking;
+using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Servers;
@@ -20,6 +21,7 @@ public sealed class ServerStore
     private readonly string _path;
     private readonly ServerRegistry _registry;
     private readonly ILogger<ServerStore> _logger;
+    private readonly ServerSecretProtection _secretProtection;
     private readonly object _lock = new();
 
     public ServerStore(IConfiguration cfg, IHostEnvironment env, ServerRegistry registry, ILogger<ServerStore> logger)
@@ -28,6 +30,7 @@ public sealed class ServerStore
         _logger = logger;
         var configured = cfg["Agent:ServersJsonPath"] ?? "servers.json";
         _path = Path.IsPathRooted(configured) ? configured : Path.Combine(env.ContentRootPath, configured);
+        _secretProtection = new ServerSecretProtection(new SecretProtector(env.ContentRootPath));
         try { SecretFilePermissions.RestrictExisting(_path); }
         catch (Exception ex) { _logger.LogWarning(ex, "Could not restrict server state permissions for {Path}", _path); }
     }
@@ -111,17 +114,11 @@ public sealed class ServerStore
         for (var i = 0; i < ports.Length; i++)
         {
             ValidatePort(ports[i]);
-            if (def.HostingMode == HostingMode.BareMetal &&
-                profile?.Key is "valheim" or "dragonwilds" && ports[i].Port < 1024)
-            {
-                throw new ArgumentException(
-                    $"{profile.Label} ports must be 1024 or higher. The Linux Agent runs as an unprivileged service user and cannot bind privileged ports by default.");
-            }
+            if (def.HostingMode == HostingMode.BareMetal && profile?.Key is "valheim" or "dragonwilds" && ports[i].Port < 1024)
+                throw new ArgumentException($"{profile.Label} ports must be 1024 or higher. The Linux Agent runs as an unprivileged service user and cannot bind privileged ports by default.");
             for (var j = i + 1; j < ports.Length; j++)
-            {
                 if (ports[i].Protocol == ports[j].Protocol && Overlaps(ports[i], ports[j]))
                     throw new ArgumentException($"Network settings contain overlapping {ports[i].Protocol.ToString().ToUpperInvariant()} ports: {Describe(ports[i])} and {Describe(ports[j])}.");
-            }
         }
     }
 
@@ -130,20 +127,15 @@ public sealed class ServerStore
         if (candidate.HostingMode != HostingMode.BareMetal) return;
         var candidatePorts = EffectivePorts(candidate);
         if (candidatePorts.Length == 0) return;
-
         foreach (var other in all)
         {
-            if (!string.IsNullOrWhiteSpace(excludeId) && string.Equals(other.Id, excludeId, StringComparison.OrdinalIgnoreCase))
-                continue;
+            if (!string.IsNullOrWhiteSpace(excludeId) && string.Equals(other.Id, excludeId, StringComparison.OrdinalIgnoreCase)) continue;
             if (other.HostingMode != HostingMode.BareMetal) continue;
-
             foreach (var ours in candidatePorts)
             foreach (var theirs in EffectivePorts(other))
             {
                 if (ours.Protocol != theirs.Protocol || !Overlaps(ours, theirs)) continue;
-                throw new ArgumentException(
-                    $"Port conflict with server '{other.Name}': {Describe(ours)} overlaps {Describe(theirs)}. " +
-                    "Change one server's Network ports before running both on this machine.");
+                throw new ArgumentException($"Port conflict with server '{other.Name}': {Describe(ours)} overlaps {Describe(theirs)}. Change one server's Network ports before running both on this machine.");
             }
         }
     }
@@ -177,16 +169,33 @@ public sealed class ServerStore
     private List<ServerDef> LoadAll()
     {
         if (!File.Exists(_path)) return new List<ServerDef>();
-        var json = File.ReadAllText(_path);
-        var doc = JsonSerializer.Deserialize<ServersFile>(json, JsonOpts);
-        return (doc?.Servers ?? Array.Empty<ServerDef>()).Select(Normalize).ToList();
+        var doc = JsonSerializer.Deserialize<ServersFile>(File.ReadAllText(_path), JsonOpts);
+        var list = new List<ServerDef>();
+        var migratedLegacy = false;
+        foreach (var stored in doc?.Servers ?? Array.Empty<ServerDef>())
+        {
+            var clear = _secretProtection.UnprotectFromStorage(stored, out var legacy);
+            migratedLegacy |= legacy;
+            list.Add(Normalize(clear));
+        }
+        if (migratedLegacy) WriteProtected(list, preservePrevious: false);
+        return list;
     }
 
-    private void SaveAll(List<ServerDef> list)
+    private void SaveAll(List<ServerDef> list) => WriteProtected(list, preservePrevious: true);
+
+    private void WriteProtected(List<ServerDef> list, bool preservePrevious)
     {
-        var doc = new ServersFile { Servers = list.ToArray() };
+        var doc = new ServersFile { Servers = list.Select(_secretProtection.ProtectForStorage).ToArray() };
         var json = JsonSerializer.Serialize(doc, JsonOpts);
-        SecretFilePermissions.WriteAllTextAtomic(_path, json, _path + ".bak");
+        if (preservePrevious)
+            SecretFilePermissions.WriteAllTextAtomic(_path, json, _path + ".bak");
+        else
+        {
+            // Legacy plaintext must not survive in the automatic backup.
+            SecretFilePermissions.WriteAllTextAtomic(_path, json);
+            SecretFilePermissions.WriteAllTextAtomic(_path + ".bak", json);
+        }
     }
 
     private sealed class ServersFile
