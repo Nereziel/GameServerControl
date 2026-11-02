@@ -32,12 +32,19 @@ test('gateway selects a different Agent token for each role', () => {
 
 test('ReadOnly users cannot mutate through the cloud gateway', () => {
   for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
-    assert.deepEqual(authorizeGatewayRequest(method, 'ReadOnly'), {
+    assert.deepEqual(authorizeGatewayRequest(method, 'ReadOnly', '/api/servers/example'), {
       allowed: false,
       status: 403,
       error: 'Read-only access cannot modify GameServerControl.'
     });
   }
-  assert.equal(authorizeGatewayRequest('GET', 'ReadOnly').allowed, true);
-  assert.equal(authorizeGatewayRequest('POST', 'Admin').allowed, true);
+  assert.equal(authorizeGatewayRequest('GET', 'ReadOnly', '/api/servers').allowed, true);
+  assert.equal(authorizeGatewayRequest('POST', 'Admin', '/api/servers/example/start').allowed, true);
+});
+
+test('ReadOnly users can negotiate SignalR and control read-only live-log subscriptions', () => {
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/hubs/status/negotiate').allowed, true);
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/logs/tail').allowed, true);
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/start').allowed, false);
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/rcon/command').allowed, false);
 });
