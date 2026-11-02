@@ -4,7 +4,7 @@
 
 **Goal:** Prevent Windows and Linux release updaters from deleting the rollback payload until the replacement Agent proves an authenticated `/api/health` response from the expected release and remains healthy across consecutive probes.
 
-**Architecture:** The installer creates a short-lived random bearer token in a restricted `.update-health-token` file inside the replacement Agent directory. `TokenAuthHandler` accepts that credential only for `/api/health`; the health response reports the running assembly version and PID. Each release installer polls the local Agent for up to 30 seconds and requires three consecutive authenticated responses with `ok=true` and the expected version before deleting `Agent.previous`; any failure removes the temporary credential and follows the existing rollback path.
+**Architecture:** The installer creates a short-lived random bearer token in a restricted `.update-health-token` file inside the replacement Agent directory. `TokenAuthHandler` accepts that credential only for the exact `/api/health` route and adds the running assembly version and process ID to no-store response headers. Each release installer polls the local Agent for up to 30 seconds and requires three consecutive authenticated responses with `ok=true`, the expected version, and the same PID before deleting `Agent.previous`; any failure removes the temporary credential and follows the existing rollback path.
 
 **Tech Stack:** ASP.NET Core 8, C#, PowerShell, Bash, Node.js contract tests, GitHub Actions.
 
@@ -32,26 +32,24 @@
 
 **Files:**
 - Create: `scripts/validate-update-health.mjs`
-- Modify: `.github/workflows/build.yml`
-- Modify: `.github/workflows/release.yml`
+- Create: `.github/workflows/bug02-contract.yml`
 
-- [ ] Write source/ordering contracts for health response version, health-only temporary bearer authentication, Windows and Linux authenticated polling, 30-second/three-success stability, and rollback-payload deletion only after the gate.
-- [ ] Run the contract and verify RED on the current implementation.
+- [x] Write source/ordering contracts for health response metadata, health-only temporary bearer authentication, Windows and Linux authenticated polling, 30-second/three-success stability, and rollback-payload deletion only after the gate.
+- [x] Run the contract and verify RED on the current implementation.
 
-### Task 2: Add scoped update-health authentication and versioned health response
+### Task 2: Add scoped update-health authentication and runtime metadata
 
 **Files:**
 - Create: `src/GameServerControl.Agent/Auth/UpdateHealthToken.cs`
 - Modify: `src/GameServerControl.Agent/Auth/TokenAuthHandler.cs`
 - Modify: `src/GameServerControl.Agent/Notifications/UpdateChecker.cs`
-- Modify: `src/GameServerControl.Agent/Program.cs`
 - Modify: `tools/GameServerControl.SecurityCheck/GameServerControl.SecurityCheck.csproj`
 - Modify: `tools/GameServerControl.SecurityCheck/Program.cs`
 
-- [ ] Add behavior tests for exact temporary-token matching and missing/wrong-token rejection.
-- [ ] Implement constant-time token comparison against the restricted file and scope its use to exact `/api/health` requests.
-- [ ] Expose the running assembly version and include `version` and `pid` in the authenticated health payload.
-- [ ] Run SecurityCheck and BUG-02 contract GREEN.
+- [x] Add behavior tests for exact temporary-token matching and missing/wrong-token rejection.
+- [x] Implement constant-time token comparison against the restricted file and scope its use to exact `/api/health` requests.
+- [x] Expose the running assembly version and process ID as `X-GameServerControl-Version` and `X-GameServerControl-Pid` headers only for the scoped update-health probe.
+- [x] Run SecurityCheck and BUG-02 contract GREEN before PR verification.
 
 ### Task 3: Gate rollback cleanup on authenticated stable health
 
@@ -61,8 +59,8 @@
 - Test: `scripts/validate-update-health.mjs`
 - Test: `scripts/validate-windows-updater.ps1`
 
-- [ ] Generate a short-lived random update-health credential in the replacement Agent directory with existing restrictive permissions.
-- [ ] Derive a local probe URL from `Agent:Bind`, replacing wildcard hosts with loopback.
-- [ ] Poll authenticated `/api/health` for up to 30 seconds and require three consecutive `ok=true`, expected-version responses while service remains running.
-- [ ] Delete the temporary credential before success cleanup; on failure, delete it and execute the existing rollback.
-- [ ] Run Windows parser, Linux syntax, BUG-02 contract, SecurityCheck, then full Windows/Linux CI.
+- [x] Generate a short-lived random update-health credential in the replacement Agent directory with restrictive permissions.
+- [x] Derive a local probe URL from `Agent:Bind`, replacing wildcard hosts with a local endpoint.
+- [x] Poll authenticated `/api/health` for up to 30 seconds and require three consecutive `ok=true`, expected-version responses from the same PID while the service remains running.
+- [x] Delete the temporary credential before success cleanup; on failure, delete it and execute the existing rollback.
+- [ ] Run final PR Windows/Linux CI, BUG-02 contract, supply-chain contract, then review and merge the verified HEAD.
