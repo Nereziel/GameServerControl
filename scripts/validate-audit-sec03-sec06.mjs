@@ -23,6 +23,14 @@ function rejectToken(source, token, message) {
   if (source.includes(token)) throw new Error(`${message}: unexpected ${token}`);
 }
 
+function requireBefore(source, earlier, later, message) {
+  const earlierIndex = source.indexOf(earlier);
+  const laterIndex = source.indexOf(later);
+  if (earlierIndex < 0 || laterIndex < 0 || earlierIndex >= laterIndex) {
+    throw new Error(`${message}: expected ${earlier} before ${later}`);
+  }
+}
+
 // SEC-03: release/update execution must be pinned to a concrete release and hash verified.
 requireToken(release, 'SHA256SUMS', 'Release must publish a SHA-256 manifest');
 requireToken(release, 'sha256sum', 'Release must generate SHA-256 values for staged assets');
@@ -51,13 +59,21 @@ requireToken(linuxUnit, 'UMask=0077', 'systemd must default Agent-created files 
 requireToken(linuxInstaller, 'umask 077', 'Release Linux installer must create private temporary/state files');
 requireToken(linuxInstaller, 'chmod 700 "$INSTALL_DIR"', 'Release Linux installer must restrict the Agent state directory');
 requireToken(linuxInstaller, 'chmod 600', 'Release Linux installer must restrict persisted secret files');
+requireBefore(linuxInstaller, 'chmod 700 "$INSTALL_DIR"', 'preserve_dir="$tmp_dir/preserved"', 'Existing Linux secret state must be restricted before it is copied/moved during upgrade');
 rejectToken(linuxInstaller, 'echo "   $api_token"', 'Release Linux installer must not print the persisted API token');
 requireToken(linuxSourceInstaller, 'umask 077', 'Source-build Linux installer must create private state files');
 requireToken(linuxSourceInstaller, 'chmod 700 "$INSTALL_DIR"', 'Source-build Linux installer must restrict the Agent state directory');
 requireToken(linuxSourceInstaller, 'chmod 600', 'Source-build Linux installer must restrict persisted secret files');
 rejectToken(linuxSourceInstaller, 'GENERATED NEW AGENT API TOKEN', 'Source-build Linux installer must not scrape the bootstrap token from journald');
-requireToken(installer, 'icacls', 'Windows installer must restrict the Agent directory ACL');
+requireToken(installer, 'function Set-AgentDirectoryAcl', 'Windows installer must centralize restrictive Agent ACL handling');
 requireToken(installer, 'SYSTEM:(OI)(CI)F', 'Windows Agent ACL must grant SYSTEM');
 requireToken(installer, 'BUILTIN\\Administrators:(OI)(CI)F', 'Windows Agent ACL must grant local Administrators');
+requireBefore(installer, 'Set-AgentDirectoryAcl -Path $agentDir', "$preserve = @('appsettings.json'", 'Existing Windows secret state must be restricted before it is copied/moved during upgrade');
+const newAgentDir = 'New-Item -ItemType Directory -Force -Path $agentDir | Out-Null';
+const newAgentDirIndex = installer.indexOf(newAgentDir);
+const aclAfterNewDirIndex = installer.indexOf('Set-AgentDirectoryAcl -Path $agentDir', newAgentDirIndex + newAgentDir.length);
+if (newAgentDirIndex < 0 || aclAfterNewDirIndex < 0) {
+  throw new Error('Fresh Windows Agent directory must be restricted before release contents and preserved secrets are copied into it');
+}
 
 console.log('Audit SEC-03 through SEC-06 contract OK.');
