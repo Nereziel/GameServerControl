@@ -8,6 +8,8 @@ public static class ServerConfigFileEndpoints
 {
     public static RouteGroupBuilder MapServerConfigFiles(this RouteGroupBuilder api)
     {
+        api.MapAgentSettings();
+
         api.MapGet("/servers/{id}/files", async (string id, ServerConfigFileService files, CancellationToken ct) =>
         {
             try { return Results.Ok(await files.ListAsync(id, ct)); }
