@@ -1,4 +1,6 @@
 using GameServerControl.Agent.Notifications;
+using GameServerControl.Agent.Rcon;
+using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Servers;
 
@@ -22,6 +24,19 @@ public static class OperationalEndpoints
                 latestUrl = version.LatestUrl,
                 updateAvailable = version.UpdateAvailable,
                 checkedAt = version.CheckedAt
+            });
+        });
+
+        api.MapGet("/servers/{id}/admin/capabilities", (string id, ServerRegistry reg, RconService rcon) =>
+        {
+            var def = reg.Get(id);
+            if (def is null) return Results.NotFound();
+            var commands = rcon.GetCapabilities(def);
+            return Results.Ok(new
+            {
+                supported = commands.Length > 0,
+                configured = def.RconPort is > 0 && !string.IsNullOrWhiteSpace(def.RconPassword),
+                commands
             });
         });
 
