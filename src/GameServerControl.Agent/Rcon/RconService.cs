@@ -18,6 +18,14 @@ public sealed class RconService
 
     public IGameRcon? GetHandler(ServerDef def) => _handlers.FirstOrDefault(h => h.Supports(def));
 
+    public RconStandardCommand[] GetCapabilities(ServerDef def)
+    {
+        var handler = GetHandler(def);
+        return handler is null
+            ? Array.Empty<RconStandardCommand>()
+            : handler.SupportedCommands.Where(x => x != RconStandardCommand.Raw).Distinct().ToArray();
+    }
+
     public async Task<(string host, int port, string password)> ResolveAsync(ServerDef def, CancellationToken ct)
     {
         if (def.RconPort is null || def.RconPort.Value <= 0)
@@ -47,7 +55,11 @@ public sealed class RconService
     {
         var handler = GetHandler(def);
         if (handler is null)
-            return new RconResponse(false, "", $"No RCON handler for game (SteamAppId={def.SteamAppId}). Palworld is the only supported game in v1.");
+            return new RconResponse(false, "", $"No RCON handler for game (SteamAppId={def.SteamAppId}).");
+
+        if (cmd != RconStandardCommand.Raw && !handler.SupportedCommands.Contains(cmd))
+            return new RconResponse(false, "", $"RCON command {cmd} is not supported by this game handler.");
+
         try
         {
             var (host, port, pw) = await ResolveAsync(def, ct);
@@ -62,7 +74,8 @@ public sealed class RconService
     public async Task<RconPlayer[]> ListPlayersAsync(ServerDef def, CancellationToken ct)
     {
         var handler = GetHandler(def);
-        if (handler is null) return Array.Empty<RconPlayer>();
+        if (handler is null || !handler.SupportedCommands.Contains(RconStandardCommand.ListPlayers))
+            return Array.Empty<RconPlayer>();
         try
         {
             var (host, port, pw) = await ResolveAsync(def, ct);
