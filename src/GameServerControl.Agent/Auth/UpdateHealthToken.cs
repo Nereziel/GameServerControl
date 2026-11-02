@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -7,6 +8,11 @@ public static class UpdateHealthToken
 {
     public const string FileName = ".update-health-token";
     private const int MaxTokenLength = 512;
+
+    public static string CurrentVersion { get; } = typeof(UpdateHealthToken).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? typeof(UpdateHealthToken).Assembly.GetName().Version?.ToString(3)
+        ?? "0.0.0";
 
     public static bool IsValid(string baseDirectory, string presentedToken)
     {
