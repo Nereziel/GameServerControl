@@ -26,7 +26,7 @@ GameServerControl supports:
 - **Admin** tokens — read/write administration.
 - **ReadOnly** tokens — read access; mutation middleware rejects write methods.
 
-The first boot replaces the placeholder `Agent:ApiToken` with a cryptographically random token and persists it in `appsettings.json`. Additional tokens can be created and revoked from the Web UI.
+On first boot the placeholder `Agent:ApiToken` is replaced in memory with a cryptographically random bootstrap token. Reusable configuration secrets are persisted only through the encrypted local secret store described below. Additional managed tokens can be created and revoked from the Web UI; `tokens.json` stores only one-way token hashes/prefixes, not reusable bearer-token plaintext.
 
 The Web UI itself is a static shell; API calls remain authenticated. The direct UI stores its selected Agent URL/token only in browser `sessionStorage`, so closing the browser tab/session removes that browser-side credential. Avoid untrusted/shared browser sessions. Cloudflare remote mode does not expose the real Agent bearer token to browser JavaScript; the Worker selects the server-side Agent credential.
 
@@ -42,18 +42,27 @@ Web UI actions use delegated event listeners rather than executable HTML attribu
 
 Inline CSS remains allowed because the existing UI uses style attributes and runtime style updates. This does not relax the JavaScript execution policy.
 
-## Sensitive files
+## Sensitive files and encryption at rest
 
-Protect the Agent directory. In particular:
+Protect the Agent directory. Important state includes:
 
 ```text
 appsettings.json
 servers.json
 tokens.json
+public-relay.json
+secret.key
+secret-state.json
 Logs/audit/
 ```
 
-`appsettings.json` contains the bootstrap API token and optional provider credentials. `servers.json` may contain RCON/admin passwords and Discord webhooks. These values are currently persisted as plaintext JSON, so filesystem permissions matter.
+Reusable Agent configuration credentials, server RCON passwords, Discord webhook URLs and the public-relay bearer token are protected at rest with purpose-bound **AES-GCM** envelopes. Existing plaintext installations are migrated automatically: sensitive `appsettings.json` leaves are replaced with the non-secret `<stored-encrypted>` marker, server/relay state is rewritten encrypted, and runtime consumers receive decrypted values only in Agent memory.
+
+`secret.key` contains the random 256-bit master-key material required to open those envelopes. On Windows the key is wrapped with **DPAPI LocalMachine** before it is written and the Agent directory ACL is restricted to SYSTEM/local Administrators. On Linux the random master key is stored under the service-owned Agent directory with mode `0600` and the parent directory remains `0700`. `secret-state.json` and the other sensitive state files are also restricted to the service identity.
+
+The encryption files are a pair: back up and restore `secret.key` together with encrypted state. Windows and Linux installers preserve `secret.key` and `secret-state.json` across upgrades. If an existing encrypted state cannot be authenticated with its key, the Agent fails closed rather than silently replacing the key and losing access to stored credentials.
+
+This protects copied/offline state files from exposing reusable plaintext by themselves. It does **not** protect secrets from an attacker who already controls LocalSystem/root, local Administrators, or the running Agent service identity and can read both the key and ciphertext. Filesystem ownership and host privilege therefore remain part of the security boundary.
 
 On Windows the default service runs as LocalSystem because Hyper-V/Task Scheduler integration may require elevated host access. Restrict write access to the installation directory accordingly.
 
@@ -72,7 +81,7 @@ For direct private HTTPS, configure:
 "CertSanIps": "100.x.y.z"
 ```
 
-The Agent can generate a self-signed certificate. For a Cloudflare/Tailscale design it is often simpler to keep Agent HTTP private and terminate TLS at the tunnel/proxy.
+A configured certificate password is migrated into encrypted secret state. The Agent can generate a self-signed certificate. For a Cloudflare/Tailscale design it is often simpler to keep Agent HTTP private and terminate TLS at the tunnel/proxy.
 
 ## Self-update
 
@@ -84,20 +93,20 @@ Linux web-triggered self-update is intentionally disabled for now; use the relea
 
 ## External provider credentials
 
-Optional marketplace/provider keys such as the CurseForge API key are stored server-side in `appsettings.json` and are not returned by the normal Web UI API. Do not commit populated configuration files.
+Optional marketplace/provider keys such as the CurseForge API key are migrated into encrypted `secret-state.json` and are not returned by the normal Web UI API. Environment/runtime overrides stay runtime-only and are not copied into persistent encrypted state merely because they are present in `IConfiguration`. Do not commit populated configuration or secret-state files.
 
 ## Known limitations
 
-- Server/RCON/password values are not encrypted at rest yet.
 - The self-signed HTTPS certificate path is intended for private deployments, not as a substitute for a properly managed public TLS endpoint.
 - Hyper-V mode necessarily expands the Agent's host privileges; do not enable/use it when unnecessary.
 
 ## Deployment checklist
 
-- [ ] `Agent:ApiToken` is no longer the placeholder.
+- [ ] `Agent:ApiToken` is no longer the placeholder at runtime.
 - [ ] Agent listens only on loopback/private interfaces.
 - [ ] Port 5099 is not publicly forwarded.
-- [ ] `appsettings.json`, `servers.json` and `tokens.json` have restricted filesystem permissions.
+- [ ] `appsettings.json`, `servers.json`, `tokens.json`, `public-relay.json`, `secret.key` and `secret-state.json` have restricted filesystem permissions.
+- [ ] `secret.key` is backed up/restored together with encrypted Agent state.
 - [ ] Admin and ReadOnly tokens are assigned appropriately.
 - [ ] Public browser access, if used, is protected by Cloudflare Access or an equivalent authentication layer.
 - [ ] Web UI responses include the restrictive Content Security Policy/security headers.
