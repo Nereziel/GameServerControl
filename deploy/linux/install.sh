@@ -39,6 +39,7 @@ fi
 # 2) Build + publish
 echo "=== Building agent ==="
 cd "$REPO_ROOT"
+rm -rf "$INSTALL_DIR.tmp"
 dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained false -o "$INSTALL_DIR.tmp"
 
 # 3) Create service user if missing
@@ -53,11 +54,24 @@ if systemctl is-active --quiet "$UNIT_NAME"; then
   systemctl stop "$UNIT_NAME"
 fi
 
-# 5) Move into place
+# 5) Preserve state, then move the new build into place. secret.key is part of
+# the encryption boundary and must stay paired with secret-state.json/servers.json.
 echo "=== Installing into $INSTALL_DIR ==="
 mkdir -p "$(dirname "$INSTALL_DIR")"
+preserve_dir="$(mktemp -d)"
+trap 'rm -rf "$preserve_dir" "$INSTALL_DIR.tmp"' EXIT
+for f in appsettings.json servers.json tokens.json public-relay.json secret.key secret-state.json; do
+  if [[ -f "$INSTALL_DIR/$f" ]]; then
+    cp "$INSTALL_DIR/$f" "$preserve_dir/$f"
+  fi
+done
 rm -rf "$INSTALL_DIR"
 mv "$INSTALL_DIR.tmp" "$INSTALL_DIR"
+for f in appsettings.json servers.json tokens.json public-relay.json secret.key secret-state.json; do
+  if [[ -f "$preserve_dir/$f" ]]; then
+    cp "$preserve_dir/$f" "$INSTALL_DIR/$f"
+  fi
+done
 chmod +x "$INSTALL_DIR/GameServerControl.Agent" 2>/dev/null || true
 
 # Managed roots match GameProfile.DefaultInstallPath + the systemd BackupRoot override.
@@ -75,7 +89,7 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
-for f in appsettings.json servers.json tokens.json public-relay.json; do
+for f in appsettings.json servers.json tokens.json public-relay.json secret.key secret-state.json; do
   [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
 done
 
@@ -94,7 +108,7 @@ systemctl start "$UNIT_NAME"
 sleep 2
 echo
 echo "=== Secret state ==="
-echo "API credentials remain in restricted local state files and are not printed to installer/service stdout."
+echo "Reusable credentials are encrypted at rest; secret.key and secret-state.json remain restricted to the service account."
 
 echo
 echo "=== Done ==="
