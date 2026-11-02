@@ -40,6 +40,7 @@ requireToken(configStore, '<stored-encrypted>', 'appsettings plaintext must be r
 requireToken(firstRun, 'MigrateAndApply', 'General configuration migration must run before auth/service consumers are instantiated');
 requireToken(firstRun, 'ConfigurationSecretStore', 'First-run bootstrap token must persist through encrypted secret state');
 requireToken(certHelper, 'ResolveEffectiveSecret', 'HTTPS certificate password must resolve encrypted state before Kestrel uses it');
+requireToken(certHelper, 'AppContext.BaseDirectory', 'Certificate secret resolution must use the single Agent state root, not a custom PFX directory');
 rejectToken(firstRun, '"ApiToken": "{token}"', 'First-run token must not be written into appsettings plaintext');
 
 requireToken(serverCodec, 'RconPassword', 'Server RCON password must be protected at rest');
