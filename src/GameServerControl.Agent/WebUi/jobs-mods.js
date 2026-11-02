@@ -26,6 +26,61 @@ async function loadModUpdates(){const pane=$('#modsPane');try{const r=await api(
 async function updateOneMod(id){const u=MOD_UPDATES.find(x=>x.modId===id);if(!u)return;try{await api(`/api/servers/${MOD_CTX.id}/mods/${encodeURIComponent(id)}/update`,{method:'POST',body:JSON.stringify({url:u.latestDownloadUrl,displayName:u.displayName})});toast('Updated '+u.displayName,'ok');await loadModUpdates()}catch(e){toast('Update failed: '+e.message,'err')}}
 async function updateAllMods(){if(!MOD_UPDATES.length)return;for(const u of [...MOD_UPDATES]){try{await api(`/api/servers/${MOD_CTX.id}/mods/${encodeURIComponent(u.modId)}/update`,{method:'POST',body:JSON.stringify({url:u.latestDownloadUrl,displayName:u.displayName})});toast('Updated '+u.displayName,'ok')}catch(e){toast('Update failed for '+u.displayName+': '+e.message,'err');return}}await loadModUpdates()}
 
+/* Agent-wide Settings. Relay connection credentials belong to the Agent, not one game server. */
+function installGlobalSettingsView(){
+  const tabs=document.querySelector('.shell>.tabs');
+  const installs=$('#installsView');
+  if(tabs&&!$('#tabSettings'))tabs.insertAdjacentHTML('beforeend','<button id="tabSettings" class="tab" onclick="showView(\'settings\')">Settings</button>');
+  if(installs&&!$('#settingsView'))installs.insertAdjacentHTML('afterend','<section id="settingsView" class="hidden"><div id="settingsRoot"></div></section>');
+}
+const GLOBAL_SETTINGS_BASE_SHOW_VIEW=showView;
+showView=function(v){
+  installGlobalSettingsView();
+  if(v==='settings'){
+    CURRENT_VIEW='settings';
+    $('#serversView')?.classList.add('hidden');
+    $('#installsView')?.classList.add('hidden');
+    $('#settingsView')?.classList.remove('hidden');
+    $('#tabServers')?.classList.remove('active');
+    $('#tabInstalls')?.classList.remove('active');
+    $('#tabSettings')?.classList.add('active');
+    renderGlobalSettings();
+    return;
+  }
+  $('#settingsView')?.classList.add('hidden');
+  $('#tabSettings')?.classList.remove('active');
+  GLOBAL_SETTINGS_BASE_SHOW_VIEW(v);
+};
+window.openGlobalSettings=function(){showView('settings')};
+
+async function renderGlobalSettings(){
+  const root=$('#settingsRoot');if(!root)return;
+  root.innerHTML='<div class="muted">Loading Agent settings…</div>';
+  try{
+    const status=await api('/api/settings/public-relay');
+    if(!root.isConnected)return;
+    const configured=!!status.configured,reachable=!!status.reachable;
+    const stateClass=configured?(reachable?'up':'warn'):'down';
+    const stateText=!configured?'Not configured':reachable?'Connected':'Configured, unreachable';
+    const tokenHint=status.apiTokenConfigured?'Token is configured — leave blank to keep it.':'Paste the token printed by the VPS Relay installer.';
+    root.innerHTML=`<div class="sw-dashboard-head"><div><h2>Settings</h2><div class="muted tiny">Agent-wide settings shared by all game servers.</div></div></div><div class="sw-section"><div class="sw-toolbar"><div><h3 style="margin:0">Public VPS relay</h3><div class="tiny muted">One Relay connection for this Agent. Individual servers choose their public ports in Server → Network.</div></div><div class="spacer"></div><span class="state ${stateClass}">${esc(stateText)}</span></div>${status.error?`<div class="callout">${esc(status.error)}</div>`:''}<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px"><div class="field"><label>Relay URL</label><input id="gsRelayUrl" value="${esc(status.relayUrl||'')}" placeholder="http://100.x.y.z:5100"><div class="help">Use the VPS Tailscale address, not its public IP.</div></div><div class="field"><label>Relay API token</label><input id="gsRelayToken" type="password" autocomplete="new-password" placeholder="${esc(tokenHint)}"><div class="help">The saved token is write-only and is never returned to the browser.</div></div><div class="field"><label>Target Tailscale IP</label><input id="gsRelayTarget" value="${esc(status.configuredTargetAddress||'')}" placeholder="Auto-detect${status.targetAddress?' · '+esc(status.targetAddress):''}"><div class="help">Normally leave blank. The Agent then auto-detects its own Tailscale IPv4 address.</div></div><div class="field"><label>VPS public address</label><input id="gsRelayPublicAddress" value="${esc(status.publicAddress||'')}" placeholder="203.0.113.10 or games.example.com"><div class="help">Display value only. Game forwarding still uses the Relay URL/Tailscale path.</div></div></div><div class="sw-info"><div>Relay API</div><div>${esc(stateText)}</div><div>Saved token</div><div>${status.apiTokenConfigured?'Configured':'Not configured'}</div><div>Resolved Agent target</div><div class="mono">${esc(status.targetAddress||'not detected')}</div><div>Traffic model</div><div>Public VPS → DNAT → Tailscale → game server</div></div><div class="checkrow" style="margin-top:12px"><input id="gsRelayClearToken" type="checkbox"><label for="gsRelayClearToken">Clear the saved Relay API token on save</label></div><div class="sw-toolbar" style="margin-top:12px"><button class="btn" onclick="renderGlobalSettings()">Test / refresh connection</button><div class="spacer"></div><button class="btn primary" onclick="saveGlobalRelaySettings()">Save Agent relay settings</button></div></div>`;
+  }catch(e){root.innerHTML=`<div class="callout">Agent settings failed: ${esc(e.message)}</div>`}
+}
+window.renderGlobalSettings=renderGlobalSettings;
+
+window.saveGlobalRelaySettings=async function(){
+  const relayUrl=$('#gsRelayUrl')?.value.trim()||'';
+  const enteredToken=$('#gsRelayToken')?.value.trim()||'';
+  const clearToken=!!$('#gsRelayClearToken')?.checked;
+  const targetAddress=$('#gsRelayTarget')?.value.trim()||'';
+  const publicAddress=$('#gsRelayPublicAddress')?.value.trim()||'';
+  try{
+    const result=await api('/api/settings/public-relay',{method:'PUT',body:JSON.stringify({relayUrl,relayApiToken:clearToken?'':(enteredToken||null),targetAddress,publicAddress})});
+    toast(result?.configured?(result.reachable?'Agent Relay settings saved and connected.':'Agent Relay settings saved, but the VPS is unreachable.'):'Agent Relay settings saved.','ok');
+    await renderGlobalSettings();
+  }catch(e){toast('Agent Relay settings save failed: '+e.message,'err')}
+};
+
 /* Public VPS relay controls. The relay mirrors the manual DNAT + MASQUERADE + FORWARD setup
    but keeps its rules in GSC_RELAY_* chains instead of rewriting /etc/ufw/before.rules. */
 function relayProto(v){return String(v||'').toLowerCase()}
@@ -48,11 +103,10 @@ async function renderPublicRelaySection(def,body){
   const configured=!!status.configured,reachable=!!status.reachable,enabled=!!status.enabled;
   const lifecycle=!configured?'Not configured':!reachable?'Relay unreachable':!enabled?'Disabled':running?'Active while server is running':'Enabled, currently closed because server is stopped';
   const stateClass=!configured||!reachable?'down':enabled&&running?'up':enabled?'warn':'down';
-  const rows=routes.length?routes.map((p,i)=>`<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(p.name)}</div><div class="sw-row-meta mono">${esc(String(p.protocol).toUpperCase())} target ${esc(relayDisplayRange(p.targetPort,p.targetEnd))}</div></div><div style="min-width:180px"><label class="tiny muted">Public ${p.width?'range start':'port'}</label><input data-relay-port="1" data-name="${esc(p.name)}" data-protocol="${esc(p.protocol)}" data-width="${p.width}" type="number" min="1" max="${65535-p.width}" value="${p.publicPort}" ${configured?'':'disabled'}><div class="tiny muted mono" style="margin-top:3px">${p.width?`maps ${esc(relayDisplayRange(p.publicPort,p.publicEnd))}`:`maps to ${p.targetPort}`}</div></div></div>`).join(''):'<div class="sw-empty">No game ports are defined for this server.</div>';
+  const rows=routes.length?routes.map(p=>`<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(p.name)}</div><div class="sw-row-meta mono">${esc(String(p.protocol).toUpperCase())} target ${esc(relayDisplayRange(p.targetPort,p.targetEnd))}</div></div><div style="min-width:180px"><label class="tiny muted">Public ${p.width?'range start':'port'}</label><input data-relay-port="1" data-name="${esc(p.name)}" data-protocol="${esc(p.protocol)}" data-width="${p.width}" type="number" min="1" max="${65535-p.width}" value="${p.publicPort}" ${configured?'':'disabled'}><div class="tiny muted mono" style="margin-top:3px">${p.width?`maps ${esc(relayDisplayRange(p.publicPort,p.publicEnd))}`:`maps to ${p.targetPort}`}</div></div></div>`).join(''):'<div class="sw-empty">No game ports are defined for this server.</div>';
   const error=status.error?`<div class="callout">${esc(status.error)}</div>`:'';
-  const tokenHint=status.apiTokenConfigured?'Token is configured. Leave blank to keep it.':'Paste the token printed by the VPS Relay installer.';
-  const connection=`<div class="section" style="margin-top:12px">Agent relay connection</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px"><div class="field"><label>Relay URL</label><input id="swRelayUrl" value="${esc(status.relayUrl||'')}" placeholder="http://100.x.y.z:5100"><div class="help">Use the VPS Tailscale address, not its public IP.</div></div><div class="field"><label>Relay API token</label><input id="swRelayToken" type="password" autocomplete="new-password" placeholder="${esc(tokenHint)}"><div class="help">The saved token is never returned to the browser.</div></div><div class="field"><label>Target Tailscale IP</label><input id="swRelayTarget" value="${esc(status.configuredTargetAddress||'')}" placeholder="Auto-detect${status.targetAddress?' · '+esc(status.targetAddress):''}"><div class="help">Leave blank to auto-detect this Agent host.</div></div><div class="field"><label>VPS public address</label><input id="swRelayPublicAddress" value="${esc(status.publicAddress||'')}" placeholder="203.0.113.10 or games.example.com"><div class="help">Display value only; forwarding uses the Relay URL above.</div></div></div>`;
-  mount.innerHTML=`<div class="sw-section"><div class="sw-toolbar"><div><h3 style="margin:0">Public VPS relay</h3><div class="tiny muted">Public VPS port → Tailscale → this game server. Rules are installed only while the server is running.</div></div><div class="spacer"></div><span class="state ${stateClass}">${esc(lifecycle)}</span></div>${connection}${error}<div class="sw-info"><div>Relay API</div><div>${configured?(reachable?'Connected':'Configured, unreachable'):'Not configured'}</div><div>Public address</div><div class="mono">${esc(status.publicAddress||'not set')}</div><div>Resolved target</div><div class="mono">${esc(status.targetAddress||'not detected')}</div><div>Traffic model</div><div>DNAT on VPS + MASQUERADE into tailscale0</div></div><div class="callout info" style="margin-top:10px"><b>Client IP:</b> because the VPS performs MASQUERADE, the game server sees the VPS Tailscale address as the peer instead of the player's original public IP. This matches the current manual setup and keeps the return path symmetric.</div><div class="checkrow" style="margin:12px 0"><input id="swRelayEnabled" type="checkbox" ${enabled?'checked':''} ${configured?'':'disabled'}><label for="swRelayEnabled">Expose this server through the public VPS while it is running</label></div>${rows}<div class="sw-toolbar" style="margin-top:12px"><button class="btn" ${configured?'':'disabled'} onclick="serverWorkspaceResetRelayPorts()">Public ports = game ports</button><div class="spacer"></div><button class="btn primary" onclick="serverWorkspaceSaveRelay('${jsq(def.id)}')">Save relay settings</button></div>${configured?'':'<div class="help">Enter the Relay URL and API token above and save. The VPS installer prints both values.</div>'}</div>`;
+  const configure=!configured?'<div class="callout info"><b>Relay connection is Agent-wide.</b> Configure the VPS URL/token once in Settings, then return here to expose this server.<div style="margin-top:8px"><button class="btn primary" onclick="openGlobalSettings()">Open Settings</button></div></div>':'';
+  mount.innerHTML=`<div class="sw-section"><div class="sw-toolbar"><div><h3 style="margin:0">Public VPS relay</h3><div class="tiny muted">Public VPS port → Tailscale → this game server. Rules are installed only while the server is running.</div></div><div class="spacer"></div><span class="state ${stateClass}">${esc(lifecycle)}</span></div>${configure}${error}<div class="sw-info"><div>Relay API</div><div>${configured?(reachable?'Connected':'Configured, unreachable'):'Not configured'}</div><div>Public address</div><div class="mono">${esc(status.publicAddress||'not set')}</div><div>Resolved target</div><div class="mono">${esc(status.targetAddress||'not detected')}</div><div>Traffic model</div><div>DNAT on VPS + MASQUERADE into tailscale0</div></div><div class="callout info" style="margin-top:10px"><b>Client IP:</b> because the VPS performs MASQUERADE, the game server sees the VPS Tailscale address as the peer instead of the player's original public IP. This matches the current manual setup and keeps the return path symmetric.</div><div class="checkrow" style="margin:12px 0"><input id="swRelayEnabled" type="checkbox" ${enabled?'checked':''} ${configured?'':'disabled'}><label for="swRelayEnabled">Expose this server through the public VPS while it is running</label></div>${rows}<div class="sw-toolbar" style="margin-top:12px"><button class="btn" ${configured?'':'disabled'} onclick="serverWorkspaceResetRelayPorts()">Public ports = game ports</button><div class="spacer"></div><button class="btn primary" ${configured?'':'disabled'} onclick="serverWorkspaceSaveRelay('${jsq(def.id)}')">Save server relay settings</button></div></div>`;
 }
 
 window.serverWorkspaceResetRelayPorts=function(){document.querySelectorAll('[data-relay-port]').forEach(el=>{const row=el.closest('.sw-row'),meta=row?.querySelector('.sw-row-meta')?.textContent||'',m=meta.match(/target\s+(\d+)/i);if(m)el.value=m[1]})};
@@ -64,19 +118,16 @@ window.serverWorkspaceSaveRelay=async function(id){
     if(!Number.isInteger(start)||start<1||end>65535)return toast('Invalid public relay port range.','err');
     publicPorts.push({name:el.dataset.name,protocol:el.dataset.protocol,port:start,endPort:width?end:null});
   }
-  const relayUrl=$('#swRelayUrl')?.value.trim()||'';
-  const enteredToken=$('#swRelayToken')?.value.trim()||'';
-  const targetAddress=$('#swRelayTarget')?.value.trim()||'';
-  const publicAddress=$('#swRelayPublicAddress')?.value.trim()||'';
   try{
-    const result=await api(`/api/servers/${encodeURIComponent(id)}/relay`,{method:'PUT',body:JSON.stringify({enabled,publicPorts,relayUrl,relayApiToken:enteredToken||null,targetAddress,publicAddress})});
-    toast(result?.configured?(result.reachable?'Relay saved and connected.':'Relay saved, but the VPS is unreachable.'):'Relay settings saved.','ok');
-    const def=SERVERS.find(x=>x.id===id),body=document.querySelector('.sw-workspace[data-tab="network"] .sw-body');
-    if(def&&body)renderServerNetwork(def,body);
+    const result=await api(`/api/servers/${encodeURIComponent(id)}/relay`,{method:'PUT',body:JSON.stringify({enabled,publicPorts})});
+    toast(result?.configured?(result.reachable?'Server Relay settings saved.':'Server Relay settings saved, but the VPS is unreachable.'):'Server Relay settings saved.','ok');
+    const def=SERVERS.find(x=>x.id===id),networkBody=document.querySelector('.sw-workspace[data-tab="network"] .sw-body');
+    if(def&&networkBody)renderServerNetwork(def,networkBody);
   }catch(e){toast('Public relay save failed: '+e.message,'err')}
 };
 
 window.addEventListener('DOMContentLoaded',()=>{
+  installGlobalSettingsView();
   if(typeof renderServerNetwork==='function'&&!renderServerNetwork.__publicRelayWrapped){
     const base=renderServerNetwork;
     const wrapped=function(def,body){base(def,body);const advanced=body.querySelector('details.advanced');const html='<div id="swPublicRelay"><div class="sw-section"><div class="muted">Loading public relay…</div></div></div>';if(advanced)advanced.insertAdjacentHTML('beforebegin',html);else body.insertAdjacentHTML('beforeend',html);renderPublicRelaySection(def,body)};
