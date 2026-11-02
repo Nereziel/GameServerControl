@@ -86,9 +86,22 @@ jobs:
       - name: Validate Cloudflare Worker bundle
         working-directory: src/GameServerControl.Cloud
         run: |
+          set -euo pipefail
           npm install --ignore-scripts --no-audit --no-fund
           npm run build
-          npx wrangler deploy --dry-run --outdir ../../publish/Cloud-worker
+          secrets_file="$(mktemp)"
+          trap 'rm -f "$secrets_file"' EXIT
+          cat > "$secrets_file" <<'JSON'
+          {
+            "AGENT_ORIGIN": "https://gsc-origin.invalid",
+            "ACCESS_TEAM_DOMAIN": "https://example.cloudflareaccess.com",
+            "ACCESS_POLICY_AUD": "ci-placeholder-audience",
+            "AGENT_API_TOKEN": "ci-placeholder-agent-token",
+            "ORIGIN_ACCESS_CLIENT_ID": "ci-placeholder-client-id",
+            "ORIGIN_ACCESS_CLIENT_SECRET": "ci-placeholder-client-secret"
+          }
+          JSON
+          npx wrangler deploy --dry-run --secrets-file "$secrets_file" --outdir ../../publish/Cloud-worker
 
       - name: Restore Shared
         run: dotnet restore src/GameServerControl.Shared
