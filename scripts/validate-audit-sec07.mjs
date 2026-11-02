@@ -6,7 +6,7 @@ const indexHtml = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
 const webUiSources = fs.readdirSync(webUiDir)
   .filter(name => /\.(?:html|js)$/i.test(name))
   .map(name => [name, fs.readFileSync(path.join(webUiDir, name), 'utf8')]);
-const workspace = fs.readFileSync(path.join(webUiDir, 'server-workspace.js'), 'utf8');
+const admin = fs.readFileSync(path.join(webUiDir, 'server-admin.js'), 'utf8');
 const roleMiddleware = fs.readFileSync('src/GameServerControl.Agent/Auth/RoleEnforcementMiddleware.cs', 'utf8');
 const securityHeadersPath = 'src/GameServerControl.Agent/Security/WebSecurityHeadersMiddleware.cs';
 const securityHeaders = fs.existsSync(securityHeadersPath) ? fs.readFileSync(securityHeadersPath, 'utf8') : '';
@@ -44,11 +44,13 @@ rejectPattern(cloudBuild, /<script>[^<]*GSC_CLOUD_MODE/i,
   'Cloud staging must not inject an inline executable bootstrap', 'build.mjs');
 requireToken(cloudBuild, '/webui/cloud-adapter.js', 'Cloud staging must use the external adapter script');
 
-// One element cannot safely carry two copies of the same data-gsc-* attributes. Keep the
-// textarea's input action delegated and bind Ctrl+S with a trusted external listener.
-requireToken(workspace, "fseText')?.addEventListener('keydown'", 'Config editor must bind Ctrl+S with an external listener');
-rejectPattern(workspace, /id="fseText"[^>]*uiAction\([^>]*uiAction\(/,
-  'Config editor must not emit duplicate delegated action attributes on one element', 'server-workspace.js');
+// The legacy config editor template contains two delegated declarations on one textarea.
+// A trusted post-render binder must strip those ambiguous metadata attributes and attach both
+// behaviors explicitly, so browser duplicate-attribute parsing cannot drop input or Ctrl+S.
+requireToken(admin, 'FILE_EDITOR_ACTION_ATTRS', 'Config editor must remove ambiguous delegated metadata before rebinding');
+requireToken(admin, "editor.addEventListener('input'", 'Config editor must bind input through trusted external JavaScript');
+requireToken(admin, "editor.addEventListener('keydown'", 'Config editor must bind Ctrl+S through trusted external JavaScript');
+requireToken(admin, 'editor.removeAttribute(attr)', 'Config editor must remove duplicate data-gsc action attributes before direct binding');
 
 requireToken(roleMiddleware, 'WebSecurityHeadersMiddleware.Apply', 'The registered Agent middleware must apply WebUI security headers');
 requireToken(securityHeaders, 'Content-Security-Policy', 'Agent must emit a Content-Security-Policy header');
