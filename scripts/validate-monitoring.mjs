@@ -8,7 +8,7 @@ const required = (text, token, message) => {
 const models = read('src/GameServerControl.Shared/Models.cs');
 const tracker = read('src/GameServerControl.Agent/Servers/StatusTracker.cs');
 const endpoints = read('src/GameServerControl.Agent/Servers/OperationalEndpoints.cs');
-const ui = read('src/GameServerControl.Agent/WebUi/config-backups.js');
+const ui = read('src/GameServerControl.Agent/WebUi/config-backups.js') + '\n' + read('src/GameServerControl.Agent/WebUi/server-admin.js');
 
 required(models, 'ServerStatusSample', 'Shared model must define status samples');
 required(tracker, 'MaxHistoryPerServer', 'Status history must have an explicit bound');
