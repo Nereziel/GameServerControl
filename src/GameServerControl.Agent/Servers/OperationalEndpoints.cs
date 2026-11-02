@@ -40,6 +40,17 @@ public static class OperationalEndpoints
             });
         });
 
+        api.MapGet("/servers/{id}/history", (string id, int? limit, ServerRegistry reg, StatusTracker tracker) =>
+        {
+            if (reg.Get(id) is null) return Results.NotFound();
+            return Results.Ok(new
+            {
+                serverId = id,
+                maxSamples = StatusTracker.MaxHistoryPerServer,
+                samples = tracker.History(id, limit ?? 120)
+            });
+        });
+
         return api;
     }
 }
