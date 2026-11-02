@@ -1,7 +1,7 @@
 # GameServerControl — Windows installer / updater (Agent + API + Web UI + optional tray helper).
 #
-# Run from an elevated PowerShell:
-#   iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1 | iex
+# Run from an elevated PowerShell after downloading GameServerControl-Install-Windows.ps1
+# and verifying it against the SHA256SUMS asset from the same GitHub Release.
 #
 # Release artifacts are self-contained. No preinstalled .NET runtime is required.
 #
@@ -21,8 +21,7 @@ $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.Windows
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isElevated) {
     Write-Host 'This installer must run as Administrator.' -ForegroundColor Red
-    Write-Host 'Open PowerShell as Administrator and run:' -ForegroundColor Yellow
-    Write-Host '  iwr https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1 | iex' -ForegroundColor Gray
+    Write-Host 'Open an elevated PowerShell and run the verified local release installer with -File.' -ForegroundColor Yellow
     return
 }
 
@@ -44,6 +43,37 @@ function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
 function Write-Skip($msg) { Write-Host "    -- $msg" -ForegroundColor DarkGray }
 function Write-Warn2($msg){ Write-Host "    !! $msg" -ForegroundColor Yellow }
 
+function Get-ExpectedSha256 {
+    param(
+        [Parameter(Mandatory = $true)][string]$ManifestPath,
+        [Parameter(Mandatory = $true)][string]$AssetName
+    )
+    $found = @()
+    foreach ($line in Get-Content -LiteralPath $ManifestPath) {
+        if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$') {
+            $name = $Matches[2].Trim()
+            if ($name -eq $AssetName) { $found += $Matches[1].ToUpperInvariant() }
+        }
+    }
+    if ($found.Count -ne 1) {
+        throw "SHA256SUMS must contain exactly one checksum for $AssetName; found $($found.Count)."
+    }
+    return $found[0]
+}
+
+function Assert-ReleaseAssetHash {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$AssetName,
+        [Parameter(Mandatory = $true)][string]$ManifestPath
+    )
+    $expected = Get-ExpectedSha256 -ManifestPath $ManifestPath -AssetName $AssetName
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    if ($actual -ne $expected) {
+        throw "SHA-256 verification failed for $AssetName. Expected $expected but downloaded $actual."
+    }
+}
+
 Write-Host ''
 Write-Host 'GameServerControl installer (Windows)'
 Write-Host '-------------------------------------'
@@ -61,24 +91,34 @@ $apiUrl = if ($pinnedTag) {
 $headers = @{ 'User-Agent' = 'gsc-installer' }
 try { $release = Invoke-RestMethod -Uri $apiUrl -Headers $headers }
 catch { throw "Could not resolve a GitHub release from $repo. $($_.Exception.Message)" }
-Write-Ok "Tag: $($release.tag_name)  ·  Published: $($release.published_at)"
+$tag = [string]$release.tag_name
+if ([string]::IsNullOrWhiteSpace($tag)) { throw 'Resolved release does not contain a tag name.' }
+if ($pinnedTag -and $tag -ne $pinnedTag) { throw "Resolved release tag '$tag' does not match requested tag '$pinnedTag'." }
+Write-Ok "Tag: $tag  ·  Published: $($release.published_at)"
 
 $asset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Agent-windows.zip' } | Select-Object -First 1
 if (-not $asset) { throw 'Release asset not found: GameServerControl-Agent-windows.zip' }
 $trayAsset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Tray-windows.zip' } | Select-Object -First 1
+$checksumAsset = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
+if (-not $checksumAsset) { throw 'Release asset not found: SHA256SUMS' }
 $installTray = (-not $silentUpdate) -and ($null -ne $trayAsset)
 
-Write-Step 'Downloading Agent + Web UI'
+Write-Step 'Downloading and verifying Agent + Web UI'
 $tmpRoot = Join-Path $env:TEMP "gsc-install-$(Get-Random -Maximum 99999)"
 New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
+$checksumsPath = Join-Path $tmpRoot 'SHA256SUMS'
+Invoke-WebRequest -Uri $checksumAsset.browser_download_url -OutFile $checksumsPath
+
 $agentZip = Join-Path $tmpRoot 'agent.zip'
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $agentZip
-Write-Ok 'Agent package downloaded.'
+Assert-ReleaseAssetHash -Path $agentZip -AssetName $asset.name -ManifestPath $checksumsPath
+Write-Ok 'Agent package downloaded and SHA-256 verified.'
 
 $trayZip = Join-Path $tmpRoot 'tray.zip'
 if ($installTray) {
     Invoke-WebRequest -Uri $trayAsset.browser_download_url -OutFile $trayZip
-    Write-Ok 'Tray helper package downloaded.'
+    Assert-ReleaseAssetHash -Path $trayZip -AssetName $trayAsset.name -ManifestPath $checksumsPath
+    Write-Ok 'Tray helper package downloaded and SHA-256 verified.'
 } elseif (-not $trayAsset) {
     Write-Warn2 'This release has no Windows tray helper asset; Agent installation will continue without it.'
 } elseif ($silentUpdate) {
@@ -172,6 +212,13 @@ try {
     Write-Ok 'Configured Agent:SteamCmdPath and Agent:Repo.'
 } catch { throw "Failed to update $appSettings : $_" }
 
+Write-Step 'Restricting Agent state permissions'
+# Stable well-known SIDs avoid localized account-name issues. These correspond to
+# SYSTEM:(OI)(CI)F and BUILTIN\Administrators:(OI)(CI)F and are inherited by state files.
+$aclOutput = & icacls.exe $agentDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
+if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Agent directory ACL: $($aclOutput -join ' | ')" }
+Write-Ok 'Agent directory restricted to SYSTEM and local Administrators.'
+
 function Invoke-Sc {
     param([string[]]$ScArgs, [string]$Label)
     $out = & sc.exe @ScArgs 2>&1
@@ -193,9 +240,8 @@ try {
 } catch { Write-Warn2 "Could not set optional service metadata/recovery: $_" }
 
 # This helper lives outside Agent so the service can replace its own directory safely.
-# When called from Tray, a non-elevated parent waits for the elevated installer and then
-# starts the new Tray binary again at normal user integrity. If the Tray itself was already
-# elevated, the elevated helper restarts it directly after the update instead.
+# It resolves a concrete release, verifies the release installer with SHA256SUMS, pins
+# GSC_VERSION to that exact tag, and executes only the verified local file.
 $updateHelper = Join-Path $installRt 'Update-GameServerControl.ps1'
 $updateHelperContent = @'
 param([switch]$Silent, [switch]$FromTray, [switch]$ElevatedChild)
@@ -210,6 +256,26 @@ function Start-TrayAgain {
         Start-Sleep -Milliseconds 500
         Start-Process -FilePath $trayExe -ArgumentList '--url', 'http://localhost:5099/'
     }
+}
+
+function Get-ExpectedSha256 {
+    param([string]$ManifestPath, [string]$AssetName)
+    $found = @()
+    foreach ($line in Get-Content -LiteralPath $ManifestPath) {
+        if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$') {
+            $name = $Matches[2].Trim()
+            if ($name -eq $AssetName) { $found += $Matches[1].ToUpperInvariant() }
+        }
+    }
+    if ($found.Count -ne 1) { throw "SHA256SUMS must contain exactly one checksum for $AssetName; found $($found.Count)." }
+    return $found[0]
+}
+
+function Assert-ReleaseAssetHash {
+    param([string]$Path, [string]$AssetName, [string]$ManifestPath)
+    $expected = Get-ExpectedSha256 -ManifestPath $ManifestPath -AssetName $AssetName
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    if ($actual -ne $expected) { throw "SHA-256 verification failed for $AssetName." }
 }
 
 if (-not $isElevated) {
@@ -236,9 +302,43 @@ if (-not $isElevated) {
 if ($Silent) { $env:GSC_SILENT_UPDATE = '1'; Start-Sleep -Seconds 3 }
 if ($FromTray) { $env:GSC_FROM_TRAY = '1'; Start-Sleep -Seconds 2 }
 $repo = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl' }
-$env:GSC_REPO = $repo
-$installer = "https://raw.githubusercontent.com/$repo/main/deploy/windows/install.ps1"
-Invoke-WebRequest -Uri $installer -UseBasicParsing | Invoke-Expression
+$requestedTag = $env:GSC_VERSION
+$apiUrl = if ($requestedTag) {
+    "https://api.github.com/repos/$repo/releases/tags/$requestedTag"
+} else {
+    "https://api.github.com/repos/$repo/releases/latest"
+}
+$headers = @{ 'User-Agent' = 'gsc-updater' }
+$release = Invoke-RestMethod -Uri $apiUrl -Headers $headers
+$tag = [string]$release.tag_name
+if ([string]::IsNullOrWhiteSpace($tag)) { throw 'Resolved release does not contain a tag name.' }
+if ($requestedTag -and $tag -ne $requestedTag) { throw "Resolved release tag '$tag' does not match requested tag '$requestedTag'." }
+
+$installerAsset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Install-Windows.ps1' } | Select-Object -First 1
+$checksumAsset = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
+if (-not $installerAsset) { throw 'Release asset not found: GameServerControl-Install-Windows.ps1' }
+if (-not $checksumAsset) { throw 'Release asset not found: SHA256SUMS' }
+
+$tmpRoot = Join-Path $env:TEMP "gsc-update-$(Get-Random -Maximum 99999)"
+New-Item -ItemType Directory -Force -Path $tmpRoot | Out-Null
+try {
+    $installerPath = Join-Path $tmpRoot 'GameServerControl-Install-Windows.ps1'
+    $manifestPath = Join-Path $tmpRoot 'SHA256SUMS'
+    Invoke-WebRequest -Uri $installerAsset.browser_download_url -OutFile $installerPath
+    Invoke-WebRequest -Uri $checksumAsset.browser_download_url -OutFile $manifestPath
+    Assert-ReleaseAssetHash -Path $installerPath -AssetName $installerAsset.name -ManifestPath $manifestPath
+
+    $env:GSC_REPO = $repo
+    $env:GSC_VERSION = $tag
+    $installRoot = Split-Path $PSCommandPath -Parent
+    if (-not $env:GSC_INSTALL) { $env:GSC_INSTALL = $installRoot }
+
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$installerPath`"")
+    $installerProcess = Start-Process powershell.exe -PassThru -Wait -ArgumentList ($arguments -join ' ')
+    if ($installerProcess.ExitCode -ne 0) { throw "Verified release installer exited with code $($installerProcess.ExitCode)." }
+} finally {
+    Remove-Item $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 # A tray started from an elevated installer can launch this helper already elevated. In that
 # case there is no non-elevated parent waiting to restart it, so restart it here. When an
@@ -323,22 +423,14 @@ IconIndex=0
         }
     }
 
-    Write-Step 'Reading the persisted API token'
-    try {
-        $cfg = Get-Content -LiteralPath $appSettings -Raw | ConvertFrom-Json
-        $apiToken = [string]$cfg.Agent.ApiToken
-        if ($apiToken -and $apiToken -ne 'REPLACE_WITH_32_CHARS+' -and $apiToken.Length -ge 16) {
-            Write-Host ''
-            Write-Host '   ----- AGENT API TOKEN (keep this private) -----' -ForegroundColor Yellow
-            Write-Host "   $apiToken"
-            Write-Host '   -----------------------------------------------' -ForegroundColor Yellow
-        } else { Write-Warn2 "API token is still a placeholder. Check $appSettings after startup." }
-    } catch { Write-Warn2 "Could not read API token from $appSettings : $_" }
+    Write-Step 'Secret state'
+    Write-Ok "API credentials remain only in the restricted local state file: $appSettings"
+    Write-Skip 'Plaintext API tokens are intentionally not printed to installer or service stdout.'
 }
 
 try { Remove-Item $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
 Write-Host ''
-Write-Host "Installed $($release.tag_name)."
+Write-Host "Installed $tag."
 Write-Host "  Service: $svcName"
 Write-Host '  Web UI:  http://localhost:5099/'
 Write-Host "  Config:  $appSettings"
