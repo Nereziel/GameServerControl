@@ -3,7 +3,6 @@ import fs from 'node:fs';
 const auth = fs.readFileSync('src/GameServerControl.Agent/Auth/TokenAuthHandler.cs', 'utf8');
 const core = fs.readFileSync('src/GameServerControl.Agent/WebUi/core.js', 'utf8');
 const cloudAdapter = fs.readFileSync('src/GameServerControl.Cloud/static/cloud-adapter.js', 'utf8');
-const program = fs.readFileSync('src/GameServerControl.Agent/Program.cs', 'utf8');
 const security = fs.readFileSync('SECURITY.md', 'utf8');
 const throttlePath = 'src/GameServerControl.Agent/Auth/AuthenticationFailureThrottle.cs';
 const throttle = fs.existsSync(throttlePath) ? fs.readFileSync(throttlePath, 'utf8') : '';
@@ -26,18 +25,15 @@ rejectToken(core, 'localStorage', 'Direct Web UI must not persist bearer credent
 requireToken(cloudAdapter, 'sessionStorage', 'Cloud adapter connection state must use session-scoped storage');
 rejectToken(cloudAdapter, 'localStorage', 'Cloud adapter must not persist connection state in localStorage');
 
-// Finding 6: repeated authentication failures must be throttled before authentication runs.
-requireToken(program, 'AddSingleton<AuthenticationFailureThrottle>()', 'Authentication failure throttle must be registered');
-requireToken(program, 'UseMiddleware<AuthenticationFailureThrottleMiddleware>()', 'Authentication failure throttle middleware must be enabled');
-const throttleIndex = program.indexOf('UseMiddleware<AuthenticationFailureThrottleMiddleware>()');
-const authIndex = program.indexOf('UseAuthentication()');
-if (throttleIndex < 0 || authIndex < 0 || throttleIndex > authIndex)
-  throw new Error('Authentication failure throttle middleware must run before UseAuthentication().');
-
-requireToken(throttle, 'StatusCodes.Status429TooManyRequests', 'Throttle must return HTTP 429 while a client is blocked');
-requireToken(throttle, 'StatusCodes.Status401Unauthorized', 'Throttle must count authentication failures, not authorization denials');
-requireToken(throttle, 'Retry-After', 'Throttle must tell clients when to retry');
+// Finding 6: repeated authentication failures must be blocked before another credential lookup.
+requireToken(auth, 'AuthenticationFailureThrottle.Shared', 'Authentication handler must use the shared failure throttle');
+requireToken(auth, 'HandleChallengeAsync', 'Throttled authentication challenges must return a distinct response');
+requireToken(auth, 'StatusCodes.Status429TooManyRequests', 'Throttled authentication challenges must return HTTP 429');
+requireToken(auth, 'Retry-After', 'Throttled authentication challenges must tell clients when to retry');
 requireToken(throttle, 'MaxTrackedClients', 'Throttle state must have an explicit memory bound');
+requireToken(throttle, 'TryGetRetryAfter', 'Throttle must block before another credential lookup');
+requireToken(throttle, 'RecordFailure', 'Throttle must track failed authentication attempts');
+requireToken(throttle, 'RecordSuccess', 'Successful authentication must clear failure state');
 
 requireToken(security, 'sessionStorage', 'Security documentation must describe session-scoped browser credentials');
 requireToken(security, 'authentication-failure throttling', 'Security documentation must describe built-in authentication-failure throttling');
