@@ -55,6 +55,8 @@ requireCheck(local.includes('PumpRunnerConsoleAsync') && local.includes('LastSeq
 requireCheck(local.includes('StatusHub.ServerGroup(def.Id)') && /SendAsync\s*\(\s*["']logLine["']/.test(local), 'Runner console pump must publish new lines only to the selected server SignalR group.');
 requireCheck(manager.includes('PollConsoleStateAsync') && manager.includes('_client.SendAsync'), 'Live console polling must use the existing local pipe without repeating Runner provisioning.');
 
+requireCheck(manager.includes('_provisionedFingerprints') && manager.includes('ProvisionFingerprint'), 'Runner provisioning must be cached by server configuration instead of running SCM/ACL reconciliation on every status poll.');
+requireCheck(manager.includes('IsTransportFailure') && manager.includes('EnsureRunnerServiceRunningAsync'), 'Runner IPC transport failures must trigger bounded service recovery instead of relying on string-negation retry logic.');
 requireCheck(manager.includes('NT SERVICE\\'), 'Runner services must use Windows virtual service accounts.');
 requireCheck(manager.includes('ArgumentList'), 'Runner provisioning commands must use ProcessStartInfo.ArgumentList instead of shell interpolation.');
 requireCheck(!manager.includes('cmd.exe') && !manager.includes('powershell.exe'), 'Runner service provisioning must not shell through cmd.exe or powershell.exe.');
