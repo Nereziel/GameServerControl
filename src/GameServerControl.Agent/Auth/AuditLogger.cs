@@ -5,17 +5,9 @@ namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// Append-only JSON-lines audit log of authenticated API mutations.
-///
-/// One line per mutating request:
-///   {"ts":"2026-05-16T13:45:21Z","ip":"100.90.15.50","method":"POST",
-///    "path":"/api/servers/satisfactory-1/config","status":200}
-///
-/// Reads (<c>GET</c>) are skipped to keep the log small and useful — what matters
-/// for audit is who CHANGED what, not who looked.
-///
-/// File is rotated daily by appending the date suffix; old files are kept indefinitely
-/// (operator can prune). Path is configurable via <c>Agent:AuditLogPath</c>; default
-/// next to the agent's own log directory.
+/// Reads are intentionally skipped; mutations record the authenticated Agent token identity.
+/// Cloudflare remote-user headers are trusted only when they arrive through an explicitly
+/// configured Agent token id, so an ordinary bearer client cannot spoof the human identity.
 /// </summary>
 public sealed class AuditLogger
 {
@@ -26,6 +18,8 @@ public sealed class AuditLogger
     private readonly string _logDir;
     private readonly object _writeLock = new();
     private readonly ILogger<AuditLogger> _logger;
+    private readonly HashSet<string> _trustedGatewayTokenIds;
+    private readonly int _retentionDays;
 
     public AuditLogger(IConfiguration cfg, IHostEnvironment env, ILogger<AuditLogger> logger)
     {
@@ -35,19 +29,32 @@ public sealed class AuditLogger
             ? Path.Combine(env.ContentRootPath, "Logs", "audit")
             : configured;
         Directory.CreateDirectory(_logDir);
+
+        _trustedGatewayTokenIds = (cfg["Agent:CloudGateway:TrustedTokenIds"] ?? "")
+            .Split(new[] { ',', ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        _retentionDays = int.TryParse(cfg["Agent:AuditRetentionDays"], out var configuredDays)
+            ? Math.Clamp(configuredDays, 1, 3650)
+            : 90;
+        PruneOldLogs();
     }
 
     public void Record(HttpContext ctx, int statusCode)
     {
-        // Skip GETs — pure reads don't change state. We log POST/PUT/DELETE/PATCH.
         var method = ctx.Request.Method;
         if (method == HttpMethods.Get || method == HttpMethods.Head || method == HttpMethods.Options)
             return;
 
         try
         {
-            var gateway = ctx.Request.Headers[GatewayHeader].ToString();
-            var remoteUser = string.Equals(gateway, CloudflareGateway, StringComparison.OrdinalIgnoreCase)
+            var tokenId = ctx.User?.FindFirst(TokenAuthHandler.TokenIdClaim)?.Value;
+            var role = ctx.User?.FindFirst(TokenAuthHandler.RoleClaim)?.Value;
+            var requestedGateway = ctx.Request.Headers[GatewayHeader].ToString();
+            var trustedGateway = !string.IsNullOrWhiteSpace(tokenId)
+                && _trustedGatewayTokenIds.Contains(tokenId)
+                && string.Equals(requestedGateway, CloudflareGateway, StringComparison.OrdinalIgnoreCase);
+            var remoteUser = trustedGateway
                 ? NormalizeRemoteUser(ctx.Request.Headers[RemoteUserHeader].ToString())
                 : null;
 
@@ -59,7 +66,9 @@ public sealed class AuditLogger
                 path = ctx.Request.Path.Value,
                 status = statusCode,
                 user = ctx.User?.Identity?.Name ?? "bearer",
-                gateway = string.IsNullOrWhiteSpace(gateway) ? null : gateway,
+                tokenId,
+                role,
+                gateway = trustedGateway ? CloudflareGateway : null,
                 remoteUser
             };
             var line = JsonSerializer.Serialize(entry);
@@ -73,11 +82,33 @@ public sealed class AuditLogger
         }
     }
 
+    private void PruneOldLogs()
+    {
+        try
+        {
+            var cutoff = DateTime.UtcNow.Date.AddDays(-_retentionDays);
+            foreach (var file in Directory.EnumerateFiles(_logDir, "audit-*.jsonl", SearchOption.TopDirectoryOnly))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Audit retention could not prune {File}", file);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Audit retention scan failed");
+        }
+    }
+
     private static string? NormalizeRemoteUser(string? value)
     {
         var normalized = value?.Trim();
         if (string.IsNullOrWhiteSpace(normalized)) return null;
-        // Audit metadata must stay one compact field even if a caller sends malformed input.
         normalized = normalized.Replace("\r", "", StringComparison.Ordinal)
                                .Replace("\n", "", StringComparison.Ordinal);
         return normalized.Length <= 320 ? normalized : normalized[..320];
@@ -85,18 +116,15 @@ public sealed class AuditLogger
 }
 
 /// <summary>
-/// ASP.NET Core middleware that pipes every API response into the audit log.
-/// Registered after Authorization so we only log authenticated requests.
-///
-/// The complete-server deletion endpoint is intentionally implemented here rather
-/// than as a broad filesystem endpoint. RoleEnforcementMiddleware has already
-/// required an Admin token before this middleware runs, and the action is audited
-/// exactly like every other mutation.
+/// ASP.NET Core middleware that pipes API mutations into the audit log. It also owns the two
+/// narrowly-scoped control-plane endpoints that need middleware context: authenticated identity
+/// discovery and complete server deletion. Neither path exposes a general filesystem primitive.
 /// </summary>
 public sealed class AuditMiddleware
 {
     private const string DeletePrefix = "/api/servers/";
     private const string DeleteSuffix = "/delete-completely";
+    private const string AuthMePath = "/api/auth/me";
 
     private readonly RequestDelegate _next;
     private readonly AuditLogger _log;
@@ -104,14 +132,40 @@ public sealed class AuditMiddleware
 
     public async Task InvokeAsync(HttpContext ctx)
     {
-        if (TryGetCompleteDeleteServerId(ctx, out var id))
+        if (HttpMethods.IsGet(ctx.Request.Method)
+            && string.Equals(ctx.Request.Path.Value, AuthMePath, StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleAuthMeAsync(ctx);
+        }
+        else if (TryGetCompleteDeleteServerId(ctx, out var id))
+        {
             await HandleCompleteDeleteAsync(ctx, id!);
+        }
         else
+        {
             await _next(ctx);
+        }
 
-        // Only audit /api/* paths and only when the user passed auth/role checks.
         if (ctx.Request.Path.StartsWithSegments("/api"))
             _log.Record(ctx, ctx.Response.StatusCode);
+    }
+
+    private static async Task HandleAuthMeAsync(HttpContext ctx)
+    {
+        if (ctx.User?.Identity?.IsAuthenticated != true)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            return;
+        }
+
+        var tokenId = ctx.User.FindFirst(TokenAuthHandler.TokenIdClaim)?.Value;
+        var role = ctx.User.FindFirst(TokenAuthHandler.RoleClaim)?.Value;
+        await ctx.Response.WriteAsJsonAsync(new
+        {
+            id = tokenId,
+            name = ctx.User.Identity?.Name,
+            role
+        }, ctx.RequestAborted);
     }
 
     private static bool TryGetCompleteDeleteServerId(HttpContext ctx, out string? id)
