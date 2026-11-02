@@ -73,6 +73,7 @@ builder.Services.AddSingleton<IDynamicSchemaExtension, DragonwildsDynamicSchema>
 builder.Services.AddSingleton<GameServerControl.Agent.Discovery.SteamLibraryReader>();
 builder.Services.AddSingleton<GameServerControl.Agent.Discovery.ServerDiscoveryService>();
 builder.Services.AddSingleton<GameConfigFactory>();
+builder.Services.AddSingleton<ServerConfigFileService>();
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.ThunderstoreClient>();
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.FicsitClient>();
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.GitHubReleasesClient>();
@@ -154,6 +155,7 @@ app.UseMiddleware<RoleEnforcementMiddleware>();
 app.UseMiddleware<AuditMiddleware>();
 
 var api = app.MapGroup("/api").RequireAuthorization();
+api.MapServerConfigFiles();
 
 api.MapGet("/health", () => Results.Ok(new { ok = true, ts = DateTimeOffset.UtcNow }));
 api.MapGet("/version", (UpdateChecker checker) => Results.Ok(checker.Latest));
