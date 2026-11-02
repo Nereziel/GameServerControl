@@ -43,6 +43,9 @@ jobs:
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
 
+      - name: Validate token storage security
+        run: dotnet run --project tools/GameServerControl.SecurityCheck -c Release
+
       - name: Validate backup lifecycle
         run: node scripts/validate-backup-lifecycle.mjs
 
@@ -111,6 +114,9 @@ jobs:
 
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
+
+      - name: Validate token storage security
+        run: dotnet run --project tools/GameServerControl.SecurityCheck -c Release
 
       - name: Validate backup lifecycle
         run: node scripts/validate-backup-lifecycle.mjs
