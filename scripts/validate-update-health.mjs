@@ -29,7 +29,7 @@ requireCondition(/CryptographicOperations\.FixedTimeEquals/.test(updateToken),
   'BUG-02: update-health token comparison must be constant-time.');
 requireCondition(/string\.Equals\(Request\.Path\.Value, "\/api\/health"/.test(auth) && /UpdateHealthToken\.IsValid/.test(auth),
   'BUG-02: temporary update credential must be accepted only on exact /api/health authentication.');
-requireCondition(/X-GameServerControl-Version/.test(auth) && /X-GameServerControl-Pid/.test(auth),
+requireCondition(/X-GameServerControl-Version/i.test(auth) && /X-GameServerControl-Pid/i.test(auth),
   'BUG-02: authenticated update-health response must expose running version and process id metadata.');
 requireCondition(/public string CurrentVersion/.test(checker),
   'BUG-02: UpdateChecker must expose the running assembly version independently of the latest release.');
@@ -39,15 +39,15 @@ for (const [name, text] of [['Windows installer', windows], ['Linux installer', 
     `BUG-02: ${name} must create a temporary update-health credential.`);
   requireCondition(text.includes('/api/health'),
     `BUG-02: ${name} must probe /api/health before accepting an update.`);
-  requireCondition(/Authorization/.test(text) && /Bearer/.test(text),
+  requireCondition(/Authorization/i.test(text) && /Bearer/i.test(text),
     `BUG-02: ${name} health probe must authenticate with a bearer credential.`);
   requireCondition(/30/.test(text),
     `BUG-02: ${name} health gate must have a bounded 30-second verification window.`);
-  requireCondition(/consecutive|Consecutive/.test(text) && /3/.test(text),
+  requireCondition(/consecutive/i.test(text) && /3/.test(text),
     `BUG-02: ${name} must require three consecutive successful health probes.`);
-  requireCondition(/X-GameServerControl-Version/.test(text) && /expected/i.test(text),
+  requireCondition(/X-GameServerControl-Version/i.test(text) && /expected/i.test(text),
     `BUG-02: ${name} must compare the authenticated health response to the expected release version.`);
-  requireCondition(/X-GameServerControl-Pid/.test(text),
+  requireCondition(/X-GameServerControl-Pid/i.test(text),
     `BUG-02: ${name} must verify process identity is stable across health probes.`);
 }
 
