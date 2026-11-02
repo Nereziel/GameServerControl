@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using GameServerControl.Agent.Security;
 
 namespace GameServerControl.Agent.Auth;
 
@@ -14,6 +15,14 @@ public static class CertHelper
     /// </summary>
     public static X509Certificate2 LoadOrCreate(string pfxPath, string pfxPassword, string[] extraSanHosts, IPAddress[] extraSanIps)
     {
+        // Kestrel certificate setup occurs before the normal first-run migration block.
+        // Resolve/migrate this one credential explicitly so a sentinel in appsettings can
+        // never be mistaken for the actual PFX password after the first SEC-08 migration.
+        var baseDir = Path.GetDirectoryName(Path.GetFullPath(pfxPath))
+            ?? throw new InvalidOperationException("Certificate path has no parent directory.");
+        var secretStore = new ConfigurationSecretStore(baseDir, new SecretProtector(baseDir));
+        pfxPassword = secretStore.ResolveEffectiveSecret("Agent:CertPassword", pfxPassword);
+
         if (File.Exists(pfxPath))
             return new X509Certificate2(pfxPath, pfxPassword, X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
 
@@ -40,13 +49,8 @@ public static class CertHelper
         var localIps = GetLocalAddresses();
         localIps.Add(IPAddress.Loopback);
         localIps.Add(IPAddress.IPv6Loopback);
-
-        // Keep compatibility with callers that provide explicit SAN IPs, but only include
-        // addresses actually assigned to this host. This prevents stale/hard-coded Tailnet
-        // addresses from leaking into a newly generated certificate.
         foreach (var ip in extraSanIps)
             if (IsLocalAddress(ip)) localIps.Add(ip);
-
         foreach (var ip in localIps) san.AddIpAddress(ip);
         req.CertificateExtensions.Add(san.Build());
 
