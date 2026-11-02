@@ -1,0 +1,28 @@
+name: Audit SEC-08
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  secret-at-rest:
+    name: Secret at-rest (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - name: Validate SEC-08 source contract
+        run: node scripts/validate-audit-sec08.mjs
+      - name: Validate secret behavior
+        run: dotnet run --project tools/GameServerControl.SecurityCheck -c Release
