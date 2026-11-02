@@ -29,6 +29,7 @@ if (-not $isElevated) {
 $repo      = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl' }
 $installRt = if ($env:GSC_INSTALL) { $env:GSC_INSTALL } else { 'C:\GameServerControl' }
 $agentDir  = Join-Path $installRt 'Agent'
+$previousAgentDir = Join-Path $installRt 'Agent.previous'
 $trayDir   = Join-Path $installRt 'Tray'
 $trayExe   = Join-Path $trayDir 'GameServerControl.Tray.exe'
 $legacyClientDir = Join-Path $installRt 'Client'
@@ -36,6 +37,7 @@ $pinnedTag = $env:GSC_VERSION
 $svcName   = 'GameServerControlAgent'
 $silentUpdate = -not [string]::IsNullOrWhiteSpace($env:GSC_SILENT_UPDATE)
 $fromTray = -not [string]::IsNullOrWhiteSpace($env:GSC_FROM_TRAY)
+$hadPreviousAgent = $false
 
 function Write-Step($msg) { Write-Host ''; Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
@@ -103,7 +105,12 @@ foreach ($f in $preserve) {
     }
 }
 
-if (Test-Path $agentDir) { Remove-Item $agentDir -Recurse -Force }
+# Rollback previous Agent payload: keep the complete old directory until the replacement service is healthy.
+if (Test-Path $previousAgentDir) { Remove-Item $previousAgentDir -Recurse -Force }
+if (Test-Path $agentDir) {
+    Move-Item -LiteralPath $agentDir -Destination $previousAgentDir
+    $hadPreviousAgent = $true
+}
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
 Expand-Archive -Path $agentZip -DestinationPath $agentDir -Force
 foreach ($f in $preserve) {
@@ -217,7 +224,6 @@ if (-not $isElevated) {
         exit 1
     }
     $p.WaitForExit()
-
     if ($FromTray) {
         Start-TrayAgain
     } elseif (-not $Silent) {
@@ -250,8 +256,28 @@ try {
     (Get-Service -Name $svcName).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
 } catch { Write-Warn2 "Service failed to start: $($_.Exception.Message)" }
 $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-if (-not $svc -or $svc.Status -ne 'Running') { Write-Warn2 'Service is not running. Inspect the Application Event Log or run the Agent EXE directly.' }
-else { Write-Ok 'Service running.' }
+if (-not $svc -or $svc.Status -ne 'Running') {
+    if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
+        Write-Warn2 'New Agent did not become healthy. Rolling back the previous payload.'
+        Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+        if (Test-Path $agentDir) { Remove-Item $agentDir -Recurse -Force }
+        Move-Item -LiteralPath $previousAgentDir -Destination $agentDir
+        try {
+            Start-Service -Name $svcName
+            (Get-Service -Name $svcName).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
+            Write-Ok 'Previous Agent payload restored and service restarted.'
+        } catch {
+            throw "New Agent failed to start and rollback could not restart the previous service: $($_.Exception.Message)"
+        }
+        throw 'New Agent failed to start. The previous Agent payload was restored.'
+    }
+    throw 'Service is not running after installation. Inspect the Application Event Log or run the Agent EXE directly.'
+}
+Write-Ok 'Service running.'
+if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
+    Remove-Item $previousAgentDir -Recurse -Force
+    Write-Skip 'Removed previous Agent payload after successful startup.'
+}
 
 if (-not $silentUpdate) {
     Write-Step 'Refreshing desktop shortcuts'
