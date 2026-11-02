@@ -60,6 +60,8 @@ requireCheck(manager.includes('icacls.exe') && manager.includes('(OI)(CI)(M)') &
 requireCheck(manager.includes('schtasks.exe') && manager.includes('/disable') && manager.includes('/end'), 'Legacy Scheduled Tasks must be disabled and ended during Runner migration.');
 requireCheck(manager.includes('1690800') && manager.includes('FactoryGame') && manager.includes('CreateSymbolicLink'), 'Satisfactory must preserve its existing SystemProfile data through an idempotent directory link.');
 requireCheck(manager.includes('SetAutostartAsync') && manager.includes('GetAutostartAsync'), 'Runner manager must own Windows BareMetal autostart state.');
+requireCheck(manager.includes('PumpConsoleAsync') && manager.includes('LastSequence'), 'Runner console must have a sequence-aware live forwarding pump.');
+requireCheck(manager.includes('StatusHub.ServerGroup(def.Id)') && /SendAsync\s*\(\s*["']logLine["']/.test(manager), 'Runner console pump must publish new lines only to the selected server SignalR group.');
 
 requireCheck(build.includes('GameServerControl.Runner'), 'Build workflow must build/publish the Windows Runner.');
 requireCheck(release.includes('GameServerControl.Runner'), 'Release workflow must publish the Windows Runner.');
