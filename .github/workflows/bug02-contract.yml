@@ -2,7 +2,7 @@ name: BUG-02 update health contract
 
 on:
   push:
-    branches: [fix/audit-bug02-update-health]
+    branches: [main]
   pull_request:
     branches: [main]
 
