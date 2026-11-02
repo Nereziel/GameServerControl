@@ -1,0 +1,33 @@
+$ErrorActionPreference = 'Stop'
+
+$installerPath = 'deploy/windows/install.ps1'
+$source = Get-Content -LiteralPath $installerPath -Raw
+$marker = '$updateHelperContent = @'''
+$start = $source.IndexOf($marker, [StringComparison]::Ordinal)
+if ($start -lt 0) { throw 'Could not find generated updater helper here-string.' }
+
+$bodyStart = $source.IndexOf("`n", $start)
+if ($bodyStart -lt 0) { throw 'Could not find generated updater helper body start.' }
+$bodyStart++
+
+$bodyEnd = $source.IndexOf("`n'@", $bodyStart, [StringComparison]::Ordinal)
+if ($bodyEnd -lt 0) { throw 'Could not find generated updater helper body end.' }
+
+$helper = $source.Substring($bodyStart, $bodyEnd - $bodyStart)
+$tokens = $null
+$parseErrors = $null
+[System.Management.Automation.Language.Parser]::ParseInput($helper, [ref]$tokens, [ref]$parseErrors) | Out-Null
+if ($parseErrors.Count -gt 0) {
+    throw "Generated updater helper has PowerShell syntax errors:`n$((($parseErrors | ForEach-Object { $_.Message }) -join "`n"))"
+}
+
+if ($helper.Contains('Invoke-Expression', [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Generated updater helper must not execute remote script text with Invoke-Expression.'
+}
+foreach ($required in @('SHA256SUMS', 'Get-FileHash', '$env:GSC_VERSION = $tag', 'GameServerControl-Install-Windows.ps1')) {
+    if (-not $helper.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Generated updater helper is missing required release-pinning behavior: $required"
+    }
+}
+
+Write-Host 'Generated Windows updater helper syntax/security contract OK.'
