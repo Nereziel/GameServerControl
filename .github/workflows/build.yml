@@ -40,6 +40,9 @@ jobs:
       - name: Validate mod/plugin management
         run: node scripts/validate-mod-management.mjs
 
+      - name: Validate backup safety
+        run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
+
       - name: Restore
         run: dotnet restore
 
@@ -99,6 +102,9 @@ jobs:
 
       - name: Validate mod/plugin management
         run: node scripts/validate-mod-management.mjs
+
+      - name: Validate backup safety
+        run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
 
       - name: Validate Cloudflare Worker bundle
         working-directory: src/GameServerControl.Cloud
