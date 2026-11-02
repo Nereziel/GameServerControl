@@ -132,3 +132,47 @@ window.addEventListener('DOMContentLoaded',()=>{
   AUTH_UI_OBSERVER.observe(document.body,{childList:true,subtree:true});
   applyAuthUi();
 });
+
+/* Operational UX extensions. Keep the existing update/stats modules as the transport/rendering
+   primitives and add readiness/history once all dependent scripts are available. */
+openUpdate=async function(){
+  const [s,preflight]=await Promise.all([
+    checkForUpdate(true),
+    api('/api/update/preflight').catch(e=>({supported:false,ready:false,platform:'Unknown',message:e.message}))
+  ]);
+  if(!s)return toast('Could not check for updates.','err');
+  const available=!!s.updateAvailable;
+  const ready=preflight?.ready===true;
+  const readiness=ready?'Ready':preflight?.supported===false?'Manual update required':'Not ready';
+  const body=`<div class="kv"><div>Running</div><div class="mono">${esc(s.currentVersion||'unknown')}</div><div>Latest</div><div class="mono">${esc(s.latestVersion||'unknown')}</div><div>Checked</div><div>${s.checkedAt?new Date(s.checkedAt).toLocaleString():'—'}</div><div>Platform</div><div>${esc(preflight?.platform||'Unknown')}</div><div>Update readiness</div><div>${esc(readiness)}</div></div><div class="callout ${ready?'info':''}">${esc(preflight?.message||'Update readiness could not be determined.')}</div>${available&&ready?'<div class="callout info">The Agent will restart briefly. Server processes are not stopped.</div>':!available?'<div class="callout info">This Agent is up to date.</div>':''}`;
+  const foot=`<button class="btn" onclick="closeModal()">Close</button>${available&&ready?'<button class="btn primary" onclick="startSelfUpdate()">Install update</button>':''}`;
+  openModal('GameServerControl update',body,foot);
+};
+
+(function installHistoricalStats(){
+  let attempts=0;
+  const install=()=>{
+    if(typeof openStats!=='function'||typeof sampleStats!=='function'||typeof drawStats!=='function'){
+      if(++attempts<200)setTimeout(install,10);
+      return;
+    }
+    if(window.__gscHistoricalStatsInstalled)return;
+    window.__gscHistoricalStatsInstalled=true;
+    openStats=async function(id){
+      const d=SERVERS.find(x=>x.id===id);
+      STAT_POINTS=[];
+      openModal('Stats — '+(d?.name||id),'<div id="statsErr" class="tiny muted">Loading recent Agent history…</div><div id="statsChart"><div class="muted">Collecting samples…</div></div>','<button class="btn" onclick="closeModal()">Close</button>',true);
+      try{
+        const history=await api(`/api/servers/${encodeURIComponent(id)}/history?limit=90`);
+        STAT_POINTS=(history.samples||[]).map(x=>({at:x.at?new Date(x.at).getTime():Date.now(),cpu:Number(x.cpuPercent??0),ram:Number(x.memoryMB??0),pid:x.pidInGuest??null}));
+        if(STAT_POINTS.length>90)STAT_POINTS=STAT_POINTS.slice(-90);
+        const info=$('#statsErr');if(info)info.textContent=`History ${STAT_POINTS.length}/${history.maxSamples||240} bounded server-side samples · live refresh every 2s`;
+        drawStats();
+      }catch(e){const info=$('#statsErr');if(info)info.textContent='History unavailable: '+e.message}
+      await sampleStats(id);
+      const timer=setInterval(()=>sampleStats(id),2000);
+      MODAL_CLEANUP=()=>clearInterval(timer);
+    };
+  };
+  setTimeout(install,0);
+})();
