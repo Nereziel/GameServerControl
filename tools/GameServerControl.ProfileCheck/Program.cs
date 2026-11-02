@@ -1,3 +1,4 @@
+using GameServerControl.Agent.Config;
 using GameServerControl.Shared;
 
 var failures = new List<string>();
@@ -5,6 +6,22 @@ var failures = new List<string>();
 void Check(bool condition, string message)
 {
     if (!condition) failures.Add(message);
+}
+
+void CheckSyntaxValid(string path, string content)
+{
+    try { ServerConfigSyntaxValidator.Validate(path, content); }
+    catch (Exception ex) { failures.Add($"Expected valid {path}, got: {ex.Message}"); }
+}
+
+void CheckSyntaxInvalid(string path, string content)
+{
+    try
+    {
+        ServerConfigSyntaxValidator.Validate(path, content);
+        failures.Add($"Expected invalid syntax to be rejected for {path}.");
+    }
+    catch (InvalidDataException) { }
 }
 
 GameProfile RequireProfile(string key)
@@ -103,12 +120,26 @@ Check(legacyDragonwilds.NetworkPorts is { Length: 2 } &&
       legacyDragonwilds.NetworkPorts.Any(p => p.Name == "Beacon" && p.Port == 9010),
     "Dragonwilds legacy reservations must normalize from -Port/-BeaconPort launch arguments.");
 
+CheckSyntaxValid("settings.json", "{\"enabled\":true,\"port\":2456}");
+CheckSyntaxInvalid("settings.json", "{\"enabled\":true");
+CheckSyntaxValid("settings.jsonc", "{ // comment\n \"enabled\": true,\n}");
+CheckSyntaxValid("settings.xml", "<settings><port>2456</port></settings>");
+CheckSyntaxInvalid("settings.xml", "<settings>");
+CheckSyntaxValid("plugin.ini", "[General]\nEnabled = true");
+CheckSyntaxInvalid("plugin.ini", "[General\nEnabled = true");
+CheckSyntaxValid("plugin.properties", "enabled=true\nname=Example");
+CheckSyntaxInvalid("plugin.properties", "brokenLineWithoutSeparator");
+CheckSyntaxValid("plugin.toml", "[server]\nenabled = true\nports = [2456, 2457]");
+CheckSyntaxInvalid("plugin.toml", "[server\nenabled = true");
+CheckSyntaxValid("plugin.yaml", "server:\n  enabled: true\n  port: 2456");
+CheckSyntaxInvalid("plugin.yaml", "server:\n\tenabled: true");
+
 if (failures.Count == 0)
 {
-    Console.WriteLine("Curated profile contracts OK: Valheim + Dragonwilds.");
+    Console.WriteLine("Curated profile + config syntax contracts OK.");
     return 0;
 }
 
-Console.Error.WriteLine("Curated profile contract failures:");
+Console.Error.WriteLine("Contract failures:");
 foreach (var failure in failures) Console.Error.WriteLine(" - " + failure);
 return 1;
