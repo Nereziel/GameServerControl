@@ -83,6 +83,9 @@ jobs:
           bash -n deploy/relay/install-from-release.sh
           bash -n deploy/relay/install.sh
 
+      - name: Test Relay UFW reconciliation
+        run: bash scripts/test-relay-ufw-reconcile.sh
+
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
 
