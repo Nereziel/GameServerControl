@@ -54,6 +54,7 @@ builder.Services.AddSingleton<ServerStore>();
 builder.Services.AddSingleton<PublicRelayManager>();
 builder.Services.AddSingleton<StatusTracker>();
 builder.Services.AddSingleton<ServerOrchestrator>();
+builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
 builder.Services.AddSingleton<SteamCmdManager>();
 builder.Services.AddSingleton<ServerInstaller>();
@@ -448,17 +449,41 @@ api.MapPost("/servers/{id}/restart", async (string id, ServerOrchestrator orch, 
     }
     return Results.Ok(result);
 });
-api.MapPost("/servers/{id}/backup", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.BackupAsync(id, ct)));
+api.MapPost("/servers/{id}/backup", async (string id, BackupService backups, CancellationToken ct) => Results.Ok(await backups.CreateAsync(id, ct)));
 api.MapPost("/servers/{id}/update", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.UpdateAsync(id, ct)));
 api.MapPost("/servers/{id}/apply", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.ApplyConfigAsync(id, ct)));
 
-api.MapGet("/servers/{id}/backups", async (string id, ServerOrchestrator orch, CancellationToken ct) =>
+api.MapPost("/servers/{id}/backups", async (string id, BackupCreateRequest req, BackupService backups, CancellationToken ct) =>
 {
-    try { return Results.Ok(await orch.ListBackupsAsync(id, ct)); }
+    try { return Results.Ok(await backups.CreateAsync(id, req.Label, ct)); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { error = ex.Message }); }
+}).RequireAuthorization("admin");
+api.MapGet("/servers/{id}/backups/settings", (string id, BackupService backups) =>
+{
+    try { return Results.Ok(backups.GetSettings(id)); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
-api.MapPost("/servers/{id}/backups/{name}/restore", async (string id, string name, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.RestoreBackupAsync(id, name, ct)));
-api.MapDelete("/servers/{id}/backups/{name}", async (string id, string name, ServerOrchestrator orch, CancellationToken ct) => (await orch.DeleteBackupAsync(id, name, ct)) ? Results.NoContent() : Results.NotFound());
+api.MapPut("/servers/{id}/backups/settings", (string id, BackupSettings settings, BackupService backups) =>
+{
+    try { return Results.Ok(backups.SaveSettings(id, settings.Retention)); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+}).RequireAuthorization("admin");
+api.MapGet("/servers/{id}/backups", async (string id, BackupService backups, CancellationToken ct) =>
+{
+    try { return Results.Ok(await backups.ListAsync(id, ct)); }
+    catch (KeyNotFoundException) { return Results.NotFound(); }
+});
+api.MapPost("/servers/{id}/backups/{name}/restore", async (string id, string name, BackupService backups, CancellationToken ct) =>
+    Results.Ok(await backups.RestoreAsync(id, name, ct))).RequireAuthorization("admin");
+api.MapDelete("/servers/{id}/backups/{name}", async (string id, string name, BackupService backups, CancellationToken ct) =>
+{
+    try { return await backups.DeleteAsync(id, name, ct) ? Results.NoContent() : Results.NotFound(); }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidDataException ex) { return Results.BadRequest(new { error = ex.Message }); }
+}).RequireAuthorization("admin");
 
 api.MapGet("/servers/{id}/schedule", async (string id, ServerRegistry reg, MaintenanceScheduler sched, CancellationToken ct) =>
 {
