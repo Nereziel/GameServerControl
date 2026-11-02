@@ -82,6 +82,56 @@ static void VerifyAuthenticationThrottle()
         $"Concurrent client creation violated the hard memory bound: expected 4 tracked clients, got {blockedClients}.");
 }
 
+static void VerifyPathContainment(string root)
+{
+    var modsRoot = Path.Combine(root, "mods");
+    Directory.CreateDirectory(modsRoot);
+
+    var safe = PathContainment.ResolveDirectChild(modsRoot, "example-mod");
+    Require(Path.GetFullPath(safe) == Path.GetFullPath(Path.Combine(modsRoot, "example-mod")),
+        "Safe mod child did not resolve to the expected path.");
+    Require(PathContainment.IsWithinRoot(modsRoot, Path.Combine(modsRoot, "nested", "file.dll")),
+        "Nested mod file was not recognized as contained.");
+    Require(!PathContainment.IsWithinRoot(modsRoot, modsRoot + "-outside" + Path.DirectorySeparatorChar + "file.dll"),
+        "Prefix-confusion path was incorrectly accepted as contained.");
+
+    foreach (var invalid in new[] { "", ".", "..", "../escape", "..\\escape", "nested/child", "nested\\child" })
+    {
+        var rejected = false;
+        try { _ = PathContainment.ResolveDirectChild(modsRoot, invalid); }
+        catch (ArgumentException) { rejected = true; }
+        Require(rejected, $"Unsafe mod child '{invalid}' was accepted.");
+    }
+
+    var rooted = Path.Combine(Path.GetPathRoot(Path.GetFullPath(modsRoot))!, "escape");
+    var rootedRejected = false;
+    try { _ = PathContainment.ResolveDirectChild(modsRoot, rooted); }
+    catch (ArgumentException) { rootedRejected = true; }
+    Require(rootedRejected, "Rooted mod child was accepted.");
+}
+
+static void VerifySecretFilePermissions(string root)
+{
+    var stateDir = Path.Combine(root, "secret-state");
+    var file = Path.Combine(stateDir, "state.json");
+    SecretFilePermissions.WriteAllTextAtomic(file, "{\"secret\":true}");
+    Require(File.ReadAllText(file) == "{\"secret\":true}", "Atomic secret-state write changed file contents.");
+
+    if (OperatingSystem.IsWindows()) return;
+
+    var fileMode = File.GetUnixFileMode(file);
+    var expectedFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+    Require(fileMode == expectedFileMode, $"Secret file mode must be 0600, got {fileMode}.");
+
+    var dirMode = File.GetUnixFileMode(stateDir);
+    var expectedDirMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+    Require(dirMode == expectedDirMode, $"Secret state directory mode must be 0700, got {dirMode}.");
+
+    File.SetUnixFileMode(file, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
+    SecretFilePermissions.RestrictExisting(file);
+    Require(File.GetUnixFileMode(file) == expectedFileMode, "RestrictExisting did not restore secret file mode 0600.");
+}
+
 var root = Path.Combine(Path.GetTempPath(), "gsc-security-check-" + Guid.NewGuid().ToString("n"));
 Directory.CreateDirectory(root);
 try
@@ -123,7 +173,9 @@ try
     Require(migratedJson.Contains("TokenHash", StringComparison.Ordinal), "Migrated token does not contain TokenHash.");
 
     VerifyAuthenticationThrottle();
-    Console.WriteLine("Security token storage and authentication throttle checks OK.");
+    VerifyPathContainment(root);
+    VerifySecretFilePermissions(root);
+    Console.WriteLine("Security token storage, authentication throttle, path containment, and secret file permission checks OK.");
 }
 finally
 {
