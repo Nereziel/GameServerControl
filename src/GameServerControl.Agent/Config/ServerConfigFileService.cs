@@ -306,7 +306,7 @@ public sealed class ServerConfigFileService
 
     private static RootRule[] RulesFor(ServerDef def)
     {
-        var profile = GameProfiles.FindFor(def)?.Key ?? "custom";
+        var profile = GameProfiles.FindFor(def);
         var rules = new List<RootRule> { new(".", "Server", false) };
 
         void Add(string path, string group, bool recursive = true)
@@ -315,44 +315,8 @@ public sealed class ServerConfigFileService
                 rules.Add(new RootRule(path, group, recursive));
         }
 
-        switch (profile)
-        {
-            case "valheim":
-                Add("BepInEx/config", "Mods / plugins");
-                Add("BepInEx/plugins", "Mods / plugins");
-                break;
-            case "minecraft":
-                Add("config", "Mods / plugins");
-                Add("plugins", "Mods / plugins");
-                Add("world/serverconfig", "World config");
-                break;
-            case "palworld":
-                Add("Pal/Saved/Config", "Server");
-                Add("Pal/Binaries/Win64/Mods", "Mods / plugins");
-                break;
-            case "satisfactory":
-                Add("FactoryGame/Saved/Config", "Server");
-                Add("FactoryGame/Mods", "Mods / plugins");
-                break;
-            case "dragonwilds":
-                Add("RSDragonwilds/Saved/Config", "Server");
-                break;
-            case "vrising":
-                Add("BepInEx/config", "Mods / plugins");
-                Add("BepInEx/plugins", "Mods / plugins");
-                Add("VRisingServer_Data/StreamingAssets/Settings", "Server");
-                break;
-            case "ark-asa":
-            case "ark-se":
-                Add("ShooterGame/Saved/Config", "Server");
-                break;
-            case "7dtd":
-                Add("data", "Server", false);
-                break;
-            case "dst":
-                Add("data/DST", "Server");
-                break;
-        }
+        foreach (var root in GameProfileMetadata.ConfigRootsFor(profile))
+            Add(root.RelativePath, root.Group, root.Recursive);
 
         // Common mod/config conventions are safe to expose when they exist. This keeps custom
         // profiles useful without recursively scanning the whole installation tree.
