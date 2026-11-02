@@ -3,6 +3,8 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 let jwks = null;
 let jwksFor = '';
 
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
 function jsonError(status, error, detail = null) {
   return Response.json(detail ? { error, detail } : { error }, {
     status,
@@ -56,6 +58,12 @@ async function verifyPanelAccess(request, env) {
 
 function isGatewayPath(pathname) {
   return pathname === '/api' || pathname.startsWith('/api/') || pathname.startsWith('/hubs/');
+}
+
+function hasValidBrowserOrigin(request) {
+  if (!WRITE_METHODS.has(request.method)) return true;
+  const requestUrl = new URL(request.url);
+  return request.headers.get('origin') === requestUrl.origin;
 }
 
 function relayWebSocket(upstreamResponse) {
@@ -158,6 +166,9 @@ export default {
     if (isGatewayPath(url.pathname)) {
       const missing = requiredConfig(env);
       if (missing.length) return jsonError(503, 'Cloud gateway is not configured.', missing.join(', '));
+
+      if (!hasValidBrowserOrigin(request))
+        return jsonError(403, 'Cross-origin state-changing requests are not allowed.');
 
       let accessPayload;
       try {
