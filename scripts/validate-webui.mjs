@@ -67,6 +67,7 @@ try {
     cloudInlineCount = checkInlineScripts(stagedHtml, tempDir, 'Cloud index.html');
   }
 
+  runNode(path.resolve('scripts/validate-update-ux.mjs'), 'update/install UX contract');
   console.log(`Validated ${files.length} Agent JavaScript files, ${agentInlineCount} Agent inline scripts, ${cloudInlineCount} Cloud inline scripts and the Cloudflare Web UI staging build.`);
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
