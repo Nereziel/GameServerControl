@@ -10,6 +10,7 @@ public sealed class SecretProtector
     private const string DpapiPrefix = Prefix + "dpapi:";
     private const string AesPrefix = Prefix + "aesgcm:";
     private static readonly byte[] AssociatedData = Encoding.UTF8.GetBytes("GameServerControl:Secret:v1");
+    private static readonly UnixFileMode PrivateFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
     private readonly string _keyPath;
     private readonly object _keyGate = new();
@@ -27,10 +28,11 @@ public sealed class SecretProtector
     public bool IsProtected(string? value)
         => !string.IsNullOrEmpty(value) && value.StartsWith(Prefix, StringComparison.Ordinal);
 
+    /// <summary>Encrypts runtime plaintext. Callers handling existing storage must check IsProtected first.</summary>
     public string Protect(string plaintext)
     {
         ArgumentNullException.ThrowIfNull(plaintext);
-        if (plaintext.Length == 0 || IsProtected(plaintext)) return plaintext;
+        if (plaintext.Length == 0) return plaintext;
         return OperatingSystem.IsWindows() ? ProtectWindows(plaintext) : ProtectUnix(plaintext);
     }
 
@@ -45,6 +47,8 @@ public sealed class SecretProtector
 
     private static string ProtectWindows(string plaintext)
     {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Windows DPAPI protection is available only on Windows.");
         var clear = Encoding.UTF8.GetBytes(plaintext);
         try
         {
@@ -125,21 +129,40 @@ public sealed class SecretProtector
         lock (_keyGate)
         {
             if (_unixKey is not null) return _unixKey;
-            if (File.Exists(_keyPath))
-            {
-                SecretFilePermissions.RestrictExisting(_keyPath);
-                byte[] existing;
-                try { existing = Convert.FromBase64String(File.ReadAllText(_keyPath).Trim()); }
-                catch (FormatException ex) { throw new CryptographicException("Invalid secret-protection.key contents.", ex); }
-                if (existing.Length != 32) throw new CryptographicException("secret-protection.key must contain exactly 32 bytes.");
-                _unixKey = existing;
-                return _unixKey;
-            }
+            if (File.Exists(_keyPath)) return _unixKey = ReadUnixKey();
 
             var created = RandomNumberGenerator.GetBytes(32);
-            SecretFilePermissions.WriteAllTextAtomic(_keyPath, Convert.ToBase64String(created));
-            _unixKey = created;
-            return _unixKey;
+            try
+            {
+                using var stream = new FileStream(_keyPath, new FileStreamOptions
+                {
+                    Access = FileAccess.Write,
+                    Mode = FileMode.CreateNew,
+                    Share = FileShare.None,
+                    UnixCreateMode = PrivateFileMode
+                });
+                using var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+                writer.Write(Convert.ToBase64String(created));
+                writer.Flush();
+                SecretFilePermissions.RestrictExisting(_keyPath);
+                _unixKey = created;
+                return _unixKey;
+            }
+            catch (IOException) when (File.Exists(_keyPath))
+            {
+                CryptographicOperations.ZeroMemory(created);
+                return _unixKey = ReadUnixKey();
+            }
         }
+    }
+
+    private byte[] ReadUnixKey()
+    {
+        SecretFilePermissions.RestrictExisting(_keyPath);
+        byte[] existing;
+        try { existing = Convert.FromBase64String(File.ReadAllText(_keyPath).Trim()); }
+        catch (FormatException ex) { throw new CryptographicException("Invalid secret-protection.key contents.", ex); }
+        if (existing.Length != 32) throw new CryptographicException("secret-protection.key must contain exactly 32 bytes.");
+        return existing;
     }
 }
