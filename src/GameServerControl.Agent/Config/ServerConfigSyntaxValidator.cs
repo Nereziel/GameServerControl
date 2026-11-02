@@ -11,9 +11,13 @@ namespace GameServerControl.Agent.Config;
 /// </summary>
 public static class ServerConfigSyntaxValidator
 {
+    private const int MaxTextChars = 1024 * 1024;
+
     public static void Validate(string path, string content)
     {
         content ??= string.Empty;
+        if (content.Length > MaxTextChars)
+            throw new InvalidDataException("Config text exceeds the 1 MB editor limit.");
         if (content.IndexOf('\0') >= 0)
             throw new InvalidDataException("Config text contains a NUL character.");
 
@@ -78,22 +82,20 @@ public static class ServerConfigSyntaxValidator
 
     private static void ValidateProperties(string content)
     {
-        var continuation = false;
         var lineNumber = 0;
         foreach (var raw in Lines(content))
         {
             lineNumber++;
-            var line = raw.Trim();
-            if (line.Length == 0 || line.StartsWith('#') || line.StartsWith('!'))
+            for (var i = 0; i + 1 < raw.Length; i++)
             {
-                continuation = false;
-                continue;
+                if (raw[i] != '\\' || raw[i + 1] != 'u') continue;
+                var slashCount = 1;
+                for (var j = i - 1; j >= 0 && raw[j] == '\\'; j--) slashCount++;
+                if ((slashCount & 1) == 0) continue;
+                if (i + 5 >= raw.Length || !raw.AsSpan(i + 2, 4).ToString().All(Uri.IsHexDigit))
+                    Fail("PROPERTIES", lineNumber, "Unicode escape must contain exactly four hexadecimal digits.");
+                i += 5;
             }
-
-            if (!continuation && FindUnescaped(line, '=') < 0 && FindUnescaped(line, ':') < 0 && !ContainsUnescapedWhitespace(line))
-                Fail("PROPERTIES", lineNumber, "expected a key/value separator (=, : or whitespace).");
-
-            continuation = EndsWithOddBackslash(line);
         }
     }
 
@@ -106,13 +108,6 @@ public static class ServerConfigSyntaxValidator
             var prefixLength = raw.TakeWhile(char.IsWhiteSpace).Count();
             if (raw[..prefixLength].Contains('\t'))
                 Fail("YAML", lineNumber, "tabs are not allowed for indentation.");
-
-            var line = StripComment(raw).Trim();
-            if (line.Length == 0 || line is "---" or "...") continue;
-            if (HasUnclosedSimpleQuote(line, '\''))
-                Fail("YAML", lineNumber, "single-quoted scalar is not closed.");
-            if (HasUnclosedDoubleQuote(line))
-                Fail("YAML", lineNumber, "double-quoted scalar is not closed.");
         }
     }
 
@@ -183,38 +178,6 @@ public static class ServerConfigSyntaxValidator
         return line;
     }
 
-    private static bool HasUnclosedSimpleQuote(string line, char quote)
-    {
-        var count = 0;
-        foreach (var ch in line) if (ch == quote) count++;
-        return (count & 1) == 1;
-    }
-
-    private static bool HasUnclosedDoubleQuote(string line)
-    {
-        var open = false;
-        var escaped = false;
-        foreach (var ch in line)
-        {
-            if (ch == '\\' && !escaped) { escaped = true; continue; }
-            if (ch == '"' && !escaped) open = !open;
-            escaped = false;
-        }
-        return open;
-    }
-
-    private static int FindUnescaped(string value, char needle)
-    {
-        var escaped = false;
-        for (var i = 0; i < value.Length; i++)
-        {
-            if (value[i] == needle && !escaped) return i;
-            escaped = value[i] == '\\' && !escaped;
-            if (value[i] != '\\') escaped = false;
-        }
-        return -1;
-    }
-
     private static int FindOutsideQuotes(string value, char needle)
     {
         var single = false;
@@ -230,25 +193,6 @@ public static class ServerConfigSyntaxValidator
             escaped = false;
         }
         return -1;
-    }
-
-    private static bool ContainsUnescapedWhitespace(string value)
-    {
-        var escaped = false;
-        foreach (var ch in value)
-        {
-            if (char.IsWhiteSpace(ch) && !escaped) return true;
-            escaped = ch == '\\' && !escaped;
-            if (ch != '\\') escaped = false;
-        }
-        return false;
-    }
-
-    private static bool EndsWithOddBackslash(string value)
-    {
-        var count = 0;
-        for (var i = value.Length - 1; i >= 0 && value[i] == '\\'; i--) count++;
-        return (count & 1) == 1;
     }
 
     private static int CountToken(string value, string token)
