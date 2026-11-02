@@ -1,154 +1,27 @@
 from pathlib import Path
 
+path = Path('deploy/windows/install.ps1')
+text = path.read_text()
 
-def replace_once(path, old, new):
-    p = Path(path)
-    text = p.read_text()
+
+def replace_once(old: str, new: str):
+    global text
     if new in text:
         return
     if old not in text:
-        raise SystemExit(f'expected fragment not found in {path}: {old[:140]!r}')
-    p.write_text(text.replace(old, new, 1))
+        raise SystemExit(f'expected installer fragment not found: {old[:160]!r}')
+    text = text.replace(old, new, 1)
 
-# Build CI: compile/publish/upload the Windows Runner.
+
 replace_once(
-    '.github/workflows/build.yml',
-    '    name: Windows agent + web UI + tray',
-    '    name: Windows agent + runner + web UI + tray')
+    "$agentDir  = Join-Path $installRt 'Agent'\n$previousAgentDir = Join-Path $installRt 'Agent.previous'\n$trayDir   = Join-Path $installRt 'Tray'",
+    "$agentDir  = Join-Path $installRt 'Agent'\n$previousAgentDir = Join-Path $installRt 'Agent.previous'\n$runnerDir = Join-Path $installRt 'Runner'\n$previousRunnerDir = Join-Path $installRt 'Runner.previous'\n$runnerExe = Join-Path $runnerDir 'GameServerControl.Runner.exe'\n$trayDir   = Join-Path $installRt 'Tray'")
 replace_once(
-    '.github/workflows/build.yml',
-    '''      - name: Publish agent (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
+    "$hadPreviousAgent = $false\n\nfunction Write-Step",
+    "$hadPreviousAgent = $false\n$hadPreviousRunner = $false\n$runningRunnerServiceNames = @()\n\nfunction Write-Step")
 
-      - name: Publish tray helper (win-x64, self-contained)''',
-    '''      - name: Publish agent (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
-
-      - name: Publish runner (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Runner -c Release -r win-x64 --self-contained true -o publish/Runner-windows
-
-      - name: Publish tray helper (win-x64, self-contained)''')
 replace_once(
-    '.github/workflows/build.yml',
-    '''      - name: Upload Windows agent
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Agent-windows
-          path: publish/Agent-windows
-          if-no-files-found: error
-
-      - name: Upload Windows tray helper''',
-    '''      - name: Upload Windows agent
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Agent-windows
-          path: publish/Agent-windows
-          if-no-files-found: error
-
-      - name: Upload Windows runner
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Runner-windows
-          path: publish/Runner-windows
-          if-no-files-found: error
-
-      - name: Upload Windows tray helper''')
-
-# Release workflow: version, package, hash and publish Runner independently.
-replace_once(
-    '.github/workflows/release.yml',
-    '    name: Build Windows agent + tray',
-    '    name: Build Windows agent + runner + tray')
-replace_once(
-    '.github/workflows/release.yml',
-    '''      - name: Publish tray helper (win-x64, self-contained)
-        run: >-
-          dotnet publish src/GameServerControl.Tray''',
-    '''      - name: Publish runner (win-x64, self-contained)
-        run: >-
-          dotnet publish src/GameServerControl.Runner -c Release -r win-x64 --self-contained true
-          -p:Version=${{ needs.prepare.outputs.version }}
-          -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
-          -p:FileVersion=${{ needs.prepare.outputs.version }}.0
-          -p:InformationalVersion=${{ needs.prepare.outputs.version }}
-          -o publish/Runner-windows
-
-      - name: Publish tray helper (win-x64, self-contained)
-        run: >-
-          dotnet publish src/GameServerControl.Tray''')
-replace_once(
-    '.github/workflows/release.yml',
-    '''          $agent = (Get-Item 'publish/Agent-windows/GameServerControl.Agent.exe').VersionInfo.ProductVersion
-          $tray = (Get-Item 'publish/Tray-windows/GameServerControl.Tray.exe').VersionInfo.ProductVersion
-          if ($agent -ne $expected) { throw "Agent ProductVersion '$agent' does not match release '$expected'." }
-          if ($tray -ne $expected) { throw "Tray ProductVersion '$tray' does not match release '$expected'." }
-          Write-Host "Verified Agent + Tray version $expected"''',
-    '''          $agent = (Get-Item 'publish/Agent-windows/GameServerControl.Agent.exe').VersionInfo.ProductVersion
-          $runner = (Get-Item 'publish/Runner-windows/GameServerControl.Runner.exe').VersionInfo.ProductVersion
-          $tray = (Get-Item 'publish/Tray-windows/GameServerControl.Tray.exe').VersionInfo.ProductVersion
-          if ($agent -ne $expected) { throw "Agent ProductVersion '$agent' does not match release '$expected'." }
-          if ($runner -ne $expected) { throw "Runner ProductVersion '$runner' does not match release '$expected'." }
-          if ($tray -ne $expected) { throw "Tray ProductVersion '$tray' does not match release '$expected'." }
-          Write-Host "Verified Agent + Runner + Tray version $expected"''')
-replace_once(
-    '.github/workflows/release.yml',
-    '''          Compress-Archive -Path publish/Agent-windows/* -DestinationPath GameServerControl-Agent-windows.zip
-          Compress-Archive -Path publish/Tray-windows/* -DestinationPath GameServerControl-Tray-windows.zip''',
-    '''          Compress-Archive -Path publish/Agent-windows/* -DestinationPath GameServerControl-Agent-windows.zip
-          Compress-Archive -Path publish/Runner-windows/* -DestinationPath GameServerControl-Runner-windows.zip
-          Compress-Archive -Path publish/Tray-windows/* -DestinationPath GameServerControl-Tray-windows.zip''')
-replace_once(
-    '.github/workflows/release.yml',
-    '''            GameServerControl-Agent-windows.zip
-            GameServerControl-Tray-windows.zip''',
-    '''            GameServerControl-Agent-windows.zip
-            GameServerControl-Runner-windows.zip
-            GameServerControl-Tray-windows.zip''')
-# The first replacement above updates upload-artifact. Apply again for SHA manifest and release files if needed.
-p = Path('.github/workflows/release.yml')
-text = p.read_text()
-text = text.replace(
-    '''            GameServerControl-Agent-windows.zip \\
-            GameServerControl-Tray-windows.zip \\''',
-    '''            GameServerControl-Agent-windows.zip \\
-            GameServerControl-Runner-windows.zip \\
-            GameServerControl-Tray-windows.zip \\''',
-    1)
-# release files block may still have a second Agent+Tray adjacency.
-text = text.replace(
-    '''            GameServerControl-Agent-windows.zip
-            GameServerControl-Tray-windows.zip''',
-    '''            GameServerControl-Agent-windows.zip
-            GameServerControl-Runner-windows.zip
-            GameServerControl-Tray-windows.zip''',
-    1)
-p.write_text(text)
-
-# Installer variables and ACL helper.
-replace_once(
-    'deploy/windows/install.ps1',
-    '''$agentDir  = Join-Path $installRt 'Agent'
-$previousAgentDir = Join-Path $installRt 'Agent.previous'
-$trayDir   = Join-Path $installRt 'Tray' ''',
-    '''$agentDir  = Join-Path $installRt 'Agent'
-$previousAgentDir = Join-Path $installRt 'Agent.previous'
-$runnerDir = Join-Path $installRt 'Runner'
-$previousRunnerDir = Join-Path $installRt 'Runner.previous'
-$runnerExe = Join-Path $runnerDir 'GameServerControl.Runner.exe'
-$trayDir   = Join-Path $installRt 'Tray' ''')
-replace_once(
-    'deploy/windows/install.ps1',
-    '''$hadPreviousAgent = $false
-
-function Write-Step''',
-    '''$hadPreviousAgent = $false
-$hadPreviousRunner = $false
-$runningRunnerServiceNames = @()
-
-function Write-Step''')
-replace_once(
-    'deploy/windows/install.ps1',
-    '''function New-UpdateHealthToken {''',
+    "function New-UpdateHealthToken {",
     '''function Set-RunnerDirectoryAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return }
@@ -165,9 +38,7 @@ replace_once(
 
 function New-UpdateHealthToken {''')
 
-# Resolve and verify Runner asset alongside Agent.
 replace_once(
-    'deploy/windows/install.ps1',
     '''$asset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Agent-windows.zip' } | Select-Object -First 1
 if (-not $asset) { throw 'Release asset not found: GameServerControl-Agent-windows.zip' }
 $trayAsset =''',
@@ -177,10 +48,7 @@ $runnerAsset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-R
 if (-not $runnerAsset) { throw 'Release asset not found: GameServerControl-Runner-windows.zip' }
 $trayAsset =''')
 replace_once(
-    'deploy/windows/install.ps1',
-    '''Write-Ok 'Agent package downloaded and SHA-256 verified.'
-
-$trayZip =''',
+    "Write-Ok 'Agent package downloaded and SHA-256 verified.'\n\n$trayZip =",
     '''Write-Ok 'Agent package downloaded and SHA-256 verified.'
 
 $runnerZip = Join-Path $tmpRoot 'runner.zip'
@@ -190,9 +58,7 @@ Write-Ok 'Runner package downloaded and SHA-256 verified.'
 
 $trayZip =''')
 
-# Stop Agent first so it cannot restart runners, then stop any currently-running per-server runners.
 replace_once(
-    'deploy/windows/install.ps1',
     '''if ($svc -and $svc.Status -eq 'Running') {
     Write-Step "Stopping existing $svcName service"
     Stop-Service -Name $svcName -Force
@@ -221,12 +87,8 @@ if ($runningRunnerServiceNames.Count -gt 0) {
 
 if (Test-Path -LiteralPath $agentDir) {''')
 
-# Install the Runner as a separate rollback-able payload after Agent extraction.
 replace_once(
-    'deploy/windows/install.ps1',
-    '''Write-Ok 'Agent unpacked.'
-
-# Remove the retired desktop client''',
+    "Write-Ok 'Agent unpacked.'\n\n# Remove the retired desktop client",
     '''Write-Ok 'Agent unpacked.'
 
 Write-Step "Installing low-privilege Runner to $runnerDir"
@@ -245,10 +107,7 @@ Write-Ok 'Runner unpacked and restricted to SYSTEM, Administrators and existing 
 
 # Remove the retired desktop client''')
 
-# Extend health gate with previously-running Runner service restart, and roll both payloads back together.
-replace_once(
-    'deploy/windows/install.ps1',
-    '''$healthPassed = Test-AgentUpdateHealth -Url $healthUrl -Token $updateHealthToken -ExpectedVersion $expectedVersion -TimeoutSeconds 30 -RequiredConsecutiveSuccesses 3
+old_health = '''$healthPassed = Test-AgentUpdateHealth -Url $healthUrl -Token $updateHealthToken -ExpectedVersion $expectedVersion -TimeoutSeconds 30 -RequiredConsecutiveSuccesses 3
 Remove-Item -LiteralPath $updateHealthTokenPath -Force -ErrorAction SilentlyContinue
 $updateHealthToken = $null
 
@@ -275,8 +134,9 @@ Write-Ok "Authenticated health/version gate passed for $expectedVersion with a s
 if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
     Remove-Item $previousAgentDir -Recurse -Force
     Write-Skip 'Removed previous Agent payload after authenticated health verification.'
-}''',
-    '''$healthPassed = Test-AgentUpdateHealth -Url $healthUrl -Token $updateHealthToken -ExpectedVersion $expectedVersion -TimeoutSeconds 30 -RequiredConsecutiveSuccesses 3
+}'''
+
+new_health = '''$healthPassed = Test-AgentUpdateHealth -Url $healthUrl -Token $updateHealthToken -ExpectedVersion $expectedVersion -TimeoutSeconds 30 -RequiredConsecutiveSuccesses 3
 Remove-Item -LiteralPath $updateHealthTokenPath -Force -ErrorAction SilentlyContinue
 $updateHealthToken = $null
 
@@ -341,4 +201,7 @@ if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
 if ($hadPreviousRunner -and (Test-Path $previousRunnerDir)) {
     Remove-Item $previousRunnerDir -Recurse -Force
     Write-Skip 'Removed Runner.previous after Agent health and Runner restart verification.'
-}''')
+}'''
+replace_once(old_health, new_health)
+
+path.write_text(text)
