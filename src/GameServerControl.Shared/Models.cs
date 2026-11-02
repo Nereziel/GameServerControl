@@ -81,7 +81,8 @@ public record ServerDef(
     string? ScheduledTaskName = null,                   // if set, Start/Stop drive Windows Task Scheduler instead of Process.Start
     string[]? StopProcessNames = null,                  // extra .exe leaf names to kill on Stop (in addition to GuestExePath's leaf)
     string? DiscordWebhookUrl = null,                   // optional: POST lifecycle events (start/stop/crash/backup/update) here
-    NetworkPort[]? NetworkPorts = null                  // reserved/listening ports for collision detection and future port-based firewall rules
+    NetworkPort[]? NetworkPorts = null,                 // reserved/listening ports for collision detection and future port-based firewall rules
+    int? BackupRetention = null                         // per-server normal-backup retention override; null uses Agent default
 );
 
 public record ServerStatus(
@@ -110,13 +111,33 @@ public record ActionResult(
     string? CorrelationId
 );
 
+public enum BackupKind
+{
+    Archive,
+    HyperVCheckpoint,
+    SafetyArchive,
+    SafetyCheckpoint
+}
+
 public record BackupInfo(
     string Id,
     string ServerId,
     DateTimeOffset CreatedAt,
     string CheckpointName,
-    long? SizeBytes
+    long? SizeBytes,
+    BackupKind Kind = BackupKind.Archive,
+    string? Label = null,
+    int? FileCount = null,
+    int? SkippedFiles = null,
+    bool Restorable = true
 );
+
+public record BackupCreateRequest(string? Label = null);
+
+public record BackupSettings(
+    int Retention,
+    bool IsOverride = false,
+    int DefaultRetention = 10);
 
 public record DiscordWebhookTestRequest(string WebhookUrl);
 
