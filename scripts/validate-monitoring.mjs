@@ -15,6 +15,8 @@ required(tracker, 'MaxHistoryPerServer', 'Status history must have an explicit b
 required(tracker, 'History(', 'StatusTracker must expose bounded history');
 required(endpoints, '/history', 'Agent must expose server history');
 required(ui, 'openStats', 'Web UI must retain its monitoring view');
+required(ui, '/history?limit=90', 'Stats view must preload Agent-side status history');
+required(ui, 'maxSamples', 'Stats view must surface the bounded server-side history limit');
 required(ui, 'STAT_POINTS.length > 90', 'Client-side graph must also remain bounded');
 
 console.log('Monitoring history contract OK.');
