@@ -6,6 +6,21 @@ let jwksFor = '';
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const ADMIN_ROLE = 'Admin';
 const READONLY_ROLE = 'ReadOnly';
+const BROWSER_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:";
+
+export function withBrowserSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  headers.set('content-security-policy', BROWSER_CSP);
+  headers.set('x-content-type-options', 'nosniff');
+  headers.set('referrer-policy', 'no-referrer');
+  headers.set('x-frame-options', 'DENY');
+  headers.set('permissions-policy', 'camera=(), microphone=(), geolocation=()');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
+}
 
 function jsonError(status, error, detail = null) {
   return Response.json(detail ? { error, detail } : { error }, {
@@ -298,6 +313,6 @@ export default {
       return proxyToAgent(request, env, access.payload, role);
     }
 
-    return env.ASSETS.fetch(request);
+    return withBrowserSecurityHeaders(await env.ASSETS.fetch(request));
   }
 };
