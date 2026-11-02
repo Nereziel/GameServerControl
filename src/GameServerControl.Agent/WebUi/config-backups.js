@@ -430,3 +430,164 @@ async function deleteToken(id) {
     toast('Delete failed: ' + e.message, 'err');
   }
 }
+
+/* Safe raw config-file workspace. Loaded before server-workspace.js, so install the
+   extension on the next task after that module has created its global functions. */
+window.GSC_FILE_EDITOR = { serverId: null, path: null, sha: null };
+
+function gscFormatBytes(n) {
+  const value = Number(n || 0);
+  if (value < 1024) return value + ' B';
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
+  return (value / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+async function renderServerFiles(def, body) {
+  const result = await api(`/api/servers/${encodeURIComponent(def.id)}/files`);
+  if (!result.supported) {
+    body.innerHTML = `<div class="sw-empty">${esc(result.reason || 'Config-file editing is not available for this server.')}</div>`;
+    return;
+  }
+
+  const files = result.files || [];
+  if (!files.length) {
+    body.innerHTML = `<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Only safe text configuration roots are scanned; this is not a general file manager.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('files')">Rescan</button></div><div class="sw-empty">No supported config files found yet.</div>`;
+    return;
+  }
+
+  const groups = [...new Set(files.map(x => x.group || 'Config'))];
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Server and mod/plugin configuration stored on the game host. Saving creates an automatic history entry.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('files')">Rescan</button></div><div class="formgrid"><div class="field"><label>Filter</label><input id="gscFileFilter" placeholder="name, path or group…" oninput="serverConfigFilter(this.value)"></div><div class="field"><label>Discovered</label><div class="help" style="padding-top:8px">${files.length} file${files.length === 1 ? '' : 's'} · ${groups.map(esc).join(' · ')}</div></div></div><div id="gscFileList" style="margin-top:10px">${files.map(file => `<div class="sw-row gsc-config-file" data-file-search="${esc(((file.group || '') + ' ' + file.path).toLowerCase())}"><div class="grow"><div class="sw-row-title">${esc(file.name)}</div><div class="sw-row-meta"><b>${esc(file.group || 'Config')}</b> · <span class="mono">${esc(file.path)}</span> · ${gscFormatBytes(file.sizeBytes)} · ${new Date(file.modifiedAt).toLocaleString()}${file.restartRecommended ? ' · restart may be required' : ''}</div></div><button class="btn" onclick="serverConfigOpen('${jsq(def.id)}','${jsq(file.path)}')">Edit</button></div>`).join('')}</div>`;
+}
+
+function serverConfigFilter(value) {
+  const q = String(value || '').trim().toLowerCase();
+  document.querySelectorAll('.gsc-config-file').forEach(row => {
+    row.classList.toggle('hidden', !!q && !String(row.dataset.fileSearch || '').includes(q));
+  });
+}
+window.serverConfigFilter = serverConfigFilter;
+
+async function serverConfigOpen(serverId, path) {
+  try {
+    const file = await api(`/api/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`);
+    GSC_FILE_EDITOR = { serverId, path: file.path, sha: file.sha256 };
+    const d = SERVERS.find(x => x.id === serverId);
+    openModal(
+      'Config file — ' + (d?.name || serverId),
+      `<div class="callout info"><b>${esc(file.path)}</b><div class="tiny" style="margin-top:4px">${esc(file.format || 'text').toUpperCase()} · ${gscFormatBytes(file.sizeBytes)} · modified ${new Date(file.modifiedAt).toLocaleString()}</div></div><div class="field"><label>Contents</label><textarea id="gscFileEditor" class="mono" spellcheck="false" style="min-height:52vh;resize:vertical">${esc(file.content)}</textarea><div class="help">JSON and XML are validated before save. Other supported formats are saved as raw text. Changes create an automatic history copy first.</div></div><div class="section">History</div><div id="gscFileHistory" class="muted tiny">Loading history…</div>`,
+      `<button class="btn" onclick="closeModal()">Close</button><button class="btn primary" onclick="serverConfigSave()">Save</button>`,
+      true
+    );
+    await serverConfigLoadHistory();
+  } catch (e) {
+    toast('Could not open config file: ' + e.message, 'err');
+  }
+}
+window.serverConfigOpen = serverConfigOpen;
+
+async function serverConfigSave() {
+  const state = GSC_FILE_EDITOR;
+  const editor = $('#gscFileEditor');
+  if (!state.serverId || !state.path || !editor) return;
+  try {
+    const result = await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/content`, {
+      method: 'PUT',
+      body: JSON.stringify({ path: state.path, content: editor.value, expectedSha256: state.sha })
+    });
+    state.sha = result.sha256;
+    toast('Config file saved. Previous content is in history.', 'ok');
+    await serverConfigLoadHistory();
+  } catch (e) {
+    toast('Config save failed: ' + e.message, 'err');
+  }
+}
+window.serverConfigSave = serverConfigSave;
+
+async function serverConfigLoadHistory() {
+  const state = GSC_FILE_EDITOR;
+  const pane = $('#gscFileHistory');
+  if (!pane || !state.serverId || !state.path) return;
+  try {
+    const list = await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/history?path=${encodeURIComponent(state.path)}`);
+    pane.innerHTML = list?.length
+      ? list.map(item => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${new Date(item.createdAt).toLocaleString()}</div><div class="sw-row-meta">${gscFormatBytes(item.sizeBytes)} · ${esc(item.id)}</div></div><button class="btn" onclick="serverConfigRestore('${jsq(item.id)}')">Restore</button></div>`).join('')
+      : '<div class="muted tiny">No previous versions yet.</div>';
+  } catch (e) {
+    pane.innerHTML = `<div class="callout">${esc(e.message)}</div>`;
+  }
+}
+window.serverConfigLoadHistory = serverConfigLoadHistory;
+
+async function serverConfigRestore(backupId) {
+  const state = GSC_FILE_EDITOR;
+  if (!state.serverId || !state.path) return;
+  if (!confirm('Restore this previous version? The current content will be saved as another history entry first.')) return;
+  try {
+    const result = await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ path: state.path, backupId, expectedSha256: state.sha })
+    });
+    state.sha = result.sha256;
+    const fresh = await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/content?path=${encodeURIComponent(state.path)}`);
+    state.sha = fresh.sha256;
+    const editor = $('#gscFileEditor');
+    if (editor) editor.value = fresh.content;
+    toast('Config history version restored.', 'ok');
+    await serverConfigLoadHistory();
+  } catch (e) {
+    toast('Restore failed: ' + e.message, 'err');
+  }
+}
+window.serverConfigRestore = serverConfigRestore;
+
+(function installServerFileWorkspace() {
+  let attempts = 0;
+  const install = () => {
+    if (typeof serverWorkspaceTabs !== 'function' || typeof renderServerWorkspaceTab !== 'function') {
+      if (++attempts < 200) setTimeout(install, 10);
+      return;
+    }
+
+    if (window.__gscFileWorkspaceInstalled) return;
+    window.__gscFileWorkspaceInstalled = true;
+
+    const baseTabs = serverWorkspaceTabs;
+    serverWorkspaceTabs = function (def) {
+      const tabs = baseTabs(def);
+      if (!tabs.some(x => x[0] === 'files')) {
+        const configIndex = tabs.findIndex(x => x[0] === 'config');
+        const modsIndex = tabs.findIndex(x => x[0] === 'mods');
+        const insertAt = configIndex >= 0 ? configIndex + 1 : modsIndex >= 0 ? modsIndex + 1 : Math.min(2, tabs.length);
+        tabs.splice(insertAt, 0, ['files', 'Files']);
+      }
+      return tabs;
+    };
+
+    const baseRenderTab = renderServerWorkspaceTab;
+    renderServerWorkspaceTab = async function (def, tab) {
+      if (tab !== 'files') return baseRenderTab(def, tab);
+      const token = ++SERVER_WORKSPACE.renderToken;
+      const body = $('#swTabBody');
+      if (!body) return;
+      body.innerHTML = '<div class="muted">Scanning config files…</div>';
+      try {
+        await renderServerFiles(def, body);
+        if (token !== SERVER_WORKSPACE.renderToken) return;
+      } catch (e) {
+        body.innerHTML = `<div class="callout">${esc(e.message)}</div>`;
+      }
+    };
+
+    if (typeof renderServerMods === 'function') {
+      const baseRenderMods = renderServerMods;
+      renderServerMods = function (def, body) {
+        baseRenderMods(def, body);
+        const section = document.createElement('div');
+        section.className = 'sw-section';
+        section.innerHTML = `<h3>Mod / plugin configuration</h3><div class="muted tiny" style="margin-bottom:12px">Config files discovered in supported mod/plugin folders can be edited without uploading the mod archive through the panel.</div><button class="btn" onclick="serverWorkspaceSetTab('files')">Open config files</button>`;
+        body.appendChild(section);
+      };
+    }
+  };
+  setTimeout(install, 0);
+})();
