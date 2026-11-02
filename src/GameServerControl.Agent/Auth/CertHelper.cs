@@ -16,10 +16,9 @@ public static class CertHelper
     public static X509Certificate2 LoadOrCreate(string pfxPath, string pfxPassword, string[] extraSanHosts, IPAddress[] extraSanIps)
     {
         // Kestrel certificate setup occurs before the normal first-run migration block.
-        // Resolve/migrate this one credential explicitly so a sentinel in appsettings can
-        // never be mistaken for the actual PFX password after the first SEC-08 migration.
-        var baseDir = Path.GetDirectoryName(Path.GetFullPath(pfxPath))
-            ?? throw new InvalidOperationException("Certificate path has no parent directory.");
+        // Secret state is always rooted at the Agent payload, not beside a custom PFX path,
+        // so all encrypted credentials share exactly one master key/state store.
+        var baseDir = AppContext.BaseDirectory;
         var secretStore = new ConfigurationSecretStore(baseDir, new SecretProtector(baseDir));
         pfxPassword = secretStore.ResolveEffectiveSecret("Agent:CertPassword", pfxPassword);
 
