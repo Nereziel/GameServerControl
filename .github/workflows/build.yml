@@ -86,22 +86,21 @@ jobs:
       - name: Validate Cloudflare Worker bundle
         working-directory: src/GameServerControl.Cloud
         run: |
-          set -euo pipefail
           npm install --ignore-scripts --no-audit --no-fund
+          npm test
           npm run build
-          secrets_file="$(mktemp)"
-          trap 'rm -f "$secrets_file"' EXIT
-          cat > "$secrets_file" <<'JSON'
+          cat > /tmp/gsc-cloud-ci-secrets.json <<'JSON'
           {
-            "AGENT_ORIGIN": "https://gsc-origin.invalid",
-            "ACCESS_TEAM_DOMAIN": "https://example.cloudflareaccess.com",
-            "ACCESS_POLICY_AUD": "ci-placeholder-audience",
-            "AGENT_API_TOKEN": "ci-placeholder-agent-token",
-            "ORIGIN_ACCESS_CLIENT_ID": "ci-placeholder-client-id",
-            "ORIGIN_ACCESS_CLIENT_SECRET": "ci-placeholder-client-secret"
+            "AGENT_ORIGIN": "https://origin.invalid",
+            "AGENT_API_TOKEN": "ci-agent-token",
+            "ORIGIN_ACCESS_CLIENT_ID": "ci-client-id",
+            "ORIGIN_ACCESS_CLIENT_SECRET": "ci-client-secret",
+            "ACCESS_TEAM_DOMAIN": "https://ci.cloudflareaccess.com",
+            "ACCESS_POLICY_AUD": "ci-audience"
           }
           JSON
-          npx wrangler deploy --dry-run --secrets-file "$secrets_file" --outdir ../../publish/Cloud-worker
+          npx wrangler deploy --dry-run --secrets-file /tmp/gsc-cloud-ci-secrets.json --outdir ../../publish/Cloud-worker
+          rm -f /tmp/gsc-cloud-ci-secrets.json
 
       - name: Restore Shared
         run: dotnet restore src/GameServerControl.Shared
