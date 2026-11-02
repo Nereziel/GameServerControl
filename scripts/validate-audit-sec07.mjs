@@ -6,6 +6,7 @@ const indexHtml = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
 const webUiSources = fs.readdirSync(webUiDir)
   .filter(name => /\.(?:html|js)$/i.test(name))
   .map(name => [name, fs.readFileSync(path.join(webUiDir, name), 'utf8')]);
+const workspace = fs.readFileSync(path.join(webUiDir, 'server-workspace.js'), 'utf8');
 const roleMiddleware = fs.readFileSync('src/GameServerControl.Agent/Auth/RoleEnforcementMiddleware.cs', 'utf8');
 const securityHeadersPath = 'src/GameServerControl.Agent/Security/WebSecurityHeadersMiddleware.cs';
 const securityHeaders = fs.existsSync(securityHeadersPath) ? fs.readFileSync(securityHeadersPath, 'utf8') : '';
@@ -31,6 +32,8 @@ for (const [name, source] of [...webUiSources, ['cloud-adapter.js', cloudAdapter
     'SEC-07 forbids javascript: URLs', name);
   rejectPattern(source, /\bjsq\s*\(/,
     'SEC-07 forbids embedding JavaScript argument strings into generated HTML', name);
+  rejectPattern(source, /\beval\s*\(|\bnew\s+Function\s*\(/,
+    'SEC-07 forbids dynamic JavaScript evaluation', name);
 }
 
 rejectPattern(indexHtml, /<script(?![^>]*\bsrc\s*=)[^>]*>[\s\S]*?<\/script>/i,
@@ -40,6 +43,12 @@ requireToken(indexHtml, '/webui/server-workspace.js', 'SEC-07 must keep workspac
 rejectPattern(cloudBuild, /<script>[^<]*GSC_CLOUD_MODE/i,
   'Cloud staging must not inject an inline executable bootstrap', 'build.mjs');
 requireToken(cloudBuild, '/webui/cloud-adapter.js', 'Cloud staging must use the external adapter script');
+
+// One element cannot safely carry two copies of the same data-gsc-* attributes. Keep the
+// textarea's input action delegated and bind Ctrl+S with a trusted external listener.
+requireToken(workspace, "fseText')?.addEventListener('keydown'", 'Config editor must bind Ctrl+S with an external listener');
+rejectPattern(workspace, /id="fseText"[^>]*uiAction\([^>]*uiAction\(/,
+  'Config editor must not emit duplicate delegated action attributes on one element', 'server-workspace.js');
 
 requireToken(roleMiddleware, 'WebSecurityHeadersMiddleware.Apply', 'The registered Agent middleware must apply WebUI security headers');
 requireToken(securityHeaders, 'Content-Security-Policy', 'Agent must emit a Content-Security-Policy header');
