@@ -29,6 +29,9 @@ $repo      = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerCon
 $installRt = if ($env:GSC_INSTALL) { $env:GSC_INSTALL } else { 'C:\GameServerControl' }
 $agentDir  = Join-Path $installRt 'Agent'
 $previousAgentDir = Join-Path $installRt 'Agent.previous'
+$runnerDir = Join-Path $installRt 'Runner'
+$previousRunnerDir = Join-Path $installRt 'Runner.previous'
+$runnerExe = Join-Path $runnerDir 'GameServerControl.Runner.exe'
 $trayDir   = Join-Path $installRt 'Tray'
 $trayExe   = Join-Path $trayDir 'GameServerControl.Tray.exe'
 $legacyClientDir = Join-Path $installRt 'Client'
@@ -37,6 +40,8 @@ $svcName   = 'GameServerControlAgent'
 $silentUpdate = -not [string]::IsNullOrWhiteSpace($env:GSC_SILENT_UPDATE)
 $fromTray = -not [string]::IsNullOrWhiteSpace($env:GSC_FROM_TRAY)
 $hadPreviousAgent = $false
+$hadPreviousRunner = $false
+$runningRunnerServiceNames = @()
 
 function Write-Step($msg) { Write-Host ''; Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
@@ -83,6 +88,20 @@ function Set-AgentDirectoryAcl {
     # BUILTIN\Administrators:(OI)(CI)F and are inherited by secret state files.
     $aclOutput = & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Agent directory ACL: $($aclOutput -join ' | ')" }
+}
+
+function Set-RunnerDirectoryAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    $aclOutput = & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Runner directory ACL: $($aclOutput -join ' | ')" }
+
+    foreach ($runnerService in @(Get-Service -Name 'GameServerControlRunner_*' -ErrorAction SilentlyContinue)) {
+        $serviceAccount = "NT SERVICE\$($runnerService.Name)"
+        $grantOutput = & icacls.exe $Path /grant "${serviceAccount}:(OI)(CI)(RX)" /T /C 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Failed to grant Runner payload access to ${serviceAccount}: $($grantOutput -join ' | ')" }
+    }
 }
 
 function New-UpdateHealthToken {
@@ -179,6 +198,8 @@ Write-Ok "Tag: $tag  ·  Published: $($release.published_at)"
 
 $asset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Agent-windows.zip' } | Select-Object -First 1
 if (-not $asset) { throw 'Release asset not found: GameServerControl-Agent-windows.zip' }
+$runnerAsset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Runner-windows.zip' } | Select-Object -First 1
+if (-not $runnerAsset) { throw 'Release asset not found: GameServerControl-Runner-windows.zip' }
 $trayAsset = $release.assets | Where-Object { $_.name -eq 'GameServerControl-Tray-windows.zip' } | Select-Object -First 1
 $checksumAsset = $release.assets | Where-Object { $_.name -eq 'SHA256SUMS' } | Select-Object -First 1
 if (-not $checksumAsset) { throw 'Release asset not found: SHA256SUMS' }
@@ -194,6 +215,11 @@ $agentZip = Join-Path $tmpRoot 'agent.zip'
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $agentZip
 Assert-ReleaseAssetHash -Path $agentZip -AssetName $asset.name -ManifestPath $checksumsPath
 Write-Ok 'Agent package downloaded and SHA-256 verified.'
+
+$runnerZip = Join-Path $tmpRoot 'runner.zip'
+Invoke-WebRequest -Uri $runnerAsset.browser_download_url -OutFile $runnerZip
+Assert-ReleaseAssetHash -Path $runnerZip -AssetName $runnerAsset.name -ManifestPath $checksumsPath
+Write-Ok 'Runner package downloaded and SHA-256 verified.'
 
 $trayZip = Join-Path $tmpRoot 'tray.zip'
 if ($installTray) {
@@ -212,6 +238,17 @@ if ($svc -and $svc.Status -eq 'Running') {
     Stop-Service -Name $svcName -Force
     $svc.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20))
     Write-Ok 'Stopped.'
+}
+
+$runnerServices = @(Get-Service -Name 'GameServerControlRunner_*' -ErrorAction SilentlyContinue)
+$runningRunnerServiceNames = @($runnerServices | Where-Object { $_.Status -eq 'Running' } | ForEach-Object { $_.Name })
+if ($runningRunnerServiceNames.Count -gt 0) {
+    Write-Step 'Stopping existing per-server Runner services'
+    foreach ($runnerServiceName in $runningRunnerServiceNames) {
+        Stop-Service -Name $runnerServiceName -Force -ErrorAction Stop
+        (Get-Service -Name $runnerServiceName).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(20))
+    }
+    Write-Ok "Stopped $($runningRunnerServiceNames.Count) Runner service(s)."
 }
 
 if (Test-Path -LiteralPath $agentDir) {
@@ -257,6 +294,20 @@ if (-not (Test-Path $appSettings)) {
 $svcExePath = Join-Path $agentDir 'GameServerControl.Agent.exe'
 if (-not (Test-Path $svcExePath)) { throw "Agent executable missing after extraction: $svcExePath" }
 Write-Ok 'Agent unpacked.'
+
+Write-Step "Installing low-privilege Runner to $runnerDir"
+if (Test-Path $previousRunnerDir) { Remove-Item $previousRunnerDir -Recurse -Force }
+if (Test-Path $runnerDir) {
+    Set-RunnerDirectoryAcl -Path $runnerDir
+    Move-Item -LiteralPath $runnerDir -Destination $previousRunnerDir
+    $hadPreviousRunner = $true
+}
+New-Item -ItemType Directory -Force -Path $runnerDir | Out-Null
+Set-RunnerDirectoryAcl -Path $runnerDir
+Expand-Archive -Path $runnerZip -DestinationPath $runnerDir -Force
+Set-RunnerDirectoryAcl -Path $runnerDir
+if (-not (Test-Path $runnerExe)) { throw "Runner executable missing after extraction: $runnerExe" }
+Write-Ok 'Runner unpacked and restricted to SYSTEM, Administrators and existing Runner service SIDs.'
 
 # Remove the retired desktop client on upgrades from pre-1.1 releases.
 if (Test-Path $legacyClientDir) {
@@ -452,29 +503,67 @@ $healthPassed = Test-AgentUpdateHealth -Url $healthUrl -Token $updateHealthToken
 Remove-Item -LiteralPath $updateHealthTokenPath -Force -ErrorAction SilentlyContinue
 $updateHealthToken = $null
 
-if (-not $healthPassed) {
+$runnerRestartPassed = $true
+if ($healthPassed -and $runningRunnerServiceNames.Count -gt 0) {
+    Write-Step 'Restarting Runner services that were active before update'
+    try {
+        Set-RunnerDirectoryAcl -Path $runnerDir
+        foreach ($runnerServiceName in $runningRunnerServiceNames) {
+            Start-Service -Name $runnerServiceName -ErrorAction Stop
+            (Get-Service -Name $runnerServiceName).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
+        }
+        Write-Ok "Restarted $($runningRunnerServiceNames.Count) Runner service(s)."
+    } catch {
+        $runnerRestartPassed = $false
+        Write-Warn2 "Runner restart verification failed: $($_.Exception.Message)"
+    }
+}
+
+if (-not $healthPassed -or -not $runnerRestartPassed) {
     if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
-        Write-Warn2 'New Agent failed authenticated health/version stability checks. Rolling back the previous payload.'
+        Write-Warn2 'New Agent/Runner update failed health or Runner restart verification. Rolling back both payloads.'
         Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+        foreach ($runnerService in @(Get-Service -Name 'GameServerControlRunner_*' -ErrorAction SilentlyContinue)) {
+            Stop-Service -Name $runnerService.Name -Force -ErrorAction SilentlyContinue
+        }
         if (Test-Path $agentDir) { Remove-Item $agentDir -Recurse -Force }
         Move-Item -LiteralPath $previousAgentDir -Destination $agentDir
+
+        if (Test-Path $runnerDir) { Remove-Item $runnerDir -Recurse -Force }
+        if ($hadPreviousRunner -and (Test-Path $previousRunnerDir)) {
+            Move-Item -LiteralPath $previousRunnerDir -Destination $runnerDir
+            Set-RunnerDirectoryAcl -Path $runnerDir
+        }
+
         try {
             Start-Service -Name $svcName
             (Get-Service -Name $svcName).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
-            Write-Ok 'Previous Agent payload restored and service restarted.'
+            if ($hadPreviousRunner) {
+                foreach ($runnerServiceName in $runningRunnerServiceNames) {
+                    Start-Service -Name $runnerServiceName -ErrorAction SilentlyContinue
+                }
+            }
+            Write-Ok 'Previous Agent + Runner payloads restored; services were restarted where applicable.'
         } catch {
-            throw "New Agent failed health verification and rollback could not restart the previous service: $($_.Exception.Message)"
+            throw "New Agent/Runner update failed and rollback could not restart the previous service set: $($_.Exception.Message)"
         }
-        throw 'New Agent failed authenticated health/version stability checks. The previous Agent payload was restored.'
+        throw 'New Agent/Runner update failed verification. Previous payloads were restored.'
     }
     Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
-    throw 'New Agent failed authenticated health/version stability checks. Inspect the Application Event Log or run the Agent EXE directly.'
+    foreach ($runnerService in @(Get-Service -Name 'GameServerControlRunner_*' -ErrorAction SilentlyContinue)) {
+        Stop-Service -Name $runnerService.Name -Force -ErrorAction SilentlyContinue
+    }
+    throw 'New Agent/Runner update failed verification. Inspect the Application Event Log or run the Agent EXE directly.'
 }
 
 Write-Ok "Authenticated health/version gate passed for $expectedVersion with a stable process."
 if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
     Remove-Item $previousAgentDir -Recurse -Force
     Write-Skip 'Removed previous Agent payload after authenticated health verification.'
+}
+if ($hadPreviousRunner -and (Test-Path $previousRunnerDir)) {
+    Remove-Item $previousRunnerDir -Recurse -Force
+    Write-Skip 'Removed Runner.previous after Agent health and Runner restart verification.'
 }
 
 if (-not $silentUpdate) {
@@ -534,3 +623,4 @@ Write-Host '  Web UI:  http://localhost:5099/'
 Write-Host "  Config:  $appSettings"
 if (Test-Path $trayExe) { Write-Host "  Tray:    $trayExe" }
 Write-Host ''
+
