@@ -115,11 +115,6 @@ public sealed class ConfigurationSecretStore
         }
     }
 
-    /// <summary>
-    /// Resolves a secret needed before the normal startup migration point. A concrete
-    /// higher-precedence runtime override is returned but never persisted. Plaintext
-    /// physically present in appsettings is still migrated and scrubbed.
-    /// </summary>
     public string ResolveEffectiveSecret(string path, string effectiveValue)
     {
         if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Configuration secret path is required.", nameof(path));
@@ -217,8 +212,10 @@ public sealed class ConfigurationSecretStore
     private void SaveSanitizedAppSettings(JsonObject root)
     {
         var sanitized = root.ToJsonString(JsonOptions);
+        var backupPath = _appsettingsPath + ".bak";
+        if (File.Exists(backupPath)) File.Delete(backupPath);
         SecretFilePermissions.WriteAllTextAtomic(_appsettingsPath, sanitized);
-        SecretFilePermissions.WriteAllTextAtomic(_appsettingsPath + ".bak", sanitized);
+        SecretFilePermissions.WriteAllTextAtomic(backupPath, sanitized);
     }
 
     private void ScrubAppSettingsPath(string path)
