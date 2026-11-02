@@ -103,13 +103,15 @@ public sealed class ServerConfigFileService
             var ruleRoot = ResolveRuleRoot(root, rule.RelativePath);
             if (!Directory.Exists(ruleRoot) || IsSymlink(ruleRoot)) continue;
 
-            var option = rule.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-            IEnumerable<string> candidates;
-            try { candidates = Directory.EnumerateFiles(ruleRoot, "*", option); }
-            catch (UnauthorizedAccessException) { continue; }
-            catch (DirectoryNotFoundException) { continue; }
+            var enumeration = new EnumerationOptions
+            {
+                RecurseSubdirectories = rule.Recursive,
+                IgnoreInaccessible = true,
+                ReturnSpecialDirectories = false,
+                AttributesToSkip = FileAttributes.ReparsePoint
+            };
 
-            foreach (var file in candidates)
+            foreach (var file in Directory.EnumerateFiles(ruleRoot, "*", enumeration))
             {
                 ct.ThrowIfCancellationRequested();
                 if (result.Count >= MaxDiscoveredFiles) break;
@@ -144,8 +146,7 @@ public sealed class ServerConfigFileService
 
     public async Task<ServerConfigFileContent> ReadAsync(string serverId, string relativePath, CancellationToken ct = default)
     {
-        var (def, root, full) = ResolveExistingAllowedFile(serverId, relativePath);
-        _ = def;
+        var (_, root, full) = ResolveExistingAllowedFile(serverId, relativePath);
         var bytes = await ReadBoundedAsync(full, ct);
         var info = new FileInfo(full);
         return new ServerConfigFileContent(
@@ -206,7 +207,9 @@ public sealed class ServerConfigFileService
     public async Task<ServerConfigFileWriteResult> RestoreAsync(string serverId, ServerConfigFileRestoreRequest request, CancellationToken ct = default)
     {
         if (request is null) throw new ArgumentNullException(nameof(request));
-        if (string.IsNullOrWhiteSpace(request.BackupId) || Path.GetFileName(request.BackupId) != request.BackupId || !request.BackupId.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(request.BackupId)
+            || Path.GetFileName(request.BackupId) != request.BackupId
+            || !request.BackupId.EndsWith(".bak", StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Invalid backup id.", nameof(request));
 
         var (_, root, full) = ResolveExistingAllowedFile(serverId, request.Path);
@@ -290,7 +293,7 @@ public sealed class ServerConfigFileService
         foreach (var rule in RulesFor(def))
         {
             var rulePath = rule.RelativePath.Replace('\\', '/').Trim('/');
-            if (rulePath.Length == 0)
+            if (rulePath is "" or ".")
             {
                 if (!relative.Contains('/')) return true;
                 continue;
