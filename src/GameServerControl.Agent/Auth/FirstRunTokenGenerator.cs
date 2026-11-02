@@ -1,13 +1,13 @@
 using System.Security.Cryptography;
 using System.Text.Json;
-using System.Text.RegularExpressions;
+using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// On first startup, if Agent:ApiToken is empty or a known placeholder, generates a
-/// random 32-byte token and persists it to the restricted appsettings.json state file.
+/// random 32-byte token and persists it only through the encrypted configuration secret store.
 /// </summary>
 public static class FirstRunTokenGenerator
 {
@@ -17,10 +17,16 @@ public static class FirstRunTokenGenerator
         "REPLACE_WITH_32_CHARS+",
         "CHANGE_ME",
         "your-token-here",
-        "<generate>"
+        "<generate>",
+        ConfigurationSecretStore.Sentinel
     };
 
-    public static bool EnsureToken(IConfiguration cfg, string baseDir, ILogger logger, out string token)
+    public static bool EnsureToken(
+        IConfiguration cfg,
+        string baseDir,
+        ConfigurationSecretStore secretStore,
+        ILogger logger,
+        out string token)
     {
         var current = cfg["Agent:ApiToken"] ?? "";
         if (!IsPlaceholder(current))
@@ -34,43 +40,27 @@ public static class FirstRunTokenGenerator
 
         try
         {
-            EnsureAppSettingsExists(baseDir, appsettingsPath, token, logger);
+            EnsureAppSettingsExists(baseDir, appsettingsPath, logger);
+            secretStore.SetSecret(cfg, "Agent:ApiToken", token);
 
-            var json = File.ReadAllText(appsettingsPath);
-            var updated = Regex.Replace(
-                json,
-                "\"ApiToken\"\\s*:\\s*\"[^\"]*\"",
-                $"\"ApiToken\": \"{token}\"",
-                RegexOptions.Singleline);
-
-            if (updated == json && !json.Contains("\"ApiToken\"", StringComparison.OrdinalIgnoreCase))
-            {
-                logger.LogWarning("Could not find ApiToken field in appsettings.json to update.");
-                return true;
-            }
-
-            var backup = appsettingsPath + ".bak";
-            File.Copy(appsettingsPath, backup, overwrite: true);
-            SecretFilePermissions.RestrictExisting(backup);
-            SecretFilePermissions.WriteAllTextAtomic(appsettingsPath, updated);
-
-            logger.LogInformation("Generated a new agent API token. The credential was saved to the restricted appsettings.json state file.");
+            logger.LogInformation("Generated a new agent API token. The credential was saved to encrypted local secret state.");
             Console.WriteLine();
             Console.WriteLine("====================================================================");
-            Console.WriteLine("  Generated a new Agent API token and saved it to the restricted state file:");
-            Console.WriteLine("  " + appsettingsPath);
+            Console.WriteLine("  Generated a new Agent API token and saved it to encrypted state:");
+            Console.WriteLine("  " + secretStore.StatePath);
             Console.WriteLine("  The credential itself is intentionally not written to service stdout.");
             Console.WriteLine("====================================================================");
             Console.WriteLine();
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to persist generated token to appsettings.json");
+            logger.LogError(ex, "Failed to persist generated token to encrypted secret state");
+            throw;
         }
         return true;
     }
 
-    private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, string token, ILogger logger)
+    private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, ILogger logger)
     {
         if (File.Exists(appsettingsPath))
         {
@@ -103,7 +93,7 @@ public static class FirstRunTokenGenerator
                 Bind = "http://127.0.0.1:5099",
                 BindHttps = "",
                 CertPassword = "",
-                ApiToken = token,
+                ApiToken = "<generate>",
                 Repo = "Nereziel/GameServerControl",
                 ServersJsonPath = "servers.json",
                 AuditLogPath = "",
