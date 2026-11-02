@@ -43,6 +43,9 @@ jobs:
       - name: Validate mod/plugin management
         run: node scripts/validate-mod-management.mjs
 
+      - name: Validate audit SEC-03 through SEC-06
+        run: node scripts/validate-audit-sec03-sec06.mjs
+
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
 
@@ -129,6 +132,9 @@ jobs:
 
       - name: Validate mod/plugin management
         run: node scripts/validate-mod-management.mjs
+
+      - name: Validate audit SEC-03 through SEC-06
+        run: node scripts/validate-audit-sec03-sec06.mjs
 
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
