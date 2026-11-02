@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using GameServerControl.Agent.Auth;
 using GameServerControl.Agent.Networking;
 using GameServerControl.Agent.Security;
 using GameServerControl.Agent.Servers;
@@ -62,11 +63,11 @@ try
         .Build();
     AppSettingsSecretProtection.ProtectAndLoad(cfg, appsettingsPath, protector);
 
-    Require(cfg["Agent:ApiToken"] == "bootstrap-admin-token-0123456789012345", "Runtime bootstrap token was not decrypted.");
-    Require(cfg["Agent:CertPassword"] == "certificate-password", "Runtime certificate password was not decrypted.");
-    Require(cfg["Agent:PublicRelay:ApiToken"] == "relay-token-01234567890123456789", "Runtime relay token was not decrypted.");
-    Require(cfg["Agent:CurseForge:ApiKey"] == "curseforge-api-key", "Runtime CurseForge API key was not decrypted.");
-    Require(cfg["Agent:GuestCredentials:default:Password"] == "guest-password", "Runtime guest password was not decrypted.");
+    Require(cfg["Agent:ApiToken"] == "bootstrap-admin-token-0123456789012345", "Runtime bootstrap token changed while migrating plaintext storage.");
+    Require(cfg["Agent:CertPassword"] == "certificate-password", "Runtime certificate password changed while migrating plaintext storage.");
+    Require(cfg["Agent:PublicRelay:ApiToken"] == "relay-token-01234567890123456789", "Runtime relay token changed while migrating plaintext storage.");
+    Require(cfg["Agent:CurseForge:ApiKey"] == "curseforge-api-key", "Runtime CurseForge API key changed while migrating plaintext storage.");
+    Require(cfg["Agent:GuestCredentials:default:Password"] == "guest-password", "Runtime guest password changed while migrating plaintext storage.");
 
     var storedSettings = File.ReadAllText(appsettingsPath);
     foreach (var plaintext in new[]
@@ -79,6 +80,28 @@ try
     })
         Require(!storedSettings.Contains(plaintext, StringComparison.Ordinal), $"appsettings.json still contains plaintext secret: {plaintext}");
     Require(storedSettings.Contains("enc:v1:", StringComparison.Ordinal), "appsettings.json does not contain versioned encrypted envelopes.");
+
+    // A fresh configuration load sees ciphertext from JSON; ProtectAndLoad must expose the
+    // plaintext only at runtime without rewriting an external higher-precedence override.
+    var reloadCfg = new ConfigurationBuilder()
+        .SetBasePath(root)
+        .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+        .Build();
+    Require(reloadCfg["Agent:ApiToken"]?.StartsWith("enc:v1:", StringComparison.Ordinal) == true,
+        "Reload test did not observe the encrypted appsettings value before runtime decryption.");
+    AppSettingsSecretProtection.ProtectAndLoad(reloadCfg, appsettingsPath, protector);
+    Require(reloadCfg["Agent:ApiToken"] == "bootstrap-admin-token-0123456789012345",
+        "Encrypted bootstrap token was not decrypted into runtime configuration.");
+
+    const string externalCertOverride = "environment-certificate-password";
+    var overrideCfg = new ConfigurationBuilder()
+        .SetBasePath(root)
+        .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["Agent:CertPassword"] = externalCertOverride })
+        .Build();
+    AppSettingsSecretProtection.ProtectAndLoad(overrideCfg, appsettingsPath, protector);
+    Require(overrideCfg["Agent:CertPassword"] == externalCertOverride,
+        "Encrypted appsettings migration overwrote a higher-precedence secret override.");
 
     var def = new ServerDef(
         Id: "valheim-1",
@@ -148,7 +171,38 @@ try
     Require(!storedRelay.Contains(relayToken, StringComparison.Ordinal), "public-relay.json still contains a plaintext relay API token.");
     Require(storedRelay.Contains("enc:v1:", StringComparison.Ordinal), "public-relay.json was not migrated to an encrypted token envelope.");
 
-    Console.WriteLine("SEC-08 encrypted-at-rest behavior and persistence wiring checks OK.");
+    // First-run migration must encrypt pre-existing secrets before creating appsettings.json.bak,
+    // and the generated token must never be persisted as reusable plaintext.
+    var firstRunRoot = Path.Combine(root, "first-run");
+    Directory.CreateDirectory(firstRunRoot);
+    var firstRunPath = Path.Combine(firstRunRoot, "appsettings.json");
+    const string firstRunCert = "preexisting-cert-secret";
+    File.WriteAllText(firstRunPath, JsonSerializer.Serialize(new
+    {
+        Agent = new
+        {
+            ApiToken = "REPLACE_WITH_32_CHARS+",
+            CertPassword = firstRunCert,
+            GuestCredentials = new Dictionary<string, object>()
+        }
+    }, new JsonSerializerOptions { WriteIndented = true }));
+    var firstRunCfg = new ConfigurationBuilder()
+        .SetBasePath(firstRunRoot)
+        .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["Agent:DataDir"] = firstRunRoot })
+        .Build();
+    Require(FirstRunTokenGenerator.EnsureToken(firstRunCfg, firstRunRoot, loggerFactory.CreateLogger("first-run"), out var generatedToken),
+        "Placeholder bootstrap token did not trigger first-run generation.");
+    Require(generatedToken.Length >= 32, "Generated bootstrap token is unexpectedly short.");
+    foreach (var path in new[] { firstRunPath, firstRunPath + ".bak" })
+    {
+        var stored = File.ReadAllText(path);
+        Require(!stored.Contains(generatedToken, StringComparison.Ordinal), $"{Path.GetFileName(path)} contains the generated bearer token in plaintext.");
+        Require(!stored.Contains(firstRunCert, StringComparison.Ordinal), $"{Path.GetFileName(path)} contains a pre-existing secret in plaintext.");
+        Require(stored.Contains("enc:v1:", StringComparison.Ordinal), $"{Path.GetFileName(path)} does not contain encrypted secret envelopes.");
+    }
+
+    Console.WriteLine("SEC-08 encrypted-at-rest behavior, startup, and persistence wiring checks OK.");
 }
 finally
 {
