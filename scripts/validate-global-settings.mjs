@@ -1,0 +1,31 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+const root = process.cwd();
+const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
+const program = read('src/GameServerControl.Agent/Program.cs');
+const index = read('src/GameServerControl.Agent/WebUi/index.html');
+const relayUi = read('src/GameServerControl.Agent/WebUi/jobs-mods.js');
+
+const failures = [];
+const requireText = (source, needle, label) => {
+  if (!source.includes(needle)) failures.push(`Missing ${label}: ${needle}`);
+};
+
+requireText(program, 'api.MapGet("/settings/public-relay"', 'global Relay settings GET endpoint');
+requireText(program, 'api.MapPut("/settings/public-relay"', 'global Relay settings PUT endpoint');
+requireText(index, 'id="tabSettings"', 'top-level Settings tab');
+requireText(index, 'id="settingsView"', 'top-level Settings view');
+requireText(index, '/api/settings/public-relay', 'Settings UI Relay API usage');
+
+for (const legacyId of ['swRelayUrl', 'swRelayToken', 'swRelayTarget', 'swRelayPublicAddress']) {
+  if (relayUi.includes(legacyId)) failures.push(`Per-server Relay UI still owns global field: ${legacyId}`);
+}
+
+if (failures.length) {
+  console.error('Global Settings contract failures:');
+  for (const failure of failures) console.error(` - ${failure}`);
+  process.exit(1);
+}
+
+console.log('Global Settings ownership contract OK.');
