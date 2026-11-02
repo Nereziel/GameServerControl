@@ -1,0 +1,95 @@
+name: Deploy Cloudflare panel
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Build and deploy Cloudflare panel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Install dependencies
+        working-directory: src/GameServerControl.Cloud
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Build shared Agent Web UI for Cloudflare
+        working-directory: src/GameServerControl.Cloud
+        run: npm run build
+
+      - name: Validate deployment configuration
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AGENT_ORIGIN: ${{ secrets.GSC_CF_AGENT_ORIGIN }}
+          ACCESS_TEAM_DOMAIN: ${{ secrets.GSC_CF_ACCESS_TEAM_DOMAIN }}
+          ACCESS_POLICY_AUD: ${{ secrets.GSC_CF_ACCESS_POLICY_AUD }}
+          AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
+          ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
+          ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          for name in \
+            CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN \
+            AGENT_ORIGIN ACCESS_TEAM_DOMAIN ACCESS_POLICY_AUD AGENT_API_TOKEN \
+            ORIGIN_ACCESS_CLIENT_ID ORIGIN_ACCESS_CLIENT_SECRET; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Required GitHub Actions secret for ${name} is missing."
+              exit 1
+            fi
+          done
+
+          case "$AGENT_ORIGIN" in
+            https://*) ;;
+            *) echo "::error::GSC_CF_AGENT_ORIGIN must be an https:// URL for the Tunnel origin hostname."; exit 1 ;;
+          esac
+          case "$ACCESS_TEAM_DOMAIN" in
+            https://*.cloudflareaccess.com|https://*.cloudflareaccess.com/) ;;
+            *) echo "::error::GSC_CF_ACCESS_TEAM_DOMAIN must be an https://*.cloudflareaccess.com URL."; exit 1 ;;
+          esac
+
+      - name: Deploy Worker and runtime secrets
+        working-directory: src/GameServerControl.Cloud
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          AGENT_ORIGIN: ${{ secrets.GSC_CF_AGENT_ORIGIN }}
+          ACCESS_TEAM_DOMAIN: ${{ secrets.GSC_CF_ACCESS_TEAM_DOMAIN }}
+          ACCESS_POLICY_AUD: ${{ secrets.GSC_CF_ACCESS_POLICY_AUD }}
+          AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
+          ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
+          ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          secrets_file="$(mktemp)"
+          trap 'rm -f "$secrets_file"' EXIT
+          node - "$secrets_file" <<'NODE'
+          const fs = require('node:fs');
+          const path = process.argv[2];
+          const names = [
+            'AGENT_ORIGIN',
+            'ACCESS_TEAM_DOMAIN',
+            'ACCESS_POLICY_AUD',
+            'AGENT_API_TOKEN',
+            'ORIGIN_ACCESS_CLIENT_ID',
+            'ORIGIN_ACCESS_CLIENT_SECRET'
+          ];
+          const values = Object.fromEntries(names.map(name => [name, process.env[name] || '']));
+          fs.writeFileSync(path, JSON.stringify(values), { mode: 0o600 });
+          NODE
+          npx wrangler deploy --strict --secrets-file "$secrets_file"
