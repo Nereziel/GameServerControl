@@ -98,6 +98,16 @@ public record ServerStatus(
     Dictionary<string, string>? Metadata = null
 );
 
+public record ServerStatusSample(
+    DateTimeOffset At,
+    ProcessState ProcessState,
+    VmState VmState,
+    int? PidInGuest,
+    double? CpuPercent,
+    long? MemoryMB,
+    string? LastError
+);
+
 public record LogLine(
     string ServerId,
     DateTimeOffset At,
