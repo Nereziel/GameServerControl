@@ -157,6 +157,7 @@ app.UseMiddleware<AuditMiddleware>();
 
 var api = app.MapGroup("/api").RequireAuthorization();
 api.MapServerConfigFiles();
+api.MapOperationalEndpoints();
 
 api.MapGet("/health", () => Results.Ok(new { ok = true, ts = DateTimeOffset.UtcNow }));
 api.MapGet("/version", (UpdateChecker checker) => Results.Ok(checker.Latest));
