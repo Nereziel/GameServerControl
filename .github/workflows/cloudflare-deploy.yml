@@ -2,6 +2,23 @@ name: Deploy Cloudflare panel
 
 on:
   workflow_dispatch:
+    inputs:
+      panel_hostname:
+        description: 'Human-facing Worker hostname, for example panel.example.com'
+        required: true
+        type: string
+      agent_origin:
+        description: 'Private Tunnel origin URL, for example https://gsc-origin.example.com'
+        required: true
+        type: string
+      access_team_domain:
+        description: 'Cloudflare Access team URL, for example https://example.cloudflareaccess.com'
+        required: true
+        type: string
+      access_policy_aud:
+        description: 'AUD tag of the Access application protecting the panel hostname'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,42 +52,138 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          AGENT_ORIGIN: ${{ secrets.GSC_CF_AGENT_ORIGIN }}
-          ACCESS_TEAM_DOMAIN: ${{ secrets.GSC_CF_ACCESS_TEAM_DOMAIN }}
-          ACCESS_POLICY_AUD: ${{ secrets.GSC_CF_ACCESS_POLICY_AUD }}
+          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
+          AGENT_ORIGIN: ${{ inputs.agent_origin }}
+          ACCESS_TEAM_DOMAIN: ${{ inputs.access_team_domain }}
+          ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
           AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
           ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
           ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           for name in \
-            CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN \
+            CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN PANEL_HOSTNAME \
             AGENT_ORIGIN ACCESS_TEAM_DOMAIN ACCESS_POLICY_AUD AGENT_API_TOKEN \
             ORIGIN_ACCESS_CLIENT_ID ORIGIN_ACCESS_CLIENT_SECRET; do
             if [ -z "${!name:-}" ]; then
-              echo "::error::Required GitHub Actions secret for ${name} is missing."
+              echo "::error::Required deployment value ${name} is missing."
               exit 1
             fi
           done
 
-          case "$AGENT_ORIGIN" in
-            https://*) ;;
-            *) echo "::error::GSC_CF_AGENT_ORIGIN must be an https:// URL for the Tunnel origin hostname."; exit 1 ;;
-          esac
-          case "$ACCESS_TEAM_DOMAIN" in
-            https://*.cloudflareaccess.com|https://*.cloudflareaccess.com/) ;;
-            *) echo "::error::GSC_CF_ACCESS_TEAM_DOMAIN must be an https://*.cloudflareaccess.com URL."; exit 1 ;;
-          esac
+          node <<'NODE'
+          const fail = message => {
+            console.error(`::error::${message}`);
+            process.exit(1);
+          };
 
-      - name: Deploy Worker and runtime secrets
+          const panel = process.env.PANEL_HOSTNAME || '';
+          if (panel !== panel.toLowerCase() || panel.includes('/') || panel.includes(':') || !panel.includes('.'))
+            fail('panel_hostname must be a lowercase DNS hostname without scheme, path, or port.');
+
+          let panelUrl;
+          let origin;
+          let team;
+          try { panelUrl = new URL(`https://${panel}`); }
+          catch { fail('panel_hostname is not a valid DNS hostname.'); }
+          try { origin = new URL(process.env.AGENT_ORIGIN); }
+          catch { fail('agent_origin is not a valid absolute URL.'); }
+          try { team = new URL(process.env.ACCESS_TEAM_DOMAIN); }
+          catch { fail('access_team_domain is not a valid absolute URL.'); }
+
+          if (panelUrl.hostname !== panel || panelUrl.port) fail('panel_hostname must contain only a DNS hostname.');
+          if (origin.protocol !== 'https:' || origin.username || origin.password || origin.port || origin.pathname !== '/' || origin.search || origin.hash)
+            fail('agent_origin must be an https:// hostname without credentials, port, path, query, or fragment.');
+          if (origin.hostname.toLowerCase() === panel) fail('panel_hostname and agent_origin must use different hostnames.');
+          if (team.protocol !== 'https:' || team.username || team.password || team.port || team.pathname !== '/' || team.search || team.hash || !team.hostname.endsWith('.cloudflareaccess.com'))
+            fail('access_team_domain must be an https://*.cloudflareaccess.com URL without path, query, or fragment.');
+          if (!String(process.env.ACCESS_POLICY_AUD || '').trim()) fail('access_policy_aud is required.');
+          NODE
+
+      - name: Verify panel hostname is already protected by Cloudflare Access
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
+          ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
+        run: |
+          set -euo pipefail
+          apps_file="$(mktemp)"
+          trap 'rm -f "$apps_file"' EXIT
+          status="$(curl --silent --show-error --output "$apps_file" --write-out '%{http_code}' \
+            --connect-timeout 10 --max-time 20 \
+            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/access/apps?domain=$PANEL_HOSTNAME&exact=true&per_page=100")"
+          if [ "$status" != "200" ]; then
+            echo "::error::Cloudflare Access application lookup failed with HTTP $status. Ensure the API token has Access Applications Read permission."
+            exit 1
+          fi
+
+          node - "$apps_file" <<'NODE'
+          const fs = require('node:fs');
+          const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const panel = process.env.PANEL_HOSTNAME.toLowerCase();
+          if (!data.success) {
+            console.error('::error::Cloudflare Access application lookup returned success=false.');
+            process.exit(1);
+          }
+          const app = (data.result || []).find(x => String(x.domain || '').toLowerCase() === panel);
+          if (!app) {
+            console.error(`::error::Create and protect the Cloudflare Access application for ${panel} before deploying the Worker custom domain.`);
+            process.exit(1);
+          }
+          if (String(app.aud || '') !== String(process.env.ACCESS_POLICY_AUD || '')) {
+            console.error('::error::access_policy_aud does not match the Access application protecting panel_hostname.');
+            process.exit(1);
+          }
+          NODE
+
+      - name: Verify private Tunnel origin and Agent authentication
+        shell: bash
+        env:
+          AGENT_ORIGIN: ${{ inputs.agent_origin }}
+          AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
+          ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
+          ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          health_file="$(mktemp)"
+          trap 'rm -f "$health_file"' EXIT
+          status="$(curl --silent --show-error --output "$health_file" --write-out '%{http_code}' \
+            --connect-timeout 10 --max-time 20 \
+            --header "CF-Access-Client-Id: $ORIGIN_ACCESS_CLIENT_ID" \
+            --header "CF-Access-Client-Secret: $ORIGIN_ACCESS_CLIENT_SECRET" \
+            --header "Authorization: Bearer $AGENT_API_TOKEN" \
+            "$AGENT_ORIGIN/api/health")"
+          if [ "$status" != "200" ]; then
+            echo "::error::Private Agent origin health check failed with HTTP $status. Check Tunnel routing, the origin Service Auth policy, service-token credentials, and Agent API token."
+            exit 1
+          fi
+          node - "$health_file" <<'NODE'
+          const fs = require('node:fs');
+          let body;
+          try { body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); }
+          catch {
+            console.error('::error::Private Agent origin did not return JSON from /api/health.');
+            process.exit(1);
+          }
+          if (body?.ok !== true) {
+            console.error('::error::Private Agent origin /api/health did not report ok=true.');
+            process.exit(1);
+          }
+          NODE
+
+      - name: Deploy Worker custom domain and runtime secrets
         working-directory: src/GameServerControl.Cloud
         shell: bash
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          AGENT_ORIGIN: ${{ secrets.GSC_CF_AGENT_ORIGIN }}
-          ACCESS_TEAM_DOMAIN: ${{ secrets.GSC_CF_ACCESS_TEAM_DOMAIN }}
-          ACCESS_POLICY_AUD: ${{ secrets.GSC_CF_ACCESS_POLICY_AUD }}
+          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
+          AGENT_ORIGIN: ${{ inputs.agent_origin }}
+          ACCESS_TEAM_DOMAIN: ${{ inputs.access_team_domain }}
+          ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
           AGENT_API_TOKEN: ${{ secrets.GSC_CF_AGENT_API_TOKEN }}
           ORIGIN_ACCESS_CLIENT_ID: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_ID }}
           ORIGIN_ACCESS_CLIENT_SECRET: ${{ secrets.GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET }}
@@ -92,4 +205,20 @@ jobs:
           const values = Object.fromEntries(names.map(name => [name, process.env[name] || '']));
           fs.writeFileSync(path, JSON.stringify(values), { mode: 0o600 });
           NODE
-          npx wrangler deploy --strict --secrets-file "$secrets_file"
+          npx wrangler deploy --strict --domain "$PANEL_HOSTNAME" --secrets-file "$secrets_file"
+
+      - name: Deployment summary
+        shell: bash
+        env:
+          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
+          AGENT_ORIGIN: ${{ inputs.agent_origin }}
+        run: |
+          {
+            echo '### GameServerControl Cloudflare panel'
+            echo
+            echo "- Panel: https://$PANEL_HOSTNAME"
+            echo "- Private origin: $AGENT_ORIGIN"
+            echo '- workers.dev: disabled'
+            echo '- preview URLs: disabled'
+            echo '- Origin health preflight: passed'
+          } >> "$GITHUB_STEP_SUMMARY"
