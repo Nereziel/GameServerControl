@@ -51,10 +51,10 @@ requireToken(securityHeaders, "frame-ancestors 'none'", 'Agent CSP must prevent 
 requireToken(securityHeaders, 'X-Content-Type-Options', 'Agent must emit nosniff protection');
 requireToken(securityHeaders, 'Referrer-Policy', 'Agent must emit a restrictive referrer policy');
 
-requireToken(cloudWorker, 'Content-Security-Policy', 'Cloud gateway must emit the same CSP protections');
+requireToken(cloudWorker, 'content-security-policy', 'Cloud gateway must emit the same CSP protections');
 requireToken(cloudWorker, "script-src 'self'", 'Cloud CSP must restrict scripts to same-origin files');
 requireToken(cloudWorker, "script-src-attr 'none'", 'Cloud CSP must disable inline event-handler attributes');
 requireToken(cloudWorker, "frame-ancestors 'none'", 'Cloud CSP must prevent framing');
-requireToken(cloudWorker, 'X-Content-Type-Options', 'Cloud gateway must emit nosniff protection');
+requireToken(cloudWorker, 'x-content-type-options', 'Cloud gateway must emit nosniff protection');
 
 console.log('Audit SEC-07 WebUI XSS/CSP contract OK.');
