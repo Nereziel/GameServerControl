@@ -151,7 +151,7 @@ if (Test-Path -LiteralPath $agentDir) {
 }
 
 Write-Step "Installing Agent to $agentDir"
-$preserve = @('appsettings.json', 'servers.json', 'tokens.json', 'public-relay.json')
+$preserve = @('appsettings.json', 'servers.json', 'tokens.json', 'public-relay.json', 'secret.key', 'secret-state.json')
 $backupDir = Join-Path $tmpRoot 'preserved'
 New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
 foreach ($f in $preserve) {
@@ -439,7 +439,7 @@ IconIndex=0
     }
 
     Write-Step 'Secret state'
-    Write-Ok "API credentials remain only in the restricted local state file: $appSettings"
+    Write-Ok "Reusable Agent credentials are encrypted at rest; key/state files remain under the restricted Agent ACL: $agentDir"
     Write-Skip 'Plaintext API tokens are intentionally not printed to installer or service stdout.'
 }
 
