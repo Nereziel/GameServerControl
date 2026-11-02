@@ -1,0 +1,98 @@
+name: Apply supply-chain fixes (temporary)
+
+on:
+  push:
+    branches: [fix/audit-supply-chain]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Apply deterministic config changes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          root = Path('.')
+          action_refs = {
+              'actions/checkout@v7': 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7',
+              'actions/setup-dotnet@v6': 'actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6',
+              'actions/upload-artifact@v7': 'actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7',
+              'actions/setup-node@v7': 'actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7',
+              'actions/download-artifact@v8': 'actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8',
+              'softprops/action-gh-release@v3': 'softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3',
+          }
+
+          def rewrite(path, transform):
+              p = root / path
+              before = p.read_text()
+              after = transform(before)
+              if after == before:
+                  raise SystemExit(f'Expected changes were not applied to {path}')
+              p.write_text(after)
+
+          rewrite('.github/dependabot.yml', lambda text: text.replace('directory: "/worker"', 'directory: "/src/GameServerControl.Cloud"', 1))
+
+          def pin_actions(text):
+              for old, new in action_refs.items():
+                  text = text.replace(old, new)
+              return text
+
+          def build_transform(text):
+              text = text.replace('workflow_dispatch:\n\njobs:', 'workflow_dispatch:\n\npermissions:\n  contents: read\n\njobs:', 1)
+              text = text.replace('npm install --ignore-scripts --no-audit --no-fund', 'npm ci --ignore-scripts --no-audit --no-fund')
+              return pin_actions(text)
+
+          def cloud_transform(text):
+              text = text.replace('npm install --ignore-scripts --no-audit --no-fund', 'npm ci --ignore-scripts --no-audit --no-fund')
+              return pin_actions(text)
+
+          def release_transform(text):
+              text = text.replace('permissions:\n  contents: write', 'permissions:\n  contents: read', 1)
+              text = text.replace('npm install --ignore-scripts --no-audit --no-fund', 'npm ci --ignore-scripts --no-audit --no-fund')
+              marker = '  release:\n    name: Create GitHub Release\n    runs-on: ubuntu-24.04\n    needs: [prepare, build-windows, build-linux]\n'
+              replacement = marker + '    permissions:\n      contents: write\n'
+              if marker not in text:
+                  raise SystemExit('Release job marker not found')
+              text = text.replace(marker, replacement, 1)
+              return pin_actions(text)
+
+          rewrite('.github/workflows/build.yml', build_transform)
+          rewrite('.github/workflows/cloudflare-deploy.yml', cloud_transform)
+          rewrite('.github/workflows/release.yml', release_transform)
+
+          contract = root / '.github/workflows/supply-chain-contract.yml'
+          text = contract.read_text().replace('branches: [fix/audit-supply-chain]', 'branches: [main]', 1)
+          contract.write_text(text)
+
+          for temporary in [
+              '.github/workflows/generate-cloud-lockfile.yml',
+              '.github/workflows/apply-supply-chain-fixes.yml',
+          ]:
+              (root / temporary).unlink(missing_ok=True)
+
+      - name: Validate SUP-01 and SUP-02 contract
+        run: node scripts/validate-audit-supply-chain.mjs
+
+      - name: Validate reproducible Cloud install and bundle
+        working-directory: src/GameServerControl.Cloud
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+          npm run build
+
+      - name: Commit validated changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: harden dependency and CI supply chain'
+          git push origin HEAD:fix/audit-supply-chain
