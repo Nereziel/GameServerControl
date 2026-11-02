@@ -107,7 +107,7 @@ public sealed class SecretProtector
         catch (FormatException ex) { throw new CryptographicException("Invalid AES-GCM secret envelope.", ex); }
         if (payload.Length < 29) throw new CryptographicException("Invalid AES-GCM secret envelope length.");
 
-        var key = GetOrCreateUnixKey();
+        var key = GetExistingUnixKey();
         var nonce = payload.AsSpan(0, 12);
         var tag = payload.AsSpan(12, 16);
         var cipher = payload.AsSpan(28);
@@ -121,6 +121,17 @@ public sealed class SecretProtector
         finally
         {
             CryptographicOperations.ZeroMemory(clear);
+        }
+    }
+
+    private byte[] GetExistingUnixKey()
+    {
+        lock (_keyGate)
+        {
+            if (_unixKey is not null) return _unixKey;
+            if (!File.Exists(_keyPath))
+                throw new CryptographicException("secret-protection.key is missing; restore the original key before decrypting existing Agent state.");
+            return _unixKey = ReadUnixKey();
         }
     }
 

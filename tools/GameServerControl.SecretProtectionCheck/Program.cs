@@ -38,6 +38,20 @@ try
         Require(File.Exists(keyPath), "Linux secret protector did not create its local master-key file.");
         var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite;
         Require(File.GetUnixFileMode(keyPath) == expected, "Linux master-key file must be mode 0600.");
+
+        var missingKeyRoot = Path.Combine(root, "missing-key");
+        Directory.CreateDirectory(missingKeyRoot);
+        var recoveryProtector = new SecretProtector(missingKeyRoot);
+        var recoveryEnvelope = recoveryProtector.Protect("recovery-secret-0123456789");
+        var recoveryKeyPath = Path.Combine(missingKeyRoot, "secret-protection.key");
+        File.Delete(recoveryKeyPath);
+
+        var freshRecoveryProtector = new SecretProtector(missingKeyRoot);
+        var missingKeyRejected = false;
+        try { _ = freshRecoveryProtector.Unprotect(recoveryEnvelope); }
+        catch (CryptographicException) { missingKeyRejected = true; }
+        Require(missingKeyRejected, "Encrypted Linux state was accepted after its master key was removed.");
+        Require(!File.Exists(recoveryKeyPath), "Decrypting existing Linux state created a replacement master key instead of requiring recovery of the original key.");
     }
 
     var appsettingsPath = Path.Combine(root, "appsettings.json");
