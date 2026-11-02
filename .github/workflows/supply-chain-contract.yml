@@ -2,7 +2,7 @@ name: Supply-chain audit contract
 
 on:
   push:
-    branches: [fix/audit-supply-chain]
+    branches: [main]
   pull_request:
     branches: [main]
 
