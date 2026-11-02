@@ -203,9 +203,10 @@ jobs:
 
       - name: Stage installer scripts as release assets
         run: |
-          cp deploy/windows/install.ps1                 GameServerControl-Install-Windows.ps1
-          cp deploy/linux/install-from-release.sh       GameServerControl-Install-Linux.sh
-          cp deploy/relay/install-from-release.sh       GameServerControl-Install-Relay.sh
+          cp deploy/windows/install.ps1                         GameServerControl-Install-Windows.ps1
+          cp deploy/cloudflare/install-tunnel-windows.ps1       GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1
+          cp deploy/linux/install-from-release.sh               GameServerControl-Install-Linux.sh
+          cp deploy/relay/install-from-release.sh               GameServerControl-Install-Relay.sh
 
       - name: Create release
         uses: softprops/action-gh-release@v3
@@ -222,10 +223,11 @@ jobs:
             GameServerControl-Agent-linux.tar.gz
             GameServerControl-Relay-linux.tar.gz
             GameServerControl-Install-Windows.ps1
+            GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1
             GameServerControl-Install-Linux.sh
             GameServerControl-Install-Relay.sh
           body: |
-            GameServerControl uses Agent + API + Web UI for administration. The optional Linux Relay exposes game ports from a public VPS through Tailscale to the game host.
+            GameServerControl uses Agent + API + Web UI for administration. The optional Linux Relay exposes game ports from a public VPS through Tailscale to the game host. Optional Cloudflare remote management exposes the same Web UI through Cloudflare Access and Tunnel without opening the Agent port to the Internet.
             Releases are self-contained; no preinstalled .NET runtime is required on target hosts.
 
             Install commands:
@@ -238,6 +240,8 @@ jobs:
 
                 # Public Linux VPS Relay
                 curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/relay/install-from-release.sh | sudo bash
+
+            The Cloudflare Tunnel Windows bootstrap is included as GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1. It requires a remotely-managed Cloudflare Tunnel token and keeps the Agent origin on loopback.
 
             Release binaries are stamped with version ${{ needs.prepare.outputs.version }} from the release tag.
             The Relay installer detects the VPS public interface and Tailscale IPv4, enables IPv4 forwarding, installs the systemd service, and prints the Tailscale API URL plus token to configure on the Agent.
