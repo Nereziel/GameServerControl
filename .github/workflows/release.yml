@@ -79,6 +79,7 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($script, [ref]$tokens, [ref]$parseErrors) | Out-Null
             if ($parseErrors.Count -gt 0) { throw "$script`n$((($parseErrors | ForEach-Object { $_.Message }) -join "`n"))" }
           }
+          & ./scripts/validate-windows-updater.ps1
 
       - name: Validate Linux installers
         run: |
