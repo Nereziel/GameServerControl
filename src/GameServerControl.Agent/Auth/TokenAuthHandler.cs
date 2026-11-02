@@ -62,6 +62,28 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
+        // The release installer creates a short-lived local token to prove the replacement
+        // process can serve authenticated health traffic. It is intentionally invalid on
+        // every other API route and disappears as soon as the update is accepted or rolled back.
+        if (string.Equals(Request.Path.Value, "/api/health", StringComparison.Ordinal) &&
+            UpdateHealthToken.IsValid(AppContext.BaseDirectory, presented))
+        {
+            if (clientKey is not null) _failureThrottle.RecordSuccess(clientKey);
+            Response.Headers["X-GameServerControl-Version"] = UpdateHealthToken.CurrentVersion;
+            Response.Headers["X-GameServerControl-Pid"] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+            Response.Headers.CacheControl = "no-store";
+
+            var healthIdentity = new ClaimsIdentity(new[]
+            {
+                new Claim(ClaimTypes.Name, "Update health probe"),
+                new Claim(TokenIdClaim, "update-health-probe"),
+                new Claim(RoleClaim, "ReadOnly")
+            }, Scheme.Name);
+            var healthPrincipal = new ClaimsPrincipal(healthIdentity);
+            return Task.FromResult(AuthenticateResult.Success(
+                new AuthenticationTicket(healthPrincipal, Scheme.Name)));
+        }
+
         var match = _registry.Lookup(presented);
         if (match is null)
         {

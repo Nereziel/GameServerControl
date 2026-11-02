@@ -23,6 +23,7 @@ public sealed class UpdateChecker : IHostedService, IDisposable
     private CancellationTokenSource? _cts;
     private Task? _loop;
 
+    public string CurrentVersion => _runningVersion;
     public UpdateStatus Latest { get; private set; }
 
     public UpdateChecker(IConfiguration cfg, ILogger<UpdateChecker> logger)

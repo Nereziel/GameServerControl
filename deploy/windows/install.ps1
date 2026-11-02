@@ -85,6 +85,76 @@ function Set-AgentDirectoryAcl {
     if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Agent directory ACL: $($aclOutput -join ' | ')" }
 }
 
+function New-UpdateHealthToken {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $bytes = New-Object byte[] 32
+    $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    $token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    [IO.File]::WriteAllText($Path, $token, [Text.Encoding]::ASCII)
+    return $token
+}
+
+function Get-LocalAgentHealthUrl {
+    param([string]$Bind)
+    if ([string]::IsNullOrWhiteSpace($Bind)) { $Bind = 'http://127.0.0.1:5099' }
+    $candidate = $Bind.Trim()
+    if ($candidate -match '^(https?)://(\*|\+|0\.0\.0\.0|\[::\])(?::([0-9]+))?/?$') {
+        $scheme = $Matches[1]
+        $port = $Matches[3]
+        $localHost = if ($scheme -eq 'https') { [Environment]::MachineName.ToLowerInvariant() } else { '127.0.0.1' }
+        $candidate = if ($port) { "${scheme}://${localHost}:$port" } else { "${scheme}://${localHost}" }
+    }
+    try { $uri = [Uri]$candidate } catch { throw "Agent:Bind is not a valid absolute URL: $Bind" }
+    if ($uri.Scheme -ne 'http' -and $uri.Scheme -ne 'https') { throw "Agent:Bind must use http or https: $Bind" }
+    $builder = New-Object UriBuilder($uri)
+    $builder.Path = '/api/health'
+    $builder.Query = ''
+    $builder.Fragment = ''
+    return $builder.Uri.AbsoluteUri
+}
+
+function Test-AgentUpdateHealth {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Token,
+        [Parameter(Mandatory = $true)][string]$ExpectedVersion,
+        [int]$TimeoutSeconds = 30,
+        [int]$RequiredConsecutiveSuccesses = 3
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $consecutiveSuccesses = 0
+    $stableProcessId = $null
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if (-not $service -or $service.Status -ne 'Running') {
+            $consecutiveSuccesses = 0
+            $stableProcessId = $null
+        } else {
+            try {
+                $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -Method Get -TimeoutSec 3 -Headers @{ Authorization = "Bearer $Token" }
+                $body = $response.Content | ConvertFrom-Json
+                $version = [string]$response.Headers['X-GameServerControl-Version']
+                $processId = [string]$response.Headers['X-GameServerControl-Pid']
+                $valid = $response.StatusCode -eq 200 -and $body.ok -eq $true -and $version -eq $ExpectedVersion -and $processId -match '^[1-9][0-9]*$'
+                if ($valid) {
+                    if ($stableProcessId -eq $processId) { $consecutiveSuccesses += 1 }
+                    else { $stableProcessId = $processId; $consecutiveSuccesses = 1 }
+                } else {
+                    $consecutiveSuccesses = 0
+                    $stableProcessId = $null
+                }
+            } catch {
+                $consecutiveSuccesses = 0
+                $stableProcessId = $null
+            }
+        }
+        if ($consecutiveSuccesses -ge $RequiredConsecutiveSuccesses) { return $true }
+        Start-Sleep -Seconds 2
+    }
+    return $false
+}
+
 Write-Host ''
 Write-Host 'GameServerControl installer (Windows)'
 Write-Host '-------------------------------------'
@@ -365,15 +435,26 @@ if ($FromTray -and -not $ElevatedChild) {
 Set-Content -LiteralPath $updateHelper -Value $updateHelperContent -Encoding UTF8
 Write-Ok "Updater helper: $updateHelper"
 
+$expectedVersion = if ($tag.StartsWith('v', [StringComparison]::OrdinalIgnoreCase)) { $tag.Substring(1) } else { $tag }
+$healthUrl = Get-LocalAgentHealthUrl -Bind ([string]$cfgObj.Agent.Bind)
+$updateHealthTokenPath = Join-Path $agentDir '.update-health-token'
+$updateHealthToken = New-UpdateHealthToken -Path $updateHealthTokenPath
+Set-AgentDirectoryAcl -Path $agentDir
+Write-Skip 'Prepared restricted health-only update credential.'
+
 Write-Step "Starting $svcName"
 try {
     Start-Service -Name $svcName
     (Get-Service -Name $svcName).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
-} catch { Write-Warn2 "Service failed to start: $($_.Exception.Message)" }
-$svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-if (-not $svc -or $svc.Status -ne 'Running') {
+} catch { Write-Warn2 "Service start did not reach Running before health verification: $($_.Exception.Message)" }
+
+$healthPassed = Test-AgentUpdateHealth -Url $healthUrl -Token $updateHealthToken -ExpectedVersion $expectedVersion -TimeoutSeconds 30 -RequiredConsecutiveSuccesses 3
+Remove-Item -LiteralPath $updateHealthTokenPath -Force -ErrorAction SilentlyContinue
+$updateHealthToken = $null
+
+if (-not $healthPassed) {
     if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
-        Write-Warn2 'New Agent did not become healthy. Rolling back the previous payload.'
+        Write-Warn2 'New Agent failed authenticated health/version stability checks. Rolling back the previous payload.'
         Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
         if (Test-Path $agentDir) { Remove-Item $agentDir -Recurse -Force }
         Move-Item -LiteralPath $previousAgentDir -Destination $agentDir
@@ -382,16 +463,18 @@ if (-not $svc -or $svc.Status -ne 'Running') {
             (Get-Service -Name $svcName).WaitForStatus('Running', [TimeSpan]::FromSeconds(20))
             Write-Ok 'Previous Agent payload restored and service restarted.'
         } catch {
-            throw "New Agent failed to start and rollback could not restart the previous service: $($_.Exception.Message)"
+            throw "New Agent failed health verification and rollback could not restart the previous service: $($_.Exception.Message)"
         }
-        throw 'New Agent failed to start. The previous Agent payload was restored.'
+        throw 'New Agent failed authenticated health/version stability checks. The previous Agent payload was restored.'
     }
-    throw 'Service is not running after installation. Inspect the Application Event Log or run the Agent EXE directly.'
+    Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+    throw 'New Agent failed authenticated health/version stability checks. Inspect the Application Event Log or run the Agent EXE directly.'
 }
-Write-Ok 'Service running.'
+
+Write-Ok "Authenticated health/version gate passed for $expectedVersion with a stable process."
 if ($hadPreviousAgent -and (Test-Path $previousAgentDir)) {
     Remove-Item $previousAgentDir -Recurse -Force
-    Write-Skip 'Removed previous Agent payload after successful startup.'
+    Write-Skip 'Removed previous Agent payload after authenticated health verification.'
 }
 
 if (-not $silentUpdate) {

@@ -20,6 +20,8 @@ SERVICE_USER="${GSC_USER:-gsc}"
 VERSION="${GSC_VERSION:-}"
 UNIT_NAME="gameservercontrol-agent.service"
 HAD_PREVIOUS=0
+UPDATE_HEALTH_TOKEN_FILE="$INSTALL_DIR/.update-health-token"
+UPDATE_HEALTH_TOKEN=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; GRAY='\033[0;90m'; NC='\033[0m'
 step()  { echo -e "\n${CYAN}==>${NC} $*"; }
@@ -35,11 +37,58 @@ echo "Repository: $REPO"
 [[ $EUID -eq 0 ]] || fail "Run as root (sudo)."
 
 step "Checking prerequisites"
-for tool in curl tar systemctl; do
+for tool in curl tar systemctl grep awk od tr hostname; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool not found in PATH."
 done
 ok "curl, tar, systemctl all present."
 ok "Self-contained release — system .NET runtime is not required."
+
+local_health_url() {
+    local bind="${1:-http://127.0.0.1:5099}"
+    if [[ "$bind" =~ ^(https?)://(\[[^]]+\]|[^/:]+)(:([0-9]+))?/?$ ]]; then
+        local scheme="${BASH_REMATCH[1]}"
+        local host="${BASH_REMATCH[2]}"
+        local port="${BASH_REMATCH[4]}"
+        case "$host" in
+            '*'|'+'|'0.0.0.0'|'[::]')
+                if [[ "$scheme" == "https" ]]; then host="$(hostname | tr '[:upper:]' '[:lower:]')"; else host='127.0.0.1'; fi
+                ;;
+        esac
+        if [[ -n "$port" ]]; then printf '%s://%s:%s/api/health' "$scheme" "$host" "$port"; else printf '%s://%s/api/health' "$scheme" "$host"; fi
+        return 0
+    fi
+    return 1
+}
+
+wait_for_agent_health() {
+    local url="$1" token="$2" expected_version="$3"
+    local deadline=$((SECONDS + 30))
+    local consecutive_successes=0 stable_process_id=""
+    while (( SECONDS < deadline )); do
+        if systemctl is-active --quiet "$UNIT_NAME"; then
+            local headers_file="$tmp_dir/health.headers" body_file="$tmp_dir/health.body"
+            : > "$headers_file"; : > "$body_file"
+            if curl -fsS --connect-timeout 2 --max-time 3 -D "$headers_file" -o "$body_file" -H "Authorization: Bearer $token" "$url" 2>/dev/null; then
+                local health_ok health_version process_id
+                health_ok="$(grep -oP '"ok"\s*:\s*\K(true|false)' "$body_file" | head -1 || true)"
+                health_version="$(awk -F': *' 'tolower($1)=="x-gameservercontrol-version" {gsub("\r", "", $2); print $2; exit}' "$headers_file")"
+                process_id="$(awk -F': *' 'tolower($1)=="x-gameservercontrol-pid" {gsub("\r", "", $2); print $2; exit}' "$headers_file")"
+                if [[ "$health_ok" == "true" && "$health_version" == "$expected_version" && "$process_id" =~ ^[1-9][0-9]*$ ]]; then
+                    if [[ "$stable_process_id" == "$process_id" ]]; then consecutive_successes=$((consecutive_successes + 1)); else stable_process_id="$process_id"; consecutive_successes=1; fi
+                else
+                    consecutive_successes=0; stable_process_id=""
+                fi
+            else
+                consecutive_successes=0; stable_process_id=""
+            fi
+        else
+            consecutive_successes=0; stable_process_id=""
+        fi
+        (( consecutive_successes >= 3 )) && return 0
+        sleep 2
+    done
+    return 1
+}
 
 step "Resolving release from GitHub"
 if [[ -n "$VERSION" ]]; then
@@ -57,7 +106,11 @@ tar_url="$(echo "$release_json" | grep -oP '"browser_download_url":\s*"\Khttps:/
 
 step "Downloading agent tarball"
 tmp_dir="$(mktemp -d)"
-trap 'rm -rf "$tmp_dir"' EXIT
+cleanup() {
+    rm -rf "$tmp_dir"
+    [[ -n "${UPDATE_HEALTH_TOKEN_FILE:-}" ]] && rm -f "$UPDATE_HEALTH_TOKEN_FILE" 2>/dev/null || true
+}
+trap cleanup EXIT
 curl -fsSL "$tar_url" -o "$tmp_dir/agent.tar.gz"
 ok "Downloaded."
 
@@ -146,17 +199,29 @@ unit_src="$INSTALL_DIR/$UNIT_NAME"
 cp "$unit_src" "/etc/systemd/system/$UNIT_NAME"
 systemctl daemon-reload
 systemctl enable "$UNIT_NAME" >/dev/null 2>&1 || true
+bind="$(grep -oP '"Bind"\s*:\s*"\K[^"]+' "$INSTALL_DIR/appsettings.json" | head -1 || true)"
+health_url="$(local_health_url "${bind:-http://127.0.0.1:5099}")" || fail "Agent:Bind is not a supported local HTTP(S) URL: ${bind:-<empty>}"
+expected_version="${tag#v}"
+UPDATE_HEALTH_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+printf '%s' "$UPDATE_HEALTH_TOKEN" > "$UPDATE_HEALTH_TOKEN_FILE"
+chown "$SERVICE_USER:$SERVICE_USER" "$UPDATE_HEALTH_TOKEN_FILE"
+chmod 600 "$UPDATE_HEALTH_TOKEN_FILE"
+skip "Prepared restricted health-only update credential."
+
 systemctl start "$UNIT_NAME" || true
-sleep 2
-if systemctl is-active --quiet "$UNIT_NAME"; then
-    ok "$UNIT_NAME running."
+if wait_for_agent_health "$health_url" "$UPDATE_HEALTH_TOKEN" "$expected_version"; then
+    rm -f "$UPDATE_HEALTH_TOKEN_FILE"
+    UPDATE_HEALTH_TOKEN=""
+    ok "$UNIT_NAME passed authenticated health/version checks for $expected_version with a stable process."
     if [[ $HAD_PREVIOUS -eq 1 ]]; then
         rm -rf "$PREVIOUS_DIR"
-        skip "Removed previous Agent payload after successful startup."
+        skip "Removed previous Agent payload after authenticated health verification."
     fi
 else
+    rm -f "$UPDATE_HEALTH_TOKEN_FILE"
+    UPDATE_HEALTH_TOKEN=""
     if [[ $HAD_PREVIOUS -eq 1 ]] && [[ -d "$PREVIOUS_DIR" ]]; then
-        warn "New Agent did not become healthy. Rolling back the previous payload."
+        warn "New Agent failed authenticated health/version stability checks. Rolling back the previous payload."
         systemctl stop "$UNIT_NAME" >/dev/null 2>&1 || true
         rm -rf "$INSTALL_DIR"
         mv "$PREVIOUS_DIR" "$INSTALL_DIR"
@@ -168,11 +233,12 @@ else
         systemctl start "$UNIT_NAME" || true
         if systemctl is-active --quiet "$UNIT_NAME"; then
             ok "Previous Agent payload restored and service restarted."
-            fail "New Agent failed to start. The previous Agent payload was restored."
+            fail "New Agent failed authenticated health/version stability checks. The previous Agent payload was restored."
         fi
-        fail "New Agent failed to start and rollback could not restart the previous service."
+        fail "New Agent failed health verification and rollback could not restart the previous service."
     fi
-    fail "Service did not become active. Check: journalctl -u $UNIT_NAME -n 50"
+    systemctl stop "$UNIT_NAME" >/dev/null 2>&1 || true
+    fail "New Agent failed authenticated health/version stability checks. Check: journalctl -u $UNIT_NAME -n 50"
 fi
 
 step "Secret state"
