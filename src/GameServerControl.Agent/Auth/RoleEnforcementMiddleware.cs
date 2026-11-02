@@ -22,6 +22,8 @@ public sealed class RoleEnforcementMiddleware
 
     public async Task InvokeAsync(HttpContext ctx)
     {
+        GameServerControl.Agent.Security.WebSecurityHeadersMiddleware.Apply(ctx.Response.Headers);
+
         var p = ctx.Request.Path.Value ?? "";
         var roleClaim = ctx.User?.FindFirst(TokenAuthHandler.RoleClaim)?.Value;
         var isReadOnly = string.Equals(roleClaim, nameof(TokenRole.ReadOnly), StringComparison.OrdinalIgnoreCase);
