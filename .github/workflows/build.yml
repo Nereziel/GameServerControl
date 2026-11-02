@@ -133,7 +133,9 @@ jobs:
           cat > /tmp/gsc-cloud-ci-secrets.json <<'JSON'
           {
             "AGENT_ORIGIN": "https://origin.invalid",
-            "AGENT_API_TOKEN": "ci-agent-token",
+            "AGENT_ADMIN_TOKEN": "ci-admin-agent-token",
+            "AGENT_READONLY_TOKEN": "ci-readonly-agent-token",
+            "ACCESS_ADMIN_EMAILS": "admin@example.invalid",
             "ORIGIN_ACCESS_CLIENT_ID": "ci-client-id",
             "ORIGIN_ACCESS_CLIENT_SECRET": "ci-client-secret",
             "ACCESS_TEAM_DOMAIN": "https://ci.cloudflareaccess.com",
