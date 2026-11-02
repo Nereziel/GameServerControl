@@ -22,6 +22,7 @@ public sealed class AuthenticationFailureThrottle
     }
 
     private readonly ConcurrentDictionary<string, ClientState> _clients = new(StringComparer.Ordinal);
+    private readonly object _clientCreationGate = new();
     private readonly int _maxFailures;
     private readonly int _maxTrackedClients;
     private readonly TimeSpan _window;
@@ -58,9 +59,6 @@ public sealed class AuthenticationFailureThrottle
 
             if (state.BlockedUntil != default)
                 state.BlockedUntil = default;
-
-            if (state.Failures.Count == 0)
-                RemoveExact(clientKey, state);
         }
 
         return false;
@@ -70,11 +68,8 @@ public sealed class AuthenticationFailureThrottle
     {
         CleanupIfNeeded(now);
 
-        if (!_clients.TryGetValue(clientKey, out var state))
-        {
-            if (_clients.Count >= _maxTrackedClients) return;
-            state = _clients.GetOrAdd(clientKey, _ => new ClientState { LastSeen = now });
-        }
+        var state = GetOrCreateState(clientKey, now);
+        if (state is null) return;
 
         lock (state.Gate)
         {
@@ -95,7 +90,29 @@ public sealed class AuthenticationFailureThrottle
     {
         if (!_clients.TryGetValue(clientKey, out var state)) return;
         lock (state.Gate)
-            RemoveExact(clientKey, state);
+        {
+            state.Failures.Clear();
+            state.BlockedUntil = default;
+            state.LastSeen = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private ClientState? GetOrCreateState(string clientKey, DateTimeOffset now)
+    {
+        if (_clients.TryGetValue(clientKey, out var existing)) return existing;
+
+        // Only first-seen clients take this lock. Serializing creation makes the
+        // MaxTrackedClients limit a hard memory bound even under concurrent new IPs.
+        lock (_clientCreationGate)
+        {
+            if (_clients.TryGetValue(clientKey, out existing)) return existing;
+            if (_clients.Count >= _maxTrackedClients) return null;
+
+            var created = new ClientState { LastSeen = now };
+            return _clients.TryAdd(clientKey, created)
+                ? created
+                : (_clients.TryGetValue(clientKey, out existing) ? existing : null);
+        }
     }
 
     private void PruneFailures(ClientState state, DateTimeOffset now)
