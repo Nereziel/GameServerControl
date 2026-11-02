@@ -1,17 +1,17 @@
 using System.Collections.Concurrent;
-using System.Globalization;
 
 namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// Bounded in-memory tracker for repeated authentication failures by direct peer address.
-/// Successful authenticated requests clear that peer's failure state. Authorization failures
-/// (403) are deliberately not counted because they represent a valid credential with a
-/// restricted role rather than a failed authentication attempt.
+/// Successful authentication clears that peer's failure state. Authorization failures are
+/// deliberately outside this class because a valid ReadOnly credential must never count as
+/// a failed authentication attempt.
 /// </summary>
 public sealed class AuthenticationFailureThrottle
 {
     public const int MaxTrackedClients = 4096;
+    public static AuthenticationFailureThrottle Shared { get; } = new();
 
     private sealed class ClientState
     {
@@ -23,15 +23,21 @@ public sealed class AuthenticationFailureThrottle
 
     private readonly ConcurrentDictionary<string, ClientState> _clients = new(StringComparer.Ordinal);
     private readonly int _maxFailures;
+    private readonly int _maxTrackedClients;
     private readonly TimeSpan _window;
     private readonly TimeSpan _blockDuration;
     private long _operations;
 
-    public AuthenticationFailureThrottle(IConfiguration cfg)
+    public AuthenticationFailureThrottle(
+        int maxFailures = 8,
+        TimeSpan? window = null,
+        TimeSpan? blockDuration = null,
+        int maxTrackedClients = MaxTrackedClients)
     {
-        _maxFailures = ReadBoundedInt(cfg["Agent:AuthThrottle:MaxFailures"], fallback: 8, min: 2, max: 100);
-        _window = TimeSpan.FromSeconds(ReadBoundedInt(cfg["Agent:AuthThrottle:WindowSeconds"], fallback: 60, min: 10, max: 3600));
-        _blockDuration = TimeSpan.FromSeconds(ReadBoundedInt(cfg["Agent:AuthThrottle:BlockSeconds"], fallback: 60, min: 10, max: 3600));
+        _maxFailures = Math.Clamp(maxFailures, 2, 100);
+        _window = Clamp(window ?? TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10), TimeSpan.FromHours(1));
+        _blockDuration = Clamp(blockDuration ?? TimeSpan.FromMinutes(1), TimeSpan.FromSeconds(10), TimeSpan.FromHours(1));
+        _maxTrackedClients = Math.Clamp(maxTrackedClients, 1, MaxTrackedClients);
     }
 
     public bool TryGetRetryAfter(string clientKey, DateTimeOffset now, out TimeSpan retryAfter)
@@ -39,7 +45,6 @@ public sealed class AuthenticationFailureThrottle
         retryAfter = TimeSpan.Zero;
         if (!_clients.TryGetValue(clientKey, out var state)) return false;
 
-        var remove = false;
         lock (state.Gate)
         {
             state.LastSeen = now;
@@ -53,10 +58,11 @@ public sealed class AuthenticationFailureThrottle
 
             if (state.BlockedUntil != default)
                 state.BlockedUntil = default;
-            remove = state.Failures.Count == 0;
+
+            if (state.Failures.Count == 0)
+                RemoveExact(clientKey, state);
         }
 
-        if (remove) _clients.TryRemove(new KeyValuePair<string, ClientState>(clientKey, state));
         return false;
     }
 
@@ -66,7 +72,7 @@ public sealed class AuthenticationFailureThrottle
 
         if (!_clients.TryGetValue(clientKey, out var state))
         {
-            if (_clients.Count >= MaxTrackedClients) return;
+            if (_clients.Count >= _maxTrackedClients) return;
             state = _clients.GetOrAdd(clientKey, _ => new ClientState { LastSeen = now });
         }
 
@@ -86,7 +92,11 @@ public sealed class AuthenticationFailureThrottle
     }
 
     public void RecordSuccess(string clientKey)
-        => _clients.TryRemove(clientKey, out _);
+    {
+        if (!_clients.TryGetValue(clientKey, out var state)) return;
+        lock (state.Gate)
+            RemoveExact(clientKey, state);
+    }
 
     private void PruneFailures(ClientState state, DateTimeOffset now)
     {
@@ -102,56 +112,18 @@ public sealed class AuthenticationFailureThrottle
         foreach (var pair in _clients)
         {
             var state = pair.Value;
-            var stale = false;
             lock (state.Gate)
-                stale = state.LastSeen < staleBefore && state.BlockedUntil <= now;
-            if (stale) _clients.TryRemove(new KeyValuePair<string, ClientState>(pair.Key, state));
+            {
+                if (state.LastSeen < staleBefore && state.BlockedUntil <= now)
+                    RemoveExact(pair.Key, state);
+            }
         }
     }
 
-    private static int ReadBoundedInt(string? text, int fallback, int min, int max)
-        => int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
-            ? Math.Clamp(value, min, max)
-            : fallback;
-}
+    private bool RemoveExact(string clientKey, ClientState state)
+        => ((ICollection<KeyValuePair<string, ClientState>>)_clients)
+            .Remove(new KeyValuePair<string, ClientState>(clientKey, state));
 
-public sealed class AuthenticationFailureThrottleMiddleware
-{
-    private readonly RequestDelegate _next;
-
-    public AuthenticationFailureThrottleMiddleware(RequestDelegate next)
-    {
-        _next = next;
-    }
-
-    public async Task InvokeAsync(HttpContext context, AuthenticationFailureThrottle throttle)
-    {
-        if (!IsProtectedPath(context.Request.Path) || context.Connection.RemoteIpAddress is null)
-        {
-            await _next(context);
-            return;
-        }
-
-        var clientKey = context.Connection.RemoteIpAddress.ToString();
-        var now = DateTimeOffset.UtcNow;
-        if (throttle.TryGetRetryAfter(clientKey, now, out var retryAfter))
-        {
-            context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-            context.Response.Headers["Retry-After"] = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds))
-                .ToString(CultureInfo.InvariantCulture);
-            context.Response.Headers.CacheControl = "no-store";
-            await context.Response.WriteAsJsonAsync(new { error = "Too many authentication failures. Try again later." });
-            return;
-        }
-
-        await _next(context);
-
-        if (context.Response.StatusCode == StatusCodes.Status401Unauthorized)
-            throttle.RecordFailure(clientKey, DateTimeOffset.UtcNow);
-        else if (context.User.Identity?.IsAuthenticated == true)
-            throttle.RecordSuccess(clientKey);
-    }
-
-    private static bool IsProtectedPath(PathString path)
-        => path.StartsWithSegments("/api") || path.StartsWithSegments("/hubs");
+    private static TimeSpan Clamp(TimeSpan value, TimeSpan min, TimeSpan max)
+        => value < min ? min : value > max ? max : value;
 }
