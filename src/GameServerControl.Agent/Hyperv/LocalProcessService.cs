@@ -35,6 +35,7 @@ public sealed class LocalProcessService
     private readonly IHubContext<StatusHub> _hub;
     private readonly WindowsRunnerServiceManager _windowsRunner;
     private readonly ConcurrentDictionary<string, ConsoleSession> _consoleSessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _runnerConsolePumps = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _firewallStates = new(StringComparer.OrdinalIgnoreCase);
 
     public LocalProcessService(
@@ -159,10 +160,73 @@ public sealed class LocalProcessService
             if (snapshot is null)
                 return new LocalConsoleState(true, false, "Runner returned no console state.", Array.Empty<LogLine>());
             var lines = snapshot.Lines.Select(line => new LogLine(def.Id, line.At, line.Source, line.Text)).ToArray();
+            if (snapshot.InputAvailable) EnsureRunnerConsolePump(def, snapshot.LastSequence);
             return new LocalConsoleState(snapshot.Supported, snapshot.InputAvailable, snapshot.Message, lines);
         }
 
         return GetLocalConsoleState(def);
+    }
+
+    private void EnsureRunnerConsolePump(ServerDef def, long lastSequence)
+    {
+        var cts = new CancellationTokenSource();
+        if (!_runnerConsolePumps.TryAdd(def.Id, cts))
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _ = Task.Run(() => PumpRunnerConsoleAsync(def, lastSequence, cts), CancellationToken.None);
+    }
+
+    private async Task PumpRunnerConsoleAsync(ServerDef def, long lastSequence, CancellationTokenSource pumpCts)
+    {
+        var ct = pumpCts.Token;
+        var consecutiveFailures = 0;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var response = await _windowsRunner.PollConsoleStateAsync(def, ct);
+                if (!response.Ok || response.Console is null)
+                {
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= 20) break;
+                    await Task.Delay(500, ct);
+                    continue;
+                }
+
+                consecutiveFailures = 0;
+                var snapshot = response.Console;
+                foreach (var runnerLine in snapshot.Lines
+                             .Where(line => line.Sequence > lastSequence)
+                             .OrderBy(line => line.Sequence))
+                {
+                    var line = new LogLine(def.Id, runnerLine.At, runnerLine.Source, runnerLine.Text);
+                    try
+                    {
+                        await _hub.Clients.Group(StatusHub.ServerGroup(def.Id)).SendAsync("logLine", line, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Runner console SignalR broadcast failed for {ServerId}", def.Id);
+                    }
+                    lastSequence = runnerLine.Sequence;
+                }
+
+                if (!snapshot.InputAvailable) break;
+                await Task.Delay(250, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Runner console pump failed for {ServerId}", def.Id);
+        }
+        finally
+        {
+            if (_runnerConsolePumps.TryRemove(def.Id, out var removed)) removed.Dispose();
+        }
     }
 
     private LocalConsoleState GetLocalConsoleState(ServerDef def)
