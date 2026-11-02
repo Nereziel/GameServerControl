@@ -8,7 +8,7 @@ public static class BackupSafety
             throw new InvalidDataException("Backup archive entry path is empty.");
 
         var value = entryName.Replace('\\', '/');
-        if (value.StartsWith('/', StringComparison.Ordinal)
+        if (value.StartsWith("/", StringComparison.Ordinal)
             || (value.Length >= 2 && char.IsLetter(value[0]) && value[1] == ':'))
             throw new InvalidDataException("Backup archive contains a rooted path.");
 
