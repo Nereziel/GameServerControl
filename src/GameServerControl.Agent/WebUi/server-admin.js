@@ -74,8 +74,10 @@ async function runConsole(id){const input=$('#consoleIn'),out=$('#consoleOut'),c
 
 /* Authenticated identity and ReadOnly UX. Backend authorization remains authoritative. */
 let AUTH={id:null,name:null,role:null};
-const ADMIN_MUTATION_CALLS=/^(?:action|manageAction|rconPlayer|runConsole|testDiscordEdit|serverWorkspace(?:Save|Create|Restore|Delete|Send|Reset|Clear|PlayerAction)\w*|gscFiles(?:Save|Restore)|(?:save|delete|remove|install|update|start|stop|restart|apply|backup|restore|ban|kick|send|clear|create)[A-Za-z0-9_]*)$/i;
+const ADMIN_MUTATION_CALLS=/^(?:action|manageAction|rconPlayer|runConsole|testDiscordEdit|serverWorkspace(?:Save|Create|Restore|Delete|Send|Reset|Clear|PlayerAction|Admin)\w*|gscFiles(?:Save|Restore))$/i;
+const ADMIN_MUTATION_PREFIXES=['save','delete','remove','install','update','start','stop','restart','apply','backup','restore','ban','kick','send','clear','create','add'];
 const ADMIN_NAV_CALLS=/^(?:openCreate|openAddExisting|openTokens|openUpdate)$/i;
+const ADMIN_STATIC_IDS=['updateBtn','createServerBtn','addExistingBtn','tokensBtn'];
 
 function isReadOnly(){return String(AUTH?.role||'').toLowerCase()==='readonly'}
 function adminDisabled(){return isReadOnly()?'disabled':''}
@@ -109,7 +111,10 @@ function delegatedActionNames(control){
   }catch{return[name]}
 }
 function delegatedActionRequiresAdmin(control){
-  return delegatedActionNames(control).some(name=>ADMIN_MUTATION_CALLS.test(name)||ADMIN_NAV_CALLS.test(name));
+  return delegatedActionNames(control).some(name=>{
+    const lower=String(name||'').toLowerCase();
+    return ADMIN_MUTATION_CALLS.test(name)||ADMIN_NAV_CALLS.test(name)||ADMIN_MUTATION_PREFIXES.some(prefix=>lower.startsWith(prefix));
+  });
 }
 
 function applyAuthUi(){
@@ -122,6 +127,21 @@ function applyAuthUi(){
       control.title=explanation;
     }
   });
+  for(const id of ADMIN_STATIC_IDS){
+    const control=document.getElementById(id);
+    if(control){control.disabled=true;control.title=explanation}
+  }
+}
+
+const FILE_EDITOR_BOUND=new WeakSet();
+const FILE_EDITOR_ACTION_ATTRS=['data-gsc-action','data-gsc-args','data-gsc-event','data-gsc-key','data-gsc-pass','data-gsc-cap'];
+function applyFilesEditorBindings(){
+  const editor=document.getElementById('fseText');
+  if(!editor||FILE_EDITOR_BOUND.has(editor))return;
+  for(const attr of FILE_EDITOR_ACTION_ATTRS)editor.removeAttribute(attr);
+  editor.addEventListener('input',()=>globalThis.gscFilesInput?.());
+  editor.addEventListener('keydown',event=>globalThis.gscFilesKeydown?.(event));
+  FILE_EDITOR_BOUND.add(editor);
 }
 
 const AUTH_BASE_BOOT=boot;
@@ -129,14 +149,16 @@ boot=async function(){
   await loadAuthIdentity();
   await AUTH_BASE_BOOT();
   applyAuthUi();
+  applyFilesEditorBindings();
   if(isReadOnly()&&typeof setNotice==='function')
     setNotice('Read-only access: viewing is allowed, but changes and interactive commands require an Admin token.','info',true,'Read-only');
 };
 
-const AUTH_UI_OBSERVER=new MutationObserver(()=>applyAuthUi());
+const AUTH_UI_OBSERVER=new MutationObserver(()=>{applyAuthUi();applyFilesEditorBindings()});
 window.addEventListener('DOMContentLoaded',()=>{
   AUTH_UI_OBSERVER.observe(document.body,{childList:true,subtree:true});
   applyAuthUi();
+  applyFilesEditorBindings();
 });
 
 /* Operational UX extensions. Keep the existing update/stats modules as the transport/rendering
