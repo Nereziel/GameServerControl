@@ -4,6 +4,8 @@ let jwks = null;
 let jwksFor = '';
 
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const ADMIN_ROLE = 'Admin';
+const READONLY_ROLE = 'ReadOnly';
 
 function jsonError(status, error, detail = null) {
   return Response.json(detail ? { error, detail } : { error }, {
@@ -25,7 +27,8 @@ function requiredConfig(env) {
   const missing = [];
   for (const key of [
     'AGENT_ORIGIN',
-    'AGENT_API_TOKEN',
+    'AGENT_ADMIN_TOKEN',
+    'AGENT_READONLY_TOKEN',
     'ORIGIN_ACCESS_CLIENT_ID',
     'ORIGIN_ACCESS_CLIENT_SECRET',
     'ACCESS_TEAM_DOMAIN',
@@ -34,6 +37,36 @@ function requiredConfig(env) {
     if (!env[key]) missing.push(key);
   }
   return missing;
+}
+
+function adminEmails(env) {
+  return new Set(String(env.ACCESS_ADMIN_EMAILS || '')
+    .split(/[,;\n\r]+/)
+    .map(value => value.trim().toLowerCase())
+    .filter(Boolean));
+}
+
+export function resolveAccessRole(payload, env) {
+  const email = typeof payload?.email === 'string' ? payload.email.trim().toLowerCase() : '';
+  return email && adminEmails(env).has(email) ? ADMIN_ROLE : READONLY_ROLE;
+}
+
+export function agentTokenForRole(role, env) {
+  const key = role === ADMIN_ROLE ? 'AGENT_ADMIN_TOKEN' : 'AGENT_READONLY_TOKEN';
+  const value = env[key];
+  if (!value) throw new Error(`${key} is required for ${role} gateway access.`);
+  return value;
+}
+
+export function authorizeGatewayRequest(method, role) {
+  if (WRITE_METHODS.has(String(method || '').toUpperCase()) && role !== ADMIN_ROLE) {
+    return {
+      allowed: false,
+      status: 403,
+      error: 'Read-only access cannot modify GameServerControl.'
+    };
+  }
+  return { allowed: true, status: 200, error: null };
 }
 
 async function verifyPanelAccess(request, env) {
@@ -68,8 +101,11 @@ function hasValidBrowserOrigin(request) {
 
 export async function fetchAgentHealth(env) {
   const target = new URL('/api/health', normalizedOrigin(env.AGENT_ORIGIN));
+  const token = env.AGENT_READONLY_TOKEN || env.AGENT_API_TOKEN;
+  if (!token) return { ok: false, status: 0, ts: null };
+
   const headers = new Headers();
-  headers.set('authorization', `Bearer ${env.AGENT_API_TOKEN}`);
+  headers.set('authorization', `Bearer ${token}`);
   headers.set('cf-access-client-id', env.ORIGIN_ACCESS_CLIENT_ID);
   headers.set('cf-access-client-secret', env.ORIGIN_ACCESS_CLIENT_SECRET);
   headers.set('accept', 'application/json');
@@ -135,7 +171,7 @@ function relayWebSocket(upstreamResponse) {
   return new Response(null, { status: 101, webSocket: client, headers });
 }
 
-async function proxyToAgent(request, env, accessPayload) {
+async function proxyToAgent(request, env, accessPayload, role) {
   const incoming = new URL(request.url);
   const origin = normalizedOrigin(env.AGENT_ORIGIN);
   const target = new URL(origin);
@@ -148,13 +184,15 @@ async function proxyToAgent(request, env, accessPayload) {
   headers.delete('cookie');
   headers.delete('cf-access-jwt-assertion');
   headers.delete('cf-access-authenticated-user-email');
-  headers.set('authorization', `Bearer ${env.AGENT_API_TOKEN}`);
+  headers.delete('x-gameservercontrol-gateway');
+  headers.delete('x-gameservercontrol-remote-user');
+  headers.set('authorization', `Bearer ${agentTokenForRole(role, env)}`);
   headers.set('cf-access-client-id', env.ORIGIN_ACCESS_CLIENT_ID);
   headers.set('cf-access-client-secret', env.ORIGIN_ACCESS_CLIENT_SECRET);
   headers.set('x-gameservercontrol-gateway', 'cloudflare-worker');
 
   const remoteUser = accessPayload?.email || accessPayload?.sub;
-  if (remoteUser) headers.set('x-gameservercontrol-remote-user', String(remoteUser));
+  if (remoteUser) headers.set('x-gameservercontrol-remote-user', String(remoteUser).slice(0, 320));
 
   const init = {
     method: request.method,
@@ -213,12 +251,14 @@ export default {
       const access = await authenticatedAccess(request, env);
       if (access.error) return access.error;
 
+      const role = resolveAccessRole(access.payload, env);
       const agent = await fetchAgentHealth(env);
       const remoteUser = access.payload?.email || access.payload?.sub || null;
       return Response.json({
         ok: agent.ok,
         mode: 'cloudflare',
         user: remoteUser ? String(remoteUser) : null,
+        role,
         agent: {
           reachable: agent.ok,
           status: agent.status,
@@ -240,7 +280,12 @@ export default {
       const access = await authenticatedAccess(request, env);
       if (access.error) return access.error;
 
-      return proxyToAgent(request, env, access.payload);
+      const role = resolveAccessRole(access.payload, env);
+      const authorization = authorizeGatewayRequest(request.method, role);
+      if (!authorization.allowed)
+        return jsonError(authorization.status, authorization.error);
+
+      return proxyToAgent(request, env, access.payload, role);
     }
 
     return env.ASSETS.fetch(request);
