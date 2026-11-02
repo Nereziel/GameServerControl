@@ -70,6 +70,7 @@ async function boot(){
 }
 
 async function init(){
+  try{localStorage.removeItem(CFG_KEY)}catch{}
   const params=new URLSearchParams(location.search);
   const token=params.get('token'),url=params.get('url');
   if(token){CFG={url:(url||location.origin).replace(/\/+$/,''),token};sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));history.replaceState({},'',location.pathname+location.hash)}
