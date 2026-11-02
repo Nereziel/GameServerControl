@@ -10,5 +10,6 @@
     <ProjectReference Include="../../src/GameServerControl.Shared/GameServerControl.Shared.csproj" />
     <Compile Include="../../src/GameServerControl.Agent/Auth/TokenRegistry.cs" Link="TokenRegistry.cs" />
     <Compile Include="../../src/GameServerControl.Agent/Auth/AuthenticationFailureThrottle.cs" Link="AuthenticationFailureThrottle.cs" />
+    <Compile Include="../../src/GameServerControl.Agent/Auth/UpdateHealthToken.cs" Link="UpdateHealthToken.cs" />
   </ItemGroup>
 </Project>
