@@ -51,6 +51,47 @@ ServerDef Server(string appId, string[] args, NetworkPort[] ports) => new(
     HostingMode: HostingMode.BareMetal,
     NetworkPorts: ports);
 
+foreach (var duplicate in GameProfiles.All
+             .GroupBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+             .Where(g => g.Count() > 1))
+    failures.Add($"Duplicate profile key: {duplicate.Key}");
+
+foreach (var duplicate in GameProfiles.All
+             .Where(x => !string.IsNullOrWhiteSpace(x.SteamAppId))
+             .GroupBy(x => x.SteamAppId!, StringComparer.OrdinalIgnoreCase)
+             .Where(g => g.Count() > 1))
+    failures.Add($"Duplicate Steam App ID: {duplicate.Key}");
+
+foreach (var profile in GameProfiles.All)
+{
+    Check(!string.IsNullOrWhiteSpace(profile.Key), "Profile key may not be blank.");
+    foreach (var port in profile.DefaultPorts ?? Array.Empty<NetworkPort>())
+    {
+        if (port.Port is < 1 or > 65535
+            || port.EndPort is < 1 or > 65535
+            || (port.EndPort is not null && port.EndPort < port.Port))
+            failures.Add($"Invalid default port in profile {profile.Key}: {port.Name} {port.Port}-{port.EndPort}");
+    }
+
+    foreach (var root in GameProfileMetadata.ConfigRootsFor(profile))
+    {
+        var normalized = root.RelativePath.Replace('\\', '/');
+        Check(!Path.IsPathRooted(root.RelativePath) && !normalized.Split('/', StringSplitOptions.RemoveEmptyEntries).Contains(".."),
+            $"Config root for {profile.Key} must remain relative and may not traverse parents: {root.RelativePath}");
+    }
+}
+
+var enshrouded = RequireProfile("enshrouded");
+Check(enshrouded.SteamAppId == "2278520", "Enshrouded dedicated-server Steam App ID must remain 2278520.");
+Check(!enshrouded.Installable, "Enshrouded must remain manual/discovery-only while the official dedicated server is Windows-only.");
+Check(enshrouded.ExecutableRelative == "enshrouded_server.exe", "Enshrouded executable changed unexpectedly.");
+Check(enshrouded.SaveDirs.Any(x => x.EndsWith("savegame", StringComparison.OrdinalIgnoreCase)), "Enshrouded savegame directory is missing.");
+var enshroudedPort = Port(enshrouded, "Query / game");
+Check(enshroudedPort is not null && enshroudedPort.Protocol == NetworkProtocol.Udp && enshroudedPort.Port == 15637,
+    "Enshrouded query/game port must default to UDP 15637.");
+Check(GameProfileMetadata.ConfigRootsFor(enshrouded).Any(x => x.RelativePath == "." && !x.Recursive),
+    "Enshrouded must expose its top-level enshrouded_server.json through safe config metadata.");
+
 var valheim = RequireProfile("valheim");
 Check(valheim.SteamAppId == "896660", "Valheim Steam App ID must remain 896660.");
 Check(valheim.Installable, "Valheim must remain installable.");
