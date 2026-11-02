@@ -3,6 +3,13 @@ using System.Diagnostics;
 namespace GameServerControl.Agent.Notifications;
 
 public sealed record AgentUpdateLaunch(bool Started, string Message);
+public sealed record AgentUpdatePreflight(
+    bool Supported,
+    bool Ready,
+    string Platform,
+    string? HelperPath,
+    bool HelperPresent,
+    string Message);
 
 /// <summary>
 /// Starts an updater process outside the Agent directory so the Windows service can safely
@@ -21,24 +28,61 @@ public sealed class AgentUpdateService
         _logger = logger;
     }
 
-    public AgentUpdateLaunch StartLatestUpdate()
+    public AgentUpdatePreflight GetPreflight()
     {
         if (!OperatingSystem.IsWindows())
-            return new(false, "Web-triggered self-update is currently supported on Windows only. Use the Linux release installer on Linux.");
+        {
+            var platform = OperatingSystem.IsLinux() ? "Linux" : OperatingSystem.IsMacOS() ? "macOS" : "Unknown";
+            return new AgentUpdatePreflight(
+                Supported: false,
+                Ready: false,
+                Platform: platform,
+                HelperPath: null,
+                HelperPresent: false,
+                Message: "Web-triggered self-update is supported on Windows only. Use the Linux release installer on Linux.");
+        }
+
+        var agentDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var installRoot = Directory.GetParent(agentDir)?.FullName;
+        if (string.IsNullOrWhiteSpace(installRoot))
+        {
+            return new AgentUpdatePreflight(
+                Supported: true,
+                Ready: false,
+                Platform: "Windows",
+                HelperPath: null,
+                HelperPresent: false,
+                Message: "Could not determine the GameServerControl install root.");
+        }
+
+        var helper = Path.Combine(installRoot, "Update-GameServerControl.ps1");
+        var present = File.Exists(helper);
+        return new AgentUpdatePreflight(
+            Supported: true,
+            Ready: present,
+            Platform: "Windows",
+            HelperPath: helper,
+            HelperPresent: present,
+            Message: present
+                ? "Updater helper is ready. The Agent can perform a self-update."
+                : $"Updater helper is missing: {helper}. Re-run the Windows installer once to create it.");
+    }
+
+    public AgentUpdateLaunch StartLatestUpdate()
+    {
+        var preflight = GetPreflight();
+        if (!preflight.Ready)
+            return new(false, preflight.Message);
 
         if (Interlocked.CompareExchange(ref _launching, 1, 0) != 0)
             return new(false, "An update launch is already in progress.");
 
         try
         {
-            var agentDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var installRoot = Directory.GetParent(agentDir)?.FullName;
+            var helper = preflight.HelperPath!;
+            var installRoot = Path.GetDirectoryName(helper);
             if (string.IsNullOrWhiteSpace(installRoot))
                 return Fail("Could not determine the GameServerControl install root.");
-
-            var helper = Path.Combine(installRoot, "Update-GameServerControl.ps1");
-            if (!File.Exists(helper))
-                return Fail($"Updater helper is missing: {helper}. Re-run the Windows installer once to create it.");
 
             var psi = new ProcessStartInfo
             {
