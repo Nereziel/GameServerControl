@@ -66,6 +66,36 @@ public sealed class HypervService
         return r.Ok;
     }
 
+    public async Task<bool> RestoreCheckpointAsync(string vmName, string checkpointName, CancellationToken ct = default)
+    {
+        var r = await _ps.RunScriptAsync(@"
+param($n, $s)
+try {
+    $snap = Get-VMSnapshot -VMName $n -Name $s -ErrorAction Stop
+    Restore-VMSnapshot -VMSnapshot $snap -Confirm:$false -ErrorAction Stop
+} catch {
+    Write-Error $_
+    exit 1
+}", new Dictionary<string, object?> { ["n"] = vmName, ["s"] = checkpointName }, ct);
+        if (!r.Ok) _logger.LogError("Restore-VMSnapshot {Vm}/{Snapshot} failed: {Err}", vmName, checkpointName, r.ErrorText);
+        return r.Ok;
+    }
+
+    public async Task<bool> DeleteCheckpointAsync(string vmName, string checkpointName, CancellationToken ct = default)
+    {
+        var r = await _ps.RunScriptAsync(@"
+param($n, $s)
+try {
+    $snap = Get-VMSnapshot -VMName $n -Name $s -ErrorAction Stop
+    Remove-VMSnapshot -VMSnapshot $snap -Confirm:$false -ErrorAction Stop
+} catch {
+    Write-Error $_
+    exit 1
+}", new Dictionary<string, object?> { ["n"] = vmName, ["s"] = checkpointName }, ct);
+        if (!r.Ok) _logger.LogError("Remove-VMSnapshot {Vm}/{Snapshot} failed: {Err}", vmName, checkpointName, r.ErrorText);
+        return r.Ok;
+    }
+
     public async Task<string?> GetVmIpAsync(string vmName, CancellationToken ct = default)
     {
         var r = await _ps.RunScriptAsync(@"
