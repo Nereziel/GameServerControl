@@ -17,7 +17,7 @@ async function openConfig(id) {
     openModal(
       'Configuration — ' + (d?.name || id),
       `<form>${html}</form>`,
-      `<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveConfig('${jsq(id)}')">Save</button>`,
+      `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button class="btn primary" ${uiAction('saveConfig',[id])}>Save</button>`,
       true
     );
   } catch (e) {
@@ -64,13 +64,13 @@ async function openBackups(id) {
     const d = SERVERS.find(x => x.id === id);
     const list = await api(`/api/servers/${encodeURIComponent(id)}/backups`);
     const body = (list || []).length
-      ? (list || []).map(b => `<div class="job"><div class="jobname">${esc(b.checkpointName)}</div><div class="jobphase">${new Date(b.createdAt).toLocaleString()} · ${Math.round((b.sizeBytes || 0) / 1024 / 1024)} MB</div><div class="jobbuttons"><button class="btn" onclick="restoreBackup('${jsq(id)}','${encodeURIComponent(b.checkpointName)}')">Restore</button><button class="btn danger" onclick="deleteBackup('${jsq(id)}','${encodeURIComponent(b.checkpointName)}')">Delete</button></div></div>`).join('')
+      ? (list || []).map(b => `<div class="job"><div class="jobname">${esc(b.checkpointName)}</div><div class="jobphase">${new Date(b.createdAt).toLocaleString()} · ${Math.round((b.sizeBytes || 0) / 1024 / 1024)} MB</div><div class="jobbuttons"><button class="btn" ${uiAction('restoreBackup',[id,encodeURIComponent(b.checkpointName)])}>Restore</button><button class="btn danger" ${uiAction('deleteBackup',[id,encodeURIComponent(b.checkpointName)])}>Delete</button></div></div>`).join('')
       : '<div class="empty">No backups yet.</div>';
 
     openModal(
       'Backups — ' + (d?.name || id),
       body,
-      `<button class="btn primary" onclick="action('${jsq(id)}','backup');closeModal()">Backup now</button><button class="btn" onclick="closeModal()">Close</button>`,
+      `<button class="btn primary" ${uiActions([['action',[id,'backup']],['closeModal',[]]])}>Backup now</button><button class="btn" ${uiAction('closeModal')}>Close</button>`,
       true
     );
   } catch (e) {
@@ -145,7 +145,7 @@ async function openDiscover() {
     const libs = (r.librariesScanned || []).map(x => `<span class="pill">${esc(x)}</span>`).join('');
     const cards = list.map((x, i) => {
       const g = profileForDiscovery(x);
-      return `<div class="job"><div class="jobtop"><div style="font-size:24px">${g?.icon || '🖥'}</div><div class="grow"><div class="jobname">${esc(x.displayName)}</div><div class="jobphase">${esc(x.installPath)} · App ${esc(x.steamAppId)} · ${esc(x.source)}</div></div><span class="state ${x.alreadyConfigured ? 'up' : 'warn'}">${x.alreadyConfigured ? 'ADDED' : 'FOUND'}</span></div>${g?.note ? `<div class="help">${esc(g.note)}</div>` : ''}<div class="jobbuttons">${x.alreadyConfigured ? '<button class="btn" disabled>Already configured</button>' : `<button class="btn primary" onclick="addDiscovered(${i})">Add with game defaults</button>`}</div></div>`;
+      return `<div class="job"><div class="jobtop"><div style="font-size:24px">${g?.icon || '🖥'}</div><div class="grow"><div class="jobname">${esc(x.displayName)}</div><div class="jobphase">${esc(x.installPath)} · App ${esc(x.steamAppId)} · ${esc(x.source)}</div></div><span class="state ${x.alreadyConfigured ? 'up' : 'warn'}">${x.alreadyConfigured ? 'ADDED' : 'FOUND'}</span></div>${g?.note ? `<div class="help">${esc(g.note)}</div>` : ''}<div class="jobbuttons">${x.alreadyConfigured ? '<button class="btn" disabled>Already configured</button>' : `<button class="btn primary" ${uiAction('addDiscovered',[i])}>Add with game defaults</button>`}</div></div>`;
     }).join('');
 
     $('#modalBody').innerHTML = `<div class="summarybar"><div class="muted tiny">${list.length} detected install${list.length === 1 ? '' : 's'}</div></div>${libs ? `<div class="pills" style="margin-bottom:14px">${libs}</div>` : ''}${cards || '<div class="empty">No supported dedicated-server installs were detected.</div>'}`;
@@ -176,8 +176,8 @@ function openAddExisting() {
   const options = existingProfiles().map(g => `<option value="${esc(g.key)}">${esc(g.label)}</option>`).join('');
   openModal(
     'Add existing server',
-    `<div class="callout info">Registers an existing installation. Pick its game profile first so saves, logs and supported features can be filled automatically.</div><div class="field"><label>Game profile</label><select id="aProfile" onchange="applyExistingProfile()"><option value="">Custom / unknown</option>${options}</select></div><div class="formgrid"><div class="field"><label>Name</label><input id="aName" placeholder="My Server"></div><div class="field"><label>Server ID</label><input id="aId" placeholder="my-server"></div></div><div class="field"><label>Server folder</label><input id="aWork" class="mono" placeholder="C:\\GameServers\\Example" oninput="applyExistingProfile(false)"></div><div class="field"><label>Server executable</label><input id="aExe" class="mono"></div><div class="formgrid"><div class="field"><label>Save folders</label><textarea id="aSaves" class="mono"></textarea></div><div id="aLogWrap" class="field"><label>Log file</label><input id="aLog" class="mono"></div></div><details class="advanced"><summary>Advanced settings</summary><div class="advanced-body"><div class="field"><label>Start args — one per line</label><textarea id="aArgs" class="mono"></textarea></div><div class="formgrid three"><div class="field"><label>Steam App ID</label><input id="aSteam"></div><div class="field"><label>Game type</label><select id="aGame"><option>SteamGeneric</option><option>Windrose</option><option>Minecraft</option><option>Custom</option></select></div></div><div id="aRcon" class="hidden"><div class="section">RCON</div><div class="formgrid three"><div class="field"><label>Host</label><input id="aRhost" value="auto"></div><div class="field"><label>Port</label><input id="aRport" type="number" min="1" max="65535"></div><div class="field"><label>Password</label><input id="aRpass" type="password"></div></div></div></div></details>`,
-    '<button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" onclick="saveAddExisting()">Add server</button>',
+    `<div class="callout info">Registers an existing installation. Pick its game profile first so saves, logs and supported features can be filled automatically.</div><div class="field"><label>Game profile</label><select id="aProfile" ${uiAction('applyExistingProfile',[],{event:'change'})}><option value="">Custom / unknown</option>${options}</select></div><div class="formgrid"><div class="field"><label>Name</label><input id="aName" placeholder="My Server"></div><div class="field"><label>Server ID</label><input id="aId" placeholder="my-server"></div></div><div class="field"><label>Server folder</label><input id="aWork" class="mono" placeholder="C:\\GameServers\\Example" ${uiAction('applyExistingProfile',[false],{event:'input'})}></div><div class="field"><label>Server executable</label><input id="aExe" class="mono"></div><div class="formgrid"><div class="field"><label>Save folders</label><textarea id="aSaves" class="mono"></textarea></div><div id="aLogWrap" class="field"><label>Log file</label><input id="aLog" class="mono"></div></div><details class="advanced"><summary>Advanced settings</summary><div class="advanced-body"><div class="field"><label>Start args — one per line</label><textarea id="aArgs" class="mono"></textarea></div><div class="formgrid three"><div class="field"><label>Steam App ID</label><input id="aSteam"></div><div class="field"><label>Game type</label><select id="aGame"><option>SteamGeneric</option><option>Windrose</option><option>Minecraft</option><option>Custom</option></select></div></div><div id="aRcon" class="hidden"><div class="section">RCON</div><div class="formgrid three"><div class="field"><label>Host</label><input id="aRhost" value="auto"></div><div class="field"><label>Port</label><input id="aRport" type="number" min="1" max="65535"></div><div class="field"><label>Password</label><input id="aRpass" type="password"></div></div></div></div></details>`,
+    `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button class="btn primary" ${uiAction('saveAddExisting')}>Add server</button>`,
     true
   );
 }
@@ -284,7 +284,7 @@ async function sampleStats(id) {
 async function openStats(id) {
   const d = SERVERS.find(x => x.id === id);
   STAT_POINTS = [];
-  openModal('Stats — ' + (d?.name || id), '<div id="statsErr" class="tiny muted"></div><div id="statsChart"><div class="muted">Collecting samples…</div></div>', '<button class="btn" onclick="closeModal()">Close</button>', true);
+  openModal('Stats — ' + (d?.name || id), '<div id="statsErr" class="tiny muted"></div><div id="statsChart"><div class="muted">Collecting samples…</div></div>', `<button class="btn" ${uiAction('closeModal')}>Close</button>`, true);
   await sampleStats(id);
   const timer = setInterval(() => sampleStats(id), 2000);
   MODAL_CLEANUP = () => clearInterval(timer);
@@ -304,13 +304,13 @@ function appendLiveLog(line) {
 async function openLog(id) {
   const d = SERVERS.find(x => x.id === id);
   if (d?.hostingMode === 'Vm') {
-    return openModal('Live log — ' + (d?.name || id), '<div class="empty">Live log tailing is currently available for servers running on this machine. Hyper-V guest log tailing is not implemented yet.</div>', '<button class="btn" onclick="closeModal()">Close</button>');
+    return openModal('Live log — ' + (d?.name || id), '<div class="empty">Live log tailing is currently available for servers running on this machine. Hyper-V guest log tailing is not implemented yet.</div>', `<button class="btn" ${uiAction('closeModal')}>Close</button>`);
   }
 
   openModal(
     'Live log — ' + (d?.name || id),
     `<div class="tiny muted" style="margin-bottom:8px">Recent output followed by live server log · ${esc(d?.logPathInGuest || '')}</div><pre id="liveLog" class="log">Connecting…</pre>`,
-    '<button class="btn" onclick="closeModal()">Close</button>',
+    `<button class="btn" ${uiAction('closeModal')}>Close</button>`,
     true
   );
 
@@ -385,7 +385,7 @@ async function openLog(id) {
 }
 
 async function openTokens() {
-  openModal('API tokens', '<div id="tokensPane" class="muted">Loading…</div>', '<button class="btn" onclick="closeModal()">Close</button>', true);
+  openModal('API tokens', '<div id="tokensPane" class="muted">Loading…</div>', `<button class="btn" ${uiAction('closeModal')}>Close</button>`, true);
   await loadTokens();
 }
 
@@ -394,7 +394,7 @@ async function loadTokens() {
   if (!pane) return;
   try {
     const list = await api('/api/tokens');
-    pane.innerHTML = `<div class="callout info">Tokens authorize Agent API access. Raw token values are shown only once when created.</div><div class="section">Existing tokens</div>${list.length ? list.map(t => `<div class="job"><div class="jobtop"><div class="grow"><div class="jobname">${esc(t.name)}</div><div class="jobphase">${esc(t.id)} · ${esc(t.role)} · ${esc(t.token || '')}</div></div><button class="btn danger" onclick="deleteToken('${jsq(t.id)}')">Delete</button></div></div>`).join('') : '<div class="muted">No secondary tokens.</div>'}<div class="section">Create token</div><div class="formgrid three"><div class="field"><label>ID</label><input id="tokId" placeholder="laptop"></div><div class="field"><label>Name</label><input id="tokName" placeholder="Laptop admin"></div><div class="field"><label>Role</label><select id="tokRole"><option>Admin</option><option>ReadOnly</option></select></div></div><button class="btn primary" onclick="createToken()">Create token</button><div id="newTokenBox"></div>`;
+    pane.innerHTML = `<div class="callout info">Tokens authorize Agent API access. Raw token values are shown only once when created.</div><div class="section">Existing tokens</div>${list.length ? list.map(t => `<div class="job"><div class="jobtop"><div class="grow"><div class="jobname">${esc(t.name)}</div><div class="jobphase">${esc(t.id)} · ${esc(t.role)} · ${esc(t.token || '')}</div></div><button class="btn danger" ${uiAction('deleteToken',[t.id])}>Delete</button></div></div>`).join('') : '<div class="muted">No secondary tokens.</div>'}<div class="section">Create token</div><div class="formgrid three"><div class="field"><label>ID</label><input id="tokId" placeholder="laptop"></div><div class="field"><label>Name</label><input id="tokName" placeholder="Laptop admin"></div><div class="field"><label>Role</label><select id="tokRole"><option>Admin</option><option>ReadOnly</option></select></div></div><button class="btn primary" ${uiAction('createToken')}>Create token</button><div id="newTokenBox"></div>`;
   } catch (e) {
     pane.innerHTML = `<div class="empty">${esc(e.message)}<br><br>This action requires an Admin token.</div>`;
   }
@@ -412,12 +412,19 @@ async function createToken() {
     await loadTokens();
     const box = $('#newTokenBox');
     if (box) {
-      box.innerHTML = `<div class="callout info"><b>Copy this token now — it will not be shown again.</b><div class="consolebar"><input id="rawNewToken" class="input mono" readonly value="${esc(raw)}"><button class="btn" onclick="navigator.clipboard.writeText($('#rawNewToken').value);toast('Token copied.','ok')">Copy</button></div></div>`;
+      box.innerHTML = `<div class="callout info"><b>Copy this token now — it will not be shown again.</b><div class="consolebar"><input id="rawNewToken" class="input mono" readonly value="${esc(raw)}"><button class="btn" ${uiAction('copyNewToken')}>Copy</button></div></div>`;
     }
     toast('Token created.', 'ok');
   } catch (e) {
     toast('Token create failed: ' + e.message, 'err');
   }
+}
+
+async function copyNewToken() {
+  const value = $('#rawNewToken')?.value || '';
+  if (!value) return;
+  try { await navigator.clipboard.writeText(value); toast('Token copied.', 'ok'); }
+  catch (e) { toast('Could not copy token: ' + e.message, 'err'); }
 }
 
 async function deleteToken(id) {
@@ -451,12 +458,12 @@ async function renderServerFiles(def, body) {
 
   const files = result.files || [];
   if (!files.length) {
-    body.innerHTML = `<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Only safe text configuration roots are scanned; this is not a general file manager.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('files')">Rescan</button></div><div class="sw-empty">No supported config files found yet.</div>`;
+    body.innerHTML = `<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Only safe text configuration roots are scanned; this is not a general file manager.</div></div><div class="spacer"></div><button class="btn" ${uiAction('serverWorkspaceRefreshTab',['files'])}>Rescan</button></div><div class="sw-empty">No supported config files found yet.</div>`;
     return;
   }
 
   const groups = [...new Set(files.map(x => x.group || 'Config'))];
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Server and mod/plugin configuration stored on the game host. Saving creates an automatic history entry.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('files')">Rescan</button></div><div class="formgrid"><div class="field"><label>Filter</label><input id="gscFileFilter" placeholder="name, path or group…" oninput="serverConfigFilter(this.value)"></div><div class="field"><label>Discovered</label><div class="help" style="padding-top:8px">${files.length} file${files.length === 1 ? '' : 's'} · ${groups.map(esc).join(' · ')}</div></div></div><div id="gscFileList" style="margin-top:10px">${files.map(file => `<div class="sw-row gsc-config-file" data-file-search="${esc(((file.group || '') + ' ' + file.path).toLowerCase())}"><div class="grow"><div class="sw-row-title">${esc(file.name)}</div><div class="sw-row-meta"><b>${esc(file.group || 'Config')}</b> · <span class="mono">${esc(file.path)}</span> · ${gscFormatBytes(file.sizeBytes)} · ${new Date(file.modifiedAt).toLocaleString()}${file.restartRecommended ? ' · restart may be required' : ''}</div></div><button class="btn" onclick="serverConfigOpen('${jsq(def.id)}','${jsq(file.path)}')">Edit</button></div>`).join('')}</div>`;
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Server and mod/plugin configuration stored on the game host. Saving creates an automatic history entry.</div></div><div class="spacer"></div><button class="btn" ${uiAction('serverWorkspaceRefreshTab',['files'])}>Rescan</button></div><div class="formgrid"><div class="field"><label>Filter</label><input id="gscFileFilter" placeholder="name, path or group…" ${uiAction('serverConfigFilter',[],{event:'input',pass:'value'})}></div><div class="field"><label>Discovered</label><div class="help" style="padding-top:8px">${files.length} file${files.length === 1 ? '' : 's'} · ${groups.map(esc).join(' · ')}</div></div></div><div id="gscFileList" style="margin-top:10px">${files.map(file => `<div class="sw-row gsc-config-file" data-file-search="${esc(((file.group || '') + ' ' + file.path).toLowerCase())}"><div class="grow"><div class="sw-row-title">${esc(file.name)}</div><div class="sw-row-meta"><b>${esc(file.group || 'Config')}</b> · <span class="mono">${esc(file.path)}</span> · ${gscFormatBytes(file.sizeBytes)} · ${new Date(file.modifiedAt).toLocaleString()}${file.restartRecommended ? ' · restart may be required' : ''}</div></div><button class="btn" ${uiAction('serverConfigOpen',[def.id,file.path])}>Edit</button></div>`).join('')}</div>`;
 }
 
 function serverConfigFilter(value) {
@@ -475,7 +482,7 @@ async function serverConfigOpen(serverId, path) {
     openModal(
       'Config file — ' + (d?.name || serverId),
       `<div class="callout info"><b>${esc(file.path)}</b><div class="tiny" style="margin-top:4px">${esc(file.format || 'text').toUpperCase()} · ${gscFormatBytes(file.sizeBytes)} · modified ${new Date(file.modifiedAt).toLocaleString()}</div></div><div class="field"><label>Contents</label><textarea id="gscFileEditor" class="mono" spellcheck="false" style="min-height:52vh;resize:vertical">${esc(file.content)}</textarea><div class="help">JSON and XML are validated before save. Other supported formats are saved as raw text. Changes create an automatic history copy first.</div></div><div class="section">History</div><div id="gscFileHistory" class="muted tiny">Loading history…</div>`,
-      `<button class="btn" onclick="closeModal()">Close</button><button class="btn primary" onclick="serverConfigSave()">Save</button>`,
+      `<button class="btn" ${uiAction('closeModal')}>Close</button><button class="btn primary" ${uiAction('serverConfigSave')}>Save</button>`,
       true
     );
     await serverConfigLoadHistory();
@@ -510,7 +517,7 @@ async function serverConfigLoadHistory() {
   try {
     const list = await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/history?path=${encodeURIComponent(state.path)}`);
     pane.innerHTML = list?.length
-      ? list.map(item => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${new Date(item.createdAt).toLocaleString()}</div><div class="sw-row-meta">${gscFormatBytes(item.sizeBytes)} · ${esc(item.id)}</div></div><button class="btn" onclick="serverConfigRestore('${jsq(item.id)}')">Restore</button></div>`).join('')
+      ? list.map(item => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${new Date(item.createdAt).toLocaleString()}</div><div class="sw-row-meta">${gscFormatBytes(item.sizeBytes)} · ${esc(item.id)}</div></div><button class="btn" ${uiAction('serverConfigRestore',[item.id])}>Restore</button></div>`).join('')
       : '<div class="muted tiny">No previous versions yet.</div>';
   } catch (e) {
     pane.innerHTML = `<div class="callout">${esc(e.message)}</div>`;
@@ -584,7 +591,7 @@ window.serverConfigRestore = serverConfigRestore;
         baseRenderMods(def, body);
         const section = document.createElement('div');
         section.className = 'sw-section';
-        section.innerHTML = `<h3>Mod / plugin configuration</h3><div class="muted tiny" style="margin-bottom:12px">Config files discovered in supported mod/plugin folders can be edited without uploading the mod archive through the panel.</div><button class="btn" onclick="serverWorkspaceSetTab('files')">Open config files</button>`;
+        section.innerHTML = `<h3>Mod / plugin configuration</h3><div class="muted tiny" style="margin-bottom:12px">Config files discovered in supported mod/plugin folders can be edited without uploading the mod archive through the panel.</div><button class="btn" ${uiAction('serverWorkspaceSetTab',['files'])}>Open config files</button>`;
         body.appendChild(section);
       };
     }
@@ -607,9 +614,9 @@ async function renderServerAdmin(def, body) {
       body.innerHTML = '<div class="callout info">RCON is supported, but this server needs an RCON port and password before admin actions can run.</div>';
       return;
     }
-    const save = commands.has('Save') ? `<button class="btn" onclick="serverWorkspaceAdminCommand('${jsq(def.id)}','Save')">Save world</button>` : '';
-    const broadcast = commands.has('BroadcastMessage') ? `<div class="sw-section"><h3>Broadcast message</h3><div class="sw-toolbar"><input id="swAdminBroadcast" class="grow" maxlength="500" placeholder="Message to connected players"><button class="btn primary" onclick="serverWorkspaceAdminCommand('${jsq(def.id)}','BroadcastMessage',$('#swAdminBroadcast').value)">Broadcast</button></div></div>` : '';
-    const shutdown = commands.has('Shutdown') ? `<button class="btn danger" onclick="serverWorkspaceAdminCommand('${jsq(def.id)}','Shutdown')">RCON shutdown</button>` : '';
+    const save = commands.has('Save') ? `<button class="btn" ${uiAction('serverWorkspaceAdminCommand',[def.id,'Save'])}>Save world</button>` : '';
+    const broadcast = commands.has('BroadcastMessage') ? `<div class="sw-section"><h3>Broadcast message</h3><div class="sw-toolbar"><input id="swAdminBroadcast" class="grow" maxlength="500" placeholder="Message to connected players"><button class="btn primary" ${uiAction('serverWorkspaceAdminCommand',[def.id,'BroadcastMessage'],{pass:'selectorValue',selector:'#swAdminBroadcast'})}>Broadcast</button></div></div>` : '';
+    const shutdown = commands.has('Shutdown') ? `<button class="btn danger" ${uiAction('serverWorkspaceAdminCommand',[def.id,'Shutdown'])}>RCON shutdown</button>` : '';
     const playerHint = commands.has('KickPlayer') || commands.has('BanPlayer') ? '<div class="callout info">Kick and ban actions remain in the Players tab so the player identifier is selected safely.</div>' : '';
     body.innerHTML = `<div class="sw-section"><div class="sw-toolbar"><div><h3 style="margin:0">Server administration</h3><div class="tiny muted">Only standard commands advertised by the game-specific RCON handler are shown.</div></div><div class="spacer"></div>${save}${shutdown}</div></div>${broadcast}${playerHint}`;
   } catch (e) {
