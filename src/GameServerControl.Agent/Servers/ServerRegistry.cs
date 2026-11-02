@@ -67,9 +67,12 @@ public sealed class ServerRegistry
             {
                 var protectedDoc = new ServersFile { Servers = loaded.Select(_secretProtection.ProtectForStorage).ToArray() };
                 var protectedJson = JsonSerializer.Serialize(protectedDoc, JsonOpts);
-                // Do not preserve the old plaintext file as a backup during migration.
+                var backupPath = _path + ".bak";
+                // Remove a legacy plaintext backup before replacing the primary so a crash
+                // cannot leave the old reusable credentials behind after migration.
+                if (File.Exists(backupPath)) File.Delete(backupPath);
                 SecretFilePermissions.WriteAllTextAtomic(_path, protectedJson);
-                SecretFilePermissions.WriteAllTextAtomic(_path + ".bak", protectedJson);
+                SecretFilePermissions.WriteAllTextAtomic(backupPath, protectedJson);
                 _logger.LogInformation("Migrated reusable server credentials to encrypted state in {Path}", _path);
             }
 
