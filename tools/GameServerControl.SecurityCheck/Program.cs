@@ -22,6 +22,66 @@ static TokenRegistry Registry(string dataDir)
     return new TokenRegistry(cfg, logger);
 }
 
+static void VerifyAuthenticationThrottle()
+{
+    var now = new DateTimeOffset(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
+    var throttle = new AuthenticationFailureThrottle(
+        maxFailures: 3,
+        window: TimeSpan.FromSeconds(30),
+        blockDuration: TimeSpan.FromSeconds(20));
+
+    throttle.RecordFailure("client-a", now);
+    throttle.RecordFailure("client-a", now.AddSeconds(1));
+    Require(!throttle.TryGetRetryAfter("client-a", now.AddSeconds(2), out _),
+        "Client was blocked before reaching the configured failure threshold.");
+
+    throttle.RecordFailure("client-a", now.AddSeconds(2));
+    Require(throttle.TryGetRetryAfter("client-a", now.AddSeconds(3), out var retryAfter),
+        "Client was not blocked after reaching the configured failure threshold.");
+    Require(retryAfter > TimeSpan.FromSeconds(18) && retryAfter <= TimeSpan.FromSeconds(20),
+        "Authentication throttle returned an unexpected retry interval.");
+
+    throttle.RecordSuccess("client-a");
+    Require(!throttle.TryGetRetryAfter("client-a", now.AddSeconds(4), out _),
+        "Successful authentication did not clear the client's throttle state.");
+
+    var rolling = new AuthenticationFailureThrottle(
+        maxFailures: 2,
+        window: TimeSpan.FromSeconds(10),
+        blockDuration: TimeSpan.FromSeconds(10));
+    rolling.RecordFailure("client-b", now);
+    rolling.RecordFailure("client-b", now.AddSeconds(11));
+    Require(!rolling.TryGetRetryAfter("client-b", now.AddSeconds(11), out _),
+        "Failures outside the configured window were incorrectly accumulated.");
+
+    var bounded = new AuthenticationFailureThrottle(
+        maxFailures: 2,
+        window: TimeSpan.FromSeconds(10),
+        blockDuration: TimeSpan.FromSeconds(10),
+        maxTrackedClients: 1);
+    bounded.RecordFailure("client-c", now);
+    bounded.RecordFailure("client-d", now);
+    bounded.RecordFailure("client-d", now.AddSeconds(1));
+    Require(!bounded.TryGetRetryAfter("client-d", now.AddSeconds(2), out _),
+        "Throttle exceeded its configured client-state memory bound.");
+
+    var concurrent = new AuthenticationFailureThrottle(
+        maxFailures: 2,
+        window: TimeSpan.FromSeconds(10),
+        blockDuration: TimeSpan.FromSeconds(10),
+        maxTrackedClients: 4);
+    Parallel.For(0, 64, i =>
+    {
+        var key = $"concurrent-{i}";
+        concurrent.RecordFailure(key, now);
+        concurrent.RecordFailure(key, now.AddSeconds(1));
+    });
+    var blockedClients = Enumerable.Range(0, 64)
+        .Count(i => concurrent.TryGetRetryAfter($"concurrent-{i}", now.AddSeconds(2), out _));
+    Require(blockedClients == 4,
+        $"Concurrent client creation violated the hard memory bound: expected 4 tracked clients, got {blockedClients}.");
+}
+
 var root = Path.Combine(Path.GetTempPath(), "gsc-security-check-" + Guid.NewGuid().ToString("n"));
 Directory.CreateDirectory(root);
 try
@@ -62,7 +122,8 @@ try
     Require(!migratedJson.Contains(legacyToken, StringComparison.Ordinal), "Legacy plaintext token was not removed during migration.");
     Require(migratedJson.Contains("TokenHash", StringComparison.Ordinal), "Migrated token does not contain TokenHash.");
 
-    Console.WriteLine("Security token storage checks OK.");
+    VerifyAuthenticationThrottle();
+    Console.WriteLine("Security token storage and authentication throttle checks OK.");
 }
 finally
 {

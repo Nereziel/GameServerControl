@@ -55,9 +55,9 @@ async function login(){
   const url=$('#loginUrl').value.trim().replace(/\/+$/,'');const token=$('#loginToken').value.trim();
   if(!url||!token)return toast('Agent URL and token are required.','err');
   CFG={url,token};
-  try{await api('/api/health');localStorage.setItem(CFG_KEY,JSON.stringify(CFG));await boot()}catch(e){toast('Connection failed: '+e.message,'err')}
+  try{await api('/api/health');sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));await boot()}catch(e){toast('Connection failed: '+e.message,'err')}
 }
-function logout(){localStorage.removeItem(CFG_KEY);location.reload()}
+function logout(){sessionStorage.removeItem(CFG_KEY);location.reload()}
 
 async function boot(){
   $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
@@ -70,11 +70,12 @@ async function boot(){
 }
 
 async function init(){
+  try{localStorage.removeItem(CFG_KEY)}catch{}
   const params=new URLSearchParams(location.search);
   const token=params.get('token'),url=params.get('url');
-  if(token){CFG={url:(url||location.origin).replace(/\/+$/,''),token};localStorage.setItem(CFG_KEY,JSON.stringify(CFG));history.replaceState({},'',location.pathname+location.hash)}
-  else{try{CFG=JSON.parse(localStorage.getItem(CFG_KEY)||'null')||{url:'',token:''}}catch{CFG={url:'',token:''}}}
-  if(CFG.url&&CFG.token){try{await api('/api/health');await boot();return}catch{localStorage.removeItem(CFG_KEY)}}
+  if(token){CFG={url:(url||location.origin).replace(/\/+$/,''),token};sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));history.replaceState({},'',location.pathname+location.hash)}
+  else{try{CFG=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')||{url:'',token:''}}catch{CFG={url:'',token:''}}}
+  if(CFG.url&&CFG.token){try{await api('/api/health');await boot();return}catch{sessionStorage.removeItem(CFG_KEY)}}
   $('#login').classList.remove('hidden');
   $('#loginUrl').value=location.origin;
 }

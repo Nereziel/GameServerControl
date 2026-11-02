@@ -5,7 +5,7 @@
   };
 
   window.GSC_CLOUD_MODE = true;
-  try { localStorage.setItem('gsc.connection.v2', JSON.stringify(cloudCfg)); } catch {}
+  try { sessionStorage.setItem('gsc.connection.v2', JSON.stringify(cloudCfg)); } catch {}
 
   if (typeof boot === 'function') {
     const localBoot = boot;
@@ -19,7 +19,7 @@
 
   if (typeof logout === 'function') {
     logout = function () {
-      try { localStorage.removeItem('gsc.connection.v2'); } catch {}
+      try { sessionStorage.removeItem('gsc.connection.v2'); } catch {}
       location.assign('/cdn-cgi/access/logout');
     };
   }

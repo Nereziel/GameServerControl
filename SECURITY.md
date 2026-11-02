@@ -28,7 +28,11 @@ GameServerControl supports:
 
 The first boot replaces the placeholder `Agent:ApiToken` with a cryptographically random token and persists it in `appsettings.json`. Additional tokens can be created and revoked from the Web UI.
 
-The Web UI itself is a static shell; API calls remain authenticated. The current local UI stores its selected Agent URL/token in browser `localStorage`. Do not use an untrusted/shared browser profile. For the future Cloudflare deployment, prefer Cloudflare Access/session authentication and Worker-side secrets so long-lived Agent credentials do not need to reach the public browser.
+The Web UI itself is a static shell; API calls remain authenticated. The direct UI stores its selected Agent URL/token only in browser `sessionStorage`, so closing the browser tab/session removes that browser-side credential. Avoid untrusted/shared browser sessions. Cloudflare remote mode does not expose the real Agent bearer token to browser JavaScript; the Worker selects the server-side Agent credential.
+
+Bearer tokens are accepted from the `Authorization` header for normal Agent API traffic. Query-string `access_token` compatibility is restricted to `/hubs/status` because SignalR browser transports may require it; normal `/api/*` routes do not accept bearer credentials from their URL.
+
+The Agent also includes bounded, in-memory authentication-failure throttling for protected `/api` and `/hubs` requests. Repeated failed authentication from the same direct peer address triggers a temporary HTTP 429 response with `Retry-After`. A successful authentication clears that peer's failure state. This is defense in depth, not a replacement for private networking, firewall policy or Cloudflare Access.
 
 ## Sensitive files
 
@@ -77,8 +81,6 @@ Optional marketplace/provider keys such as the CurseForge API key are stored ser
 ## Known limitations
 
 - Server/RCON/password values are not encrypted at rest yet.
-- Browser-local Agent tokens are stored in `localStorage` in the built-in direct UI.
-- There is no built-in authentication-failure rate limiter yet; rely on private networking / Cloudflare Access and firewall policy.
 - The self-signed HTTPS certificate path is intended for private deployments, not as a substitute for a properly managed public TLS endpoint.
 - Hyper-V mode necessarily expands the Agent's host privileges; do not enable/use it when unnecessary.
 

@@ -55,6 +55,9 @@ jobs:
       - name: Validate audit fixes 1-3
         run: node scripts/validate-audit-1-3.mjs
 
+      - name: Validate audit fixes 4-6
+        run: node scripts/validate-audit-4-6.mjs
+
       - name: Validate backup lifecycle
         run: node scripts/validate-backup-lifecycle.mjs
 
@@ -138,6 +141,9 @@ jobs:
 
       - name: Validate audit fixes 1-3
         run: node scripts/validate-audit-1-3.mjs
+
+      - name: Validate audit fixes 4-6
+        run: node scripts/validate-audit-4-6.mjs
 
       - name: Validate backup lifecycle
         run: node scripts/validate-backup-lifecycle.mjs
