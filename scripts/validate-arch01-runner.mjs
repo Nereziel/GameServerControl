@@ -5,6 +5,9 @@ const read = path => fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '';
 const requireCheck = (condition, message) => { if (!condition) errors.push(`ARCH-01: ${message}`); };
 
 const runnerProject = 'src/GameServerControl.Runner/GameServerControl.Runner.csproj';
+const runnerProgramPath = 'src/GameServerControl.Runner/Program.cs';
+const runnerHostPath = 'src/GameServerControl.Runner/RunnerProcessHost.cs';
+const runnerPipePath = 'src/GameServerControl.Runner/RunnerPipeServer.cs';
 const managerPath = 'src/GameServerControl.Agent/Hyperv/WindowsRunnerServiceManager.cs';
 const clientPath = 'src/GameServerControl.Agent/Hyperv/WindowsRunnerPipeClient.cs';
 const localPath = 'src/GameServerControl.Agent/Hyperv/LocalProcessService.cs';
@@ -14,15 +17,30 @@ const buildPath = '.github/workflows/build.yml';
 const releasePath = '.github/workflows/release.yml';
 
 requireCheck(fs.existsSync(runnerProject), 'missing GameServerControl.Runner project.');
+requireCheck(fs.existsSync(runnerProgramPath), 'missing Runner service host.');
+requireCheck(fs.existsSync(runnerHostPath), 'missing RunnerProcessHost.');
+requireCheck(fs.existsSync(runnerPipePath), 'missing RunnerPipeServer.');
 requireCheck(fs.existsSync(managerPath), 'missing WindowsRunnerServiceManager.');
 requireCheck(fs.existsSync(clientPath), 'missing WindowsRunnerPipeClient.');
 
+const runnerProgram = read(runnerProgramPath);
+const runnerHost = read(runnerHostPath);
+const runnerPipe = read(runnerPipePath);
 const local = read(localPath);
 const orchestrator = read(orchestratorPath);
 const manager = read(managerPath);
 const installer = read(installerPath);
 const build = read(buildPath);
 const release = read(releasePath);
+
+requireCheck(runnerProgram.includes('--manifest') && runnerProgram.includes('RunnerManifest'), 'Runner must load and validate a per-server manifest before hosting.');
+requireCheck(/StartAsync\s*\(\s*CancellationToken/.test(runnerHost), 'RunnerProcessHost.StartAsync must not accept executable/path/argument launch metadata.');
+requireCheck(!/StartAsync\s*\([^)]*(?:string|IEnumerable|\[\])[^)]*\)/m.test(runnerHost), 'Runner start API exposed caller-supplied launch metadata.');
+requireCheck(runnerHost.includes('RunnerProtocolLimits.MaxConsoleInputChars'), 'Runner console input must enforce the shared protocol bound.');
+requireCheck(runnerHost.includes('StopProcessNames'), 'Runner extra-process termination must come from its manifest allowlist.');
+requireCheck(runnerPipe.includes('NamedPipeServerStream'), 'Runner IPC must use a local named pipe.');
+requireCheck(runnerPipe.includes('PipeSecurity') && runnerPipe.includes('WellKnownSidType.LocalSystemSid') && runnerPipe.includes('WellKnownSidType.BuiltinAdministratorsSid'), 'Runner pipe ACL must explicitly authorize only SYSTEM and local Administrators.');
+requireCheck(runnerPipe.includes('RunnerProtocolLimits.MaxRequestBytes') && runnerPipe.includes('RunnerProtocolLimits.MaxResponseBytes'), 'Runner pipe must enforce bounded request and response sizes.');
 
 requireCheck(local.includes('WindowsRunnerServiceManager'), 'LocalProcessService must delegate Windows BareMetal runtime to WindowsRunnerServiceManager.');
 requireCheck(!/OperatingSystem\.IsWindows\(\)[\s\S]{0,2200}?Process\.Start\s*\(/m.test(local), 'Windows LocalProcessService still has a direct game Process.Start fallback.');
