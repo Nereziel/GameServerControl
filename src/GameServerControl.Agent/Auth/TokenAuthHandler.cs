@@ -8,8 +8,6 @@ namespace GameServerControl.Agent.Auth;
 
 public sealed class TokenAuthOptions : AuthenticationSchemeOptions
 {
-    // Legacy field — kept for back-compat. The actual token list now lives in TokenRegistry,
-    // which falls back to <c>Agent:ApiToken</c> automatically.
     public string Token { get; set; } = "";
 }
 
@@ -32,15 +30,13 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var clientKey = ProtectedClientKey();
-        if (clientKey is not null &&
-            _failureThrottle.TryGetRetryAfter(clientKey, DateTimeOffset.UtcNow, out var retryAfter))
+        if (clientKey is not null && _failureThrottle.TryGetRetryAfter(clientKey, DateTimeOffset.UtcNow, out var retryAfter))
         {
             Context.Items[ThrottleRetryAfterItem] = retryAfter;
             return Task.FromResult(AuthenticateResult.Fail("authentication temporarily throttled"));
         }
 
         string? presented = null;
-
         if (Request.Headers.TryGetValue("Authorization", out var auth))
         {
             var s = auth.ToString();
@@ -48,12 +44,7 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
                 presented = s.Substring("Bearer ".Length).Trim();
         }
 
-        // SignalR's browser transport may need to send its bearer token through the
-        // access_token query parameter. Do not accept query-string credentials on normal
-        // API routes, where URLs can be retained by logs, history and intermediary tooling.
-        if (presented is null &&
-            Request.Path.StartsWithSegments("/hubs/status") &&
-            Request.Query.TryGetValue("access_token", out var q))
+        if (presented is null && Request.Path.StartsWithSegments("/hubs/status") && Request.Query.TryGetValue("access_token", out var q))
             presented = q.ToString();
 
         if (string.IsNullOrEmpty(presented))
@@ -62,17 +53,14 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
-        // Installers use a short-lived local credential to prove that the replacement
-        // Agent is actually serving authenticated API traffic. This credential is valid
-        // only for the exact health endpoint and cannot be used for any other API route.
         if (string.Equals(Request.Path.Value, "/api/health", StringComparison.Ordinal) &&
             UpdateHealthToken.IsValid(AppContext.BaseDirectory, presented))
         {
             if (clientKey is not null) _failureThrottle.RecordSuccess(clientKey);
-            return Task.FromResult(Success(
-                id: "update-health-probe",
-                name: "Update health probe",
-                role: TokenRole.ReadOnly));
+            Response.Headers["X-GameServerControl-Version"] = UpdateHealthToken.CurrentVersion;
+            Response.Headers["X-GameServerControl-Pid"] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+            Response.Headers.CacheControl = "no-store";
+            return Task.FromResult(Success("update-health-probe", "Update health probe", TokenRole.ReadOnly));
         }
 
         var match = _registry.Lookup(presented);
@@ -83,7 +71,6 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
         }
 
         if (clientKey is not null) _failureThrottle.RecordSuccess(clientKey);
-
         var (id, name, role) = match.Value;
         return Task.FromResult(Success(id, name, role));
     }
@@ -93,13 +80,11 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
         if (Context.Items.TryGetValue(ThrottleRetryAfterItem, out var value) && value is TimeSpan retryAfter)
         {
             Response.StatusCode = StatusCodes.Status429TooManyRequests;
-            Response.Headers["Retry-After"] = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds))
-                .ToString(CultureInfo.InvariantCulture);
+            Response.Headers["Retry-After"] = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
             Response.Headers.CacheControl = "no-store";
             await Response.WriteAsJsonAsync(new { error = "Too many authentication failures. Try again later." });
             return;
         }
-
         await base.HandleChallengeAsync(properties);
     }
 
@@ -112,14 +97,12 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             new Claim(RoleClaim, role.ToString())
         }, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
-        var ticket = new AuthenticationTicket(principal, Scheme.Name);
-        return AuthenticateResult.Success(ticket);
+        return AuthenticateResult.Success(new AuthenticationTicket(principal, Scheme.Name));
     }
 
     private string? ProtectedClientKey()
     {
-        if (!Request.Path.StartsWithSegments("/api") && !Request.Path.StartsWithSegments("/hubs"))
-            return null;
+        if (!Request.Path.StartsWithSegments("/api") && !Request.Path.StartsWithSegments("/hubs")) return null;
         return Context.Connection.RemoteIpAddress?.ToString();
     }
 }
