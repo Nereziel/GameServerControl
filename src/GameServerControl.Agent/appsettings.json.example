@@ -16,13 +16,13 @@
     "CertSanHosts": "",
     "CertSanIps": "",
 
-    "_TokenHelp": "Leave ApiToken as the placeholder below. The Agent generates a strong random bootstrap Admin token on first boot and persists it here. Additional managed tokens are stored hashed in tokens.json.",
+    "_TokenHelp": "Leave ApiToken as the placeholder below. The Agent generates a strong random bootstrap Admin token on first boot and stores it in encrypted secret-state.json. Additional managed tokens are stored one-way hashed in tokens.json.",
     "ApiToken": "REPLACE_WITH_32_CHARS+",
 
     "Repo": "Nereziel/GameServerControl",
     "ServersJsonPath": "servers.json",
 
-    "_PublicRelayHelp": "Optional Linux VPS relay. Url must point to GameServerControl.Relay over Tailscale. Public ports are DNATed on the VPS and forwarded through tailscale0 to this Agent host.",
+    "_PublicRelayHelp": "Optional Linux VPS relay. Url must point to GameServerControl.Relay over Tailscale. A configured ApiToken is migrated to encrypted secret state; public-relay.json also stores its reusable token encrypted.",
     "PublicRelay": {
       "Url": "",
       "ApiToken": "",
@@ -40,7 +40,7 @@
       "TrustedTokenIds": "cloud-admin,cloud-readonly"
     },
 
-    "_CurseForgeHelp": "Optional secondary mod catalog. Obtain a CurseForge third-party API key, then map each supported community to its CurseForge game ID. Keys stay server-side and are never sent to the browser.",
+    "_CurseForgeHelp": "Optional secondary mod catalog. Obtain a CurseForge third-party API key, then map each supported community to its CurseForge game ID. A configured ApiKey is migrated to encrypted local secret state and is never sent to the browser.",
     "CurseForge": {
       "ApiKey": "",
       "Games": {
@@ -48,7 +48,7 @@
       }
     },
 
-    "_GuestCredentialsHelp": "Used only when a server is explicitly configured to run inside a Hyper-V VM through PowerShell Direct. BareMetal servers ignore this section.",
+    "_GuestCredentialsHelp": "Used only when a server is explicitly configured to run inside a Hyper-V VM through PowerShell Direct. Configured Password values are migrated to encrypted local secret state. BareMetal servers ignore this section.",
     "GuestCredentials": {
       "default": {
         "Username": "Administrator",
