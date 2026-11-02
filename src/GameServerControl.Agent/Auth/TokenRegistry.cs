@@ -1,31 +1,53 @@
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Auth;
 
-public sealed record TokenRecord
+public sealed record CreatedTokenRecord(
+    string Id,
+    string Name,
+    string Token,
+    TokenRole Role,
+    DateTimeOffset CreatedAt);
+
+internal sealed record StoredTokenRecord
 {
-    public string Id { get; init; } = "";          // Human label slug, e.g. "ops-tyrus"
-    public string Name { get; init; } = "";        // Display name shown in UI
-    public string Token { get; init; } = "";       // The actual bearer token
+    public string Id { get; init; } = "";
+    public string Name { get; init; } = "";
+    public string TokenHash { get; init; } = "";
+    public string TokenPrefix { get; init; } = "********";
+
+    // Backward-compat migration input only. SaveLocked always clears it, so a managed
+    // bearer token is never intentionally persisted in reusable plaintext form again.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Token { get; init; }
+
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public TokenRole Role { get; init; } = TokenRole.Admin;
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
 }
 
 /// <summary>
-/// Multi-token store backed by tokens.json. The legacy single Agent:ApiToken setting still
-/// works and is treated as an Admin token for backward compatibility.
+/// Multi-token store backed by tokens.json. Managed tokens are stored only as a SHA-256
+/// hash plus a non-secret prefix. The legacy single Agent:ApiToken setting still works
+/// and is treated as an Admin token for backward compatibility.
 /// </summary>
 public sealed class TokenRegistry
 {
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly string _path;
     private readonly string _legacyToken;
     private readonly ILogger<TokenRegistry> _logger;
     private readonly object _gate = new();
-    private List<TokenRecord> _tokens = new();
+    private List<StoredTokenRecord> _tokens = new();
 
     public TokenRegistry(IConfiguration cfg, ILogger<TokenRegistry> logger)
     {
@@ -42,8 +64,69 @@ public sealed class TokenRegistry
         {
             try
             {
-                if (!File.Exists(_path)) { _tokens = new(); return; }
-                _tokens = JsonSerializer.Deserialize<List<TokenRecord>>(File.ReadAllText(_path)) ?? new();
+                if (!File.Exists(_path))
+                {
+                    _tokens = new();
+                    return;
+                }
+
+                var loaded = JsonSerializer.Deserialize<List<StoredTokenRecord>>(File.ReadAllText(_path), JsonOpts) ?? new();
+                var migrated = false;
+                var valid = new List<StoredTokenRecord>(loaded.Count);
+                foreach (var item in loaded)
+                {
+                    if (string.IsNullOrWhiteSpace(item.Id) || string.IsNullOrWhiteSpace(item.Name))
+                    {
+                        _logger.LogWarning("Ignoring invalid token record with missing id/name in {Path}", _path);
+                        migrated = true;
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(item.TokenHash))
+                    {
+                        if (!IsValidHash(item.TokenHash))
+                        {
+                            _logger.LogWarning("Ignoring invalid token hash for {Id}", item.Id);
+                            migrated = true;
+                            continue;
+                        }
+
+                        valid.Add(item with
+                        {
+                            TokenHash = item.TokenHash.ToLowerInvariant(),
+                            TokenPrefix = string.IsNullOrWhiteSpace(item.TokenPrefix) ? "********" : item.TokenPrefix,
+                            Token = null
+                        });
+                        if (item.Token is not null || item.TokenHash != item.TokenHash.ToLowerInvariant()) migrated = true;
+                        continue;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(item.Token))
+                    {
+                        valid.Add(item with
+                        {
+                            TokenHash = HashToken(item.Token),
+                            TokenPrefix = TokenPrefix(item.Token),
+                            Token = null
+                        });
+                        migrated = true;
+                        continue;
+                    }
+
+                    _logger.LogWarning("Ignoring token record {Id} because it contains no credential hash", item.Id);
+                    migrated = true;
+                }
+
+                _tokens = valid;
+                if (migrated)
+                {
+                    SaveLocked();
+                    _logger.LogInformation("Migrated managed API token storage to hashed credentials in {Path}", _path);
+                }
+                else
+                {
+                    RestrictFilePermissions();
+                }
             }
             catch (Exception ex)
             {
@@ -53,68 +136,63 @@ public sealed class TokenRegistry
         }
     }
 
-    private void Save()
-    {
-        lock (_gate)
-        {
-            try
-            {
-                Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-                var tmp = _path + ".tmp";
-                File.WriteAllText(tmp, JsonSerializer.Serialize(_tokens, new JsonSerializerOptions { WriteIndented = true }));
-                if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
-                else File.Move(tmp, _path);
-            }
-            catch (Exception ex) { _logger.LogError(ex, "Save tokens.json failed"); throw; }
-        }
-    }
-
     /// <summary>
     /// Look up a presented bearer token. Returns (id, name, role) on success or null on miss.
-    /// Falls back to the legacy single token in appsettings → mapped to ("legacy", "Legacy", Admin).
+    /// Falls back to the legacy single token in appsettings -> mapped to ("legacy", "Legacy", Admin).
     /// </summary>
     public (string Id, string Name, TokenRole Role)? Lookup(string presented)
     {
         if (string.IsNullOrEmpty(presented)) return null;
-        if (!string.IsNullOrEmpty(_legacyToken) && CryptoEquals(presented, _legacyToken))
+        if (!string.IsNullOrEmpty(_legacyToken) && SecretEquals(presented, _legacyToken))
             return ("legacy", "Legacy (appsettings)", TokenRole.Admin);
+
         lock (_gate)
         {
-            foreach (var t in _tokens)
-                if (CryptoEquals(presented, t.Token)) return (t.Id, t.Name, t.Role);
+            foreach (var token in _tokens)
+                if (HashMatches(presented, token.TokenHash))
+                    return (token.Id, token.Name, token.Role);
         }
         return null;
     }
 
-    public IReadOnlyList<TokenRecord> ListMetadata()
+    public IReadOnlyList<TokenMetadata> ListMetadata()
     {
         lock (_gate)
         {
-            // Strip the actual token value when listing — only the prefix is exposed for identification.
-            return _tokens.Select(t => t with { Token = TokenPrefix(t.Token) }).ToArray();
+            return _tokens
+                .Select(t => new TokenMetadata(t.Id, t.Name, t.TokenPrefix, t.Role, t.CreatedAt))
+                .ToArray();
         }
     }
 
-    public TokenRecord Create(string id, string name, TokenRole role)
+    public CreatedTokenRecord Create(string id, string name, TokenRole role)
     {
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("id required");
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("name required");
-        var rec = new TokenRecord
+
+        var plaintext = GenerateToken();
+        var now = DateTimeOffset.UtcNow;
+        var stored = new StoredTokenRecord
         {
             Id = id.Trim(),
             Name = name.Trim(),
-            Token = GenerateToken(),
+            TokenHash = HashToken(plaintext),
+            TokenPrefix = TokenPrefix(plaintext),
+            Token = null,
             Role = role,
-            CreatedAt = DateTimeOffset.UtcNow
+            CreatedAt = now
         };
+
         lock (_gate)
         {
-            if (_tokens.Any(t => string.Equals(t.Id, rec.Id, StringComparison.OrdinalIgnoreCase)))
-                throw new InvalidOperationException("Token id already exists: " + rec.Id);
-            _tokens.Add(rec);
+            if (_tokens.Any(t => string.Equals(t.Id, stored.Id, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("Token id already exists: " + stored.Id);
+            _tokens.Add(stored);
+            SaveLocked();
         }
-        Save();
-        return rec;   // Returned exactly once — caller MUST capture Token; later listings only show the prefix.
+
+        // Plaintext intentionally exists only in this one-time response and the caller's request context.
+        return new CreatedTokenRecord(stored.Id, stored.Name, plaintext, stored.Role, stored.CreatedAt);
     }
 
     public bool Delete(string id)
@@ -124,13 +202,38 @@ public sealed class TokenRegistry
             var i = _tokens.FindIndex(t => string.Equals(t.Id, id, StringComparison.OrdinalIgnoreCase));
             if (i < 0) return false;
             _tokens.RemoveAt(i);
+            SaveLocked();
+            return true;
         }
-        Save();
-        return true;
+    }
+
+    private void SaveLocked()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+        var tmp = _path + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(_tokens, JsonOpts));
+        if (File.Exists(_path))
+            File.Move(tmp, _path, overwrite: true);
+        else
+            File.Move(tmp, _path);
+        RestrictFilePermissions();
+    }
+
+    private void RestrictFilePermissions()
+    {
+        if (OperatingSystem.IsWindows() || !File.Exists(_path)) return;
+        try
+        {
+            File.SetUnixFileMode(_path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Could not restrict Unix permissions for {Path}", _path);
+        }
     }
 
     private static string TokenPrefix(string token) =>
-        token.Length <= 8 ? "********" : token.Substring(0, 8) + "…";
+        token.Length <= 8 ? "********" : token[..8] + "...";
 
     private static string GenerateToken()
     {
@@ -138,11 +241,28 @@ public sealed class TokenRegistry
         return Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
     }
 
-    private static bool CryptoEquals(string a, string b)
+    private static string HashToken(string token)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+
+    private static bool IsValidHash(string hash)
     {
-        if (a.Length != b.Length) return false;
-        var diff = 0;
-        for (var i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
-        return diff == 0;
+        if (hash.Length != 64) return false;
+        try { return Convert.FromHexString(hash).Length == 32; }
+        catch (FormatException) { return false; }
+    }
+
+    private static bool HashMatches(string presented, string storedHash)
+    {
+        if (!IsValidHash(storedHash)) return false;
+        var presentedHash = SHA256.HashData(Encoding.UTF8.GetBytes(presented));
+        var expectedHash = Convert.FromHexString(storedHash);
+        return CryptographicOperations.FixedTimeEquals(presentedHash, expectedHash);
+    }
+
+    private static bool SecretEquals(string a, string b)
+    {
+        var ah = SHA256.HashData(Encoding.UTF8.GetBytes(a));
+        var bh = SHA256.HashData(Encoding.UTF8.GetBytes(b));
+        return CryptographicOperations.FixedTimeEquals(ah, bh);
     }
 }
