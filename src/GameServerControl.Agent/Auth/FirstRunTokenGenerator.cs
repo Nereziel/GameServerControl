@@ -1,13 +1,14 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// On first startup, if Agent:ApiToken is empty or a known placeholder, generates a
-/// random 32-byte token and persists it to the restricted appsettings.json state file.
+/// random 32-byte token and persists an encrypted envelope to appsettings.json.
 /// </summary>
 public static class FirstRunTokenGenerator
 {
@@ -20,9 +21,14 @@ public static class FirstRunTokenGenerator
         "<generate>"
     };
 
-    public static bool EnsureToken(IConfiguration cfg, string baseDir, ILogger logger, out string token)
+    public static bool EnsureToken(IConfiguration cfg, string baseDir, SecretProtector protector, ILogger logger, out string token)
     {
         var current = cfg["Agent:ApiToken"] ?? "";
+        if (protector.IsProtected(current))
+        {
+            token = protector.Unprotect(current);
+            return false;
+        }
         if (!IsPlaceholder(current))
         {
             token = current;
@@ -34,13 +40,14 @@ public static class FirstRunTokenGenerator
 
         try
         {
-            EnsureAppSettingsExists(baseDir, appsettingsPath, token, logger);
+            EnsureAppSettingsExists(baseDir, appsettingsPath, token, protector, logger);
 
             var json = File.ReadAllText(appsettingsPath);
+            var persisted = protector.Protect(token);
             var updated = Regex.Replace(
                 json,
                 "\"ApiToken\"\\s*:\\s*\"[^\"]*\"",
-                $"\"ApiToken\": \"{token}\"",
+                $"\"ApiToken\": \"{persisted}\"",
                 RegexOptions.Singleline);
 
             if (updated == json && !json.Contains("\"ApiToken\"", StringComparison.OrdinalIgnoreCase))
@@ -54,10 +61,10 @@ public static class FirstRunTokenGenerator
             SecretFilePermissions.RestrictExisting(backup);
             SecretFilePermissions.WriteAllTextAtomic(appsettingsPath, updated);
 
-            logger.LogInformation("Generated a new agent API token. The credential was saved to the restricted appsettings.json state file.");
+            logger.LogInformation("Generated a new agent API token. The encrypted credential was saved to the restricted appsettings.json state file.");
             Console.WriteLine();
             Console.WriteLine("====================================================================");
-            Console.WriteLine("  Generated a new Agent API token and saved it to the restricted state file:");
+            Console.WriteLine("  Generated a new Agent API token and saved it encrypted at rest in:");
             Console.WriteLine("  " + appsettingsPath);
             Console.WriteLine("  The credential itself is intentionally not written to service stdout.");
             Console.WriteLine("====================================================================");
@@ -70,7 +77,7 @@ public static class FirstRunTokenGenerator
         return true;
     }
 
-    private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, string token, ILogger logger)
+    private static void EnsureAppSettingsExists(string baseDir, string appsettingsPath, string token, SecretProtector protector, ILogger logger)
     {
         if (File.Exists(appsettingsPath))
         {
@@ -103,7 +110,7 @@ public static class FirstRunTokenGenerator
                 Bind = "http://127.0.0.1:5099",
                 BindHttps = "",
                 CertPassword = "",
-                ApiToken = token,
+                ApiToken = protector.Protect(token),
                 Repo = "Nereziel/GameServerControl",
                 ServersJsonPath = "servers.json",
                 AuditLogPath = "",
