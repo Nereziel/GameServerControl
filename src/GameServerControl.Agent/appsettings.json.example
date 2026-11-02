@@ -16,7 +16,7 @@
     "CertSanHosts": "",
     "CertSanIps": "",
 
-    "_TokenHelp": "Leave ApiToken as the placeholder below. The Agent generates a strong random token on first boot and persists it here.",
+    "_TokenHelp": "Leave ApiToken as the placeholder below. The Agent generates a strong random bootstrap Admin token on first boot and persists it here. Additional managed tokens are stored hashed in tokens.json.",
     "ApiToken": "REPLACE_WITH_32_CHARS+",
 
     "Repo": "Nereziel/GameServerControl",
@@ -31,8 +31,14 @@
       "StatePath": "public-relay.json"
     },
 
-    "_AuditHelp": "Override audit log directory. Empty defaults to <agent>/Logs/audit/.",
+    "_AuditHelp": "Mutation audit logs default to <agent>/Logs/audit/. Retention defaults to 90 days and can be set from 1 to 3650 days.",
     "AuditLogPath": "",
+    "AuditRetentionDays": 90,
+
+    "_CloudGatewayHelp": "Optional Cloudflare Worker gateway. List only the managed Agent token IDs dedicated to that gateway; only those tokens may attach the verified remote-user identity to audit entries.",
+    "CloudGateway": {
+      "TrustedTokenIds": "cloud-admin,cloud-readonly"
+    },
 
     "_CurseForgeHelp": "Optional secondary mod catalog. Obtain a CurseForge third-party API key, then map each supported community to its CurseForge game ID. Keys stay server-side and are never sent to the browser.",
     "CurseForge": {
