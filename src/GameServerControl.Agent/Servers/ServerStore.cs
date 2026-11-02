@@ -28,6 +28,8 @@ public sealed class ServerStore
         _logger = logger;
         var configured = cfg["Agent:ServersJsonPath"] ?? "servers.json";
         _path = Path.IsPathRooted(configured) ? configured : Path.Combine(env.ContentRootPath, configured);
+        try { SecretFilePermissions.RestrictExisting(_path); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Could not restrict server state permissions for {Path}", _path); }
     }
 
     public ServerDef Add(ServerDef def)
@@ -184,12 +186,7 @@ public sealed class ServerStore
     {
         var doc = new ServersFile { Servers = list.ToArray() };
         var json = JsonSerializer.Serialize(doc, JsonOpts);
-        var tmp = _path + ".tmp";
-        File.WriteAllText(tmp, json);
-        if (File.Exists(_path))
-            File.Replace(tmp, _path, _path + ".bak");
-        else
-            File.Move(tmp, _path);
+        SecretFilePermissions.WriteAllTextAtomic(_path, json);
     }
 
     private sealed class ServersFile
