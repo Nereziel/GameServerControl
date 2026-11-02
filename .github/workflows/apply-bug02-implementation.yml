@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   apply:
-    if: ${{ github.event.head_commit.message == 'chore: run BUG-02 transform' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
