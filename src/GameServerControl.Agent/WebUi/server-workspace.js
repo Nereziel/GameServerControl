@@ -139,7 +139,7 @@ renderServers = function () {
 
   serverWorkspaceCleanupConsole();
   if (!SERVERS.length) {
-    root.innerHTML = '<div class="empty">No servers registered yet.<br><br><button class="btn primary" onclick="openCreate()">Create your first server</button> <button class="btn" onclick="openDiscover()">Discover installed servers</button> <button class="btn" onclick="openAddExisting()">Add existing server</button></div>';
+    root.innerHTML = `<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')}>Create your first server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')}>Add existing server</button></div>`;
     return;
   }
 
@@ -147,7 +147,7 @@ renderServers = function () {
     const status = serverWorkspaceStatus(def.id);
     const meta = serverMeta(def);
     const state = actionVisual(def.id, status.processState || 'Unknown');
-    return `<button class="sw-server-card" onclick="openServerPage('${jsq(def.id)}')"><div class="sw-card-head"><div class="sw-card-icon">${meta.icon}</div><div class="grow"><div class="sw-card-title">${esc(def.name)}</div><div class="sw-card-sub">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V' : 'This machine'}</div></div><div class="sw-card-state ${serverWorkspaceStateClass(state)}">${esc(state)}</div></div><div class="sw-card-metrics"><span>CPU<b>${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></span><span>RAM<b>${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></span><span>PID<b>${status.pidInGuest ?? '—'}</b></span></div></button>`;
+    return `<button class="sw-server-card" ${uiAction('openServerPage',[def.id])}><div class="sw-card-head"><div class="sw-card-icon">${meta.icon}</div><div class="grow"><div class="sw-card-title">${esc(def.name)}</div><div class="sw-card-sub">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V' : 'This machine'}</div></div><div class="sw-card-state ${serverWorkspaceStateClass(state)}">${esc(state)}</div></div><div class="sw-card-metrics"><span>CPU<b>${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></span><span>RAM<b>${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></span><span>PID<b>${status.pidInGuest ?? '—'}</b></span></div></button>`;
   }).join('')}</div>`;
 };
 
@@ -195,7 +195,7 @@ function renderServerWorkspace(def) {
   const meta = serverMeta(def);
   const tabs = serverWorkspaceTabs(def);
 
-  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}"><div class="sw-head"><button class="sw-back" onclick="serverWorkspaceHome()" title="Back to servers">←</button><div class="sw-icon">${meta.icon}</div><div class="grow"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div></div><div class="sw-actions"><button id="swStart" class="btn primary sw-power" onclick="action('${jsq(def.id)}','start')">Start</button><button id="swRestart" class="btn sw-power" onclick="action('${jsq(def.id)}','restart')">Restart</button><button id="swStop" class="btn danger sw-power" onclick="action('${jsq(def.id)}','stop')">Stop</button><span id="swState" class="sw-state"></span></div></div><div class="sw-tabs">${tabs.map(([key, label]) => `<button class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" onclick="serverWorkspaceSetTab('${key}')">${label}</button>`).join('')}</div><div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div></div>`;
+  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}"><div class="sw-head"><button class="sw-back" ${uiAction('serverWorkspaceHome')} title="Back to servers">←</button><div class="sw-icon">${meta.icon}</div><div class="grow"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div></div><div class="sw-actions"><button id="swStart" class="btn primary sw-power" ${uiAction('action',[def.id,'start'])}>Start</button><button id="swRestart" class="btn sw-power" ${uiAction('action',[def.id,'restart'])}>Restart</button><button id="swStop" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button><span id="swState" class="sw-state"></span></div></div><div class="sw-tabs">${tabs.map(([key, label]) => `<button class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" ${uiAction('serverWorkspaceSetTab',[key])}>${label}</button>`).join('')}</div><div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div></div>`;
   updateServerWorkspaceHeader(def);
   renderServerWorkspaceTab(def, SERVER_WORKSPACE.tab);
 }
@@ -241,7 +241,7 @@ async function renderServerConfig(def, body) {
     for (const field of section.fields || []) fields += configField(field, values[field.key] ?? field.default ?? '');
     fields += '</div></div>';
   }
-  body.innerHTML = `<div class="sw-toolbar"><div class="muted tiny">Game-specific settings from the ${esc(profileFor(def)?.label || def.gameType)} profile.</div><div class="spacer"></div><button class="btn primary" onclick="serverWorkspaceSaveConfig('${jsq(def.id)}')">Save configuration</button></div>${fields}`;
+  body.innerHTML = `<div class="sw-toolbar"><div class="muted tiny">Game-specific settings from the ${esc(profileFor(def)?.label || def.gameType)} profile.</div><div class="spacer"></div><button class="btn primary" ${uiAction('serverWorkspaceSaveConfig',[def.id])}>Save configuration</button></div>${fields}`;
 }
 
 async function serverWorkspaceSaveConfig(id) {
@@ -256,7 +256,7 @@ window.serverWorkspaceSaveConfig = serverWorkspaceSaveConfig;
 
 async function renderServerPlayers(def, body) {
   const list = await api(`/api/servers/${encodeURIComponent(def.id)}/rcon/players`);
-  body.innerHTML = `<div class="sw-toolbar"><div class="muted tiny">Players returned by the game RCON handler.</div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('players')">Refresh</button></div>${list?.length ? list.map(player => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(player.name)}</div><div class="sw-row-meta">${esc(player.steamId)} · ${esc(player.address || player.playerUid || '')}</div></div><button class="btn" onclick="serverWorkspacePlayerAction('${jsq(def.id)}','KickPlayer','${jsq(player.steamId)}')">Kick</button><button class="btn danger" onclick="serverWorkspacePlayerAction('${jsq(def.id)}','BanPlayer','${jsq(player.steamId)}')">Ban</button></div>`).join('') : '<div class="sw-empty">No players returned by RCON.</div>'}`;
+  body.innerHTML = `<div class="sw-toolbar"><div class="muted tiny">Players returned by the game RCON handler.</div><div class="spacer"></div><button class="btn" ${uiAction('serverWorkspaceRefreshTab',['players'])}>Refresh</button></div>${list?.length ? list.map(player => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(player.name)}</div><div class="sw-row-meta">${esc(player.steamId)} · ${esc(player.address || player.playerUid || '')}</div></div><button class="btn" ${uiAction('serverWorkspacePlayerAction',[def.id,'KickPlayer',player.steamId])}>Kick</button><button class="btn danger" ${uiAction('serverWorkspacePlayerAction',[def.id,'BanPlayer',player.steamId])}>Ban</button></div>`).join('') : '<div class="sw-empty">No players returned by RCON.</div>'}`;
 }
 
 async function serverWorkspacePlayerAction(id, command, payload) {
@@ -270,7 +270,7 @@ async function serverWorkspacePlayerAction(id, command, payload) {
 window.serverWorkspacePlayerAction = serverWorkspacePlayerAction;
 
 function renderServerMods(def, body) {
-  body.innerHTML = `<div class="sw-section"><h3>Mods</h3><div class="muted tiny" style="margin-bottom:14px">The existing game-specific mod manager opens from here. Unsupported games do not get this tab.</div><button class="btn primary" onclick="openMods('${jsq(def.id)}')">Open mod manager</button></div>`;
+  body.innerHTML = `<div class="sw-section"><h3>Mods</h3><div class="muted tiny" style="margin-bottom:14px">The existing game-specific mod manager opens from here. Unsupported games do not get this tab.</div><button class="btn primary" ${uiAction('openMods',[def.id])}>Open mod manager</button></div>`;
 }
 
 function serverWorkspaceBackupSize(bytes) {
@@ -316,10 +316,10 @@ async function renderServerBackups(def, body) {
       backup.fileCount != null ? `${backup.fileCount} files` : null
     ].filter(Boolean).join(' · ');
     const title = backup.label || backup.checkpointName;
-    return `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(title)}</div><div class="sw-row-meta mono">${esc(backup.checkpointName)}</div><div class="sw-row-meta">${esc(details)}</div>${skipped ? `<div class="tiny" style="color:var(--warn);margin-top:4px">Warning: backup.skippedFiles = ${skipped}; locked/unavailable files were skipped.</div>` : ''}</div><span class="state ${kindClass}">${esc(kindLabel)}</span><button class="btn" ${restoreDisabled || backup.restorable === false ? 'disabled' : ''} onclick="serverWorkspaceRestore('${jsq(def.id)}','${jsq(backup.checkpointName)}')">Restore</button><button class="btn danger" onclick="serverWorkspaceDeleteBackup('${jsq(def.id)}','${jsq(backup.checkpointName)}')">Delete</button></div>`;
+    return `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(title)}</div><div class="sw-row-meta mono">${esc(backup.checkpointName)}</div><div class="sw-row-meta">${esc(details)}</div>${skipped ? `<div class="tiny" style="color:var(--warn);margin-top:4px">Warning: backup.skippedFiles = ${skipped}; locked/unavailable files were skipped.</div>` : ''}</div><span class="state ${kindClass}">${esc(kindLabel)}</span><button class="btn" ${restoreDisabled || backup.restorable === false ? 'disabled' : ''} ${uiAction('serverWorkspaceRestore',[def.id,backup.checkpointName])}>Restore</button><button class="btn danger" ${uiAction('serverWorkspaceDeleteBackup',[def.id,backup.checkpointName])}>Delete</button></div>`;
   }).join('') : '<div class="sw-empty">No backups yet.</div>';
 
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Backups</b><div class="tiny muted">Archives/checkpoints stay on the server. Cloud access sends only control requests.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('backups')">Refresh</button></div><div class="sw-metrics"><div class="sw-metric"><span>Normal backups</span><b>${normal.length}</b></div><div class="sw-metric"><span>Safety copies</span><b>${safety.length}</b></div><div class="sw-metric"><span>Known storage</span><b>${serverWorkspaceBackupSize(knownBytes)}</b></div><div class="sw-metric"><span>Newest</span><b>${last ? new Date(last.createdAt).toLocaleString() : '—'}</b></div></div><div class="sw-section"><h3>Create backup</h3><div class="formgrid"><div class="field"><label>Backup name (optional)</label><input id="swBackupLabel" maxlength="80" placeholder="Before mod update"><div class="help">Human-readable label only. GameServerControl keeps the archive/checkpoint identifier machine-safe.</div></div><div class="field"><label>Retention</label><div style="display:flex;gap:8px"><input id="swBackupRetention" type="number" min="1" max="200" value="${settings.retention ?? 10}"><button class="btn" onclick="serverWorkspaceSaveBackupRetention('${jsq(def.id)}')">Save</button></div><div class="help">Keep ${settings.retention ?? 10} normal backups.${settings.isOverride ? ' Per-server override.' : ` Agent default: ${settings.defaultRetention ?? 10}.`} Safety copies are retained separately.</div></div></div><div class="sw-toolbar" style="margin-top:10px;margin-bottom:0"><div class="tiny muted">${esc(restoreHint)}</div><div class="spacer"></div><button class="btn primary" onclick="serverWorkspaceCreateBackup('${jsq(def.id)}')">Backup now</button></div></div><div class="callout info"><b>Safety copy:</b> before every restore, GameServerControl must create a complete pre-restore backup/checkpoint. If that safety copy fails, restore is aborted before current saves are replaced.${restoreDisabled ? `<br><b>Restore disabled:</b> ${esc(restoreHint)}` : ''}</div>${rows}`;
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Backups</b><div class="tiny muted">Archives/checkpoints stay on the server. Cloud access sends only control requests.</div></div><div class="spacer"></div><button class="btn" ${uiAction('serverWorkspaceRefreshTab',['backups'])}>Refresh</button></div><div class="sw-metrics"><div class="sw-metric"><span>Normal backups</span><b>${normal.length}</b></div><div class="sw-metric"><span>Safety copies</span><b>${safety.length}</b></div><div class="sw-metric"><span>Known storage</span><b>${serverWorkspaceBackupSize(knownBytes)}</b></div><div class="sw-metric"><span>Newest</span><b>${last ? new Date(last.createdAt).toLocaleString() : '—'}</b></div></div><div class="sw-section"><h3>Create backup</h3><div class="formgrid"><div class="field"><label>Backup name (optional)</label><input id="swBackupLabel" maxlength="80" placeholder="Before mod update"><div class="help">Human-readable label only. GameServerControl keeps the archive/checkpoint identifier machine-safe.</div></div><div class="field"><label>Retention</label><div style="display:flex;gap:8px"><input id="swBackupRetention" type="number" min="1" max="200" value="${settings.retention ?? 10}"><button class="btn" ${uiAction('serverWorkspaceSaveBackupRetention',[def.id])}>Save</button></div><div class="help">Keep ${settings.retention ?? 10} normal backups.${settings.isOverride ? ' Per-server override.' : ` Agent default: ${settings.defaultRetention ?? 10}.`} Safety copies are retained separately.</div></div></div><div class="sw-toolbar" style="margin-top:10px;margin-bottom:0"><div class="tiny muted">${esc(restoreHint)}</div><div class="spacer"></div><button class="btn primary" ${uiAction('serverWorkspaceCreateBackup',[def.id])}>Backup now</button></div></div><div class="callout info"><b>Safety copy:</b> before every restore, GameServerControl must create a complete pre-restore backup/checkpoint. If that safety copy fails, restore is aborted before current saves are replaced.${restoreDisabled ? `<br><b>Restore disabled:</b> ${esc(restoreHint)}` : ''}</div>${rows}`;
 }
 
 async function serverWorkspaceCreateBackup(id) {
@@ -373,7 +373,7 @@ window.serverWorkspaceDeleteBackup = serverWorkspaceDeleteBackup;
 function renderServerNetwork(def, body) {
   const profile = profileFor(def);
   const ports = effectiveNetworkPorts(def);
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Network</b><div class="tiny muted">Port reservations and Windows Firewall metadata.</div></div><div class="spacer"></div>${profile?.ports?.length ? `<button class="btn" onclick="serverWorkspaceResetNetwork('${jsq(def.id)}')">Profile defaults</button>` : ''}<button class="btn primary" onclick="serverWorkspaceSaveNetwork('${jsq(def.id)}')">Save</button></div><div class="field"><label>Reserved/listening ports — one per line</label><textarea id="swNetworkPorts" class="mono" style="min-height:220px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Example: UDP 2456-2457 Game or TCP 7777 Game/API.</div></div>`;
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Network</b><div class="tiny muted">Port reservations and Windows Firewall metadata.</div></div><div class="spacer"></div>${profile?.ports?.length ? `<button class="btn" ${uiAction('serverWorkspaceResetNetwork',[def.id])}>Profile defaults</button>` : ''}<button class="btn primary" ${uiAction('serverWorkspaceSaveNetwork',[def.id])}>Save</button></div><div class="field"><label>Reserved/listening ports — one per line</label><textarea id="swNetworkPorts" class="mono" style="min-height:220px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Example: UDP 2456-2457 Game or TCP 7777 Game/API.</div></div>`;
 }
 function serverWorkspaceResetNetwork(id) {
   const def = SERVERS.find(x => x.id === id), profile = def && profileFor(def), textarea = $('#swNetworkPorts');
@@ -397,7 +397,7 @@ window.serverWorkspaceSaveNetwork = serverWorkspaceSaveNetwork;
 async function renderServerSchedule(def, body) {
   const schedule = await api(`/api/servers/${encodeURIComponent(def.id)}/schedule`).catch(() => ({}));
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Schedule</b><div class="tiny muted">Automated restart, update and backup maintenance.</div></div><div class="spacer"></div><button class="btn danger" onclick="serverWorkspaceClearSchedule('${jsq(def.id)}')">Clear</button><button class="btn primary" onclick="serverWorkspaceSaveSchedule('${jsq(def.id)}')">Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Schedule</b><div class="tiny muted">Automated restart, update and backup maintenance.</div></div><div class="spacer"></div><button class="btn danger" ${uiAction('serverWorkspaceClearSchedule',[def.id])}>Clear</button><button class="btn primary" ${uiAction('serverWorkspaceSaveSchedule',[def.id])}>Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
 }
 
 async function serverWorkspaceSaveSchedule(id) {
@@ -423,7 +423,7 @@ window.serverWorkspaceClearSchedule = serverWorkspaceClearSchedule;
 
 function renderServerSettings(def, body) {
   const profile = profileFor(def);
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Server settings</b><div class="tiny muted">Profile-aware defaults first; raw launch fields stay under Advanced.</div></div><div class="spacer"></div><button class="btn" onclick="openEdit('${jsq(def.id)}')">Edit advanced settings</button></div><div class="sw-info"><div>Profile</div><div>${esc(profile?.label || 'Custom')}</div><div>Run on</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Steam App ID</div><div>${esc(def.steamAppId || '—')}</div><div>Log file</div><div class="mono">${esc(def.logPathInGuest || '—')}</div></div><div class="section">Maintenance</div><div class="sw-toolbar"><button class="btn" onclick="action('${jsq(def.id)}','update')">Update server</button>${profile?.caps?.config ? `<button class="btn" onclick="action('${jsq(def.id)}','apply')">Apply config</button>` : ''}<div class="spacer"></div><button class="btn danger" onclick="deleteServer('${jsq(def.id)}')">Delete / remove server</button></div>`;
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Server settings</b><div class="tiny muted">Profile-aware defaults first; raw launch fields stay under Advanced.</div></div><div class="spacer"></div><button class="btn" ${uiAction('openEdit',[def.id])}>Edit advanced settings</button></div><div class="sw-info"><div>Profile</div><div>${esc(profile?.label || 'Custom')}</div><div>Run on</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Steam App ID</div><div>${esc(def.steamAppId || '—')}</div><div>Log file</div><div class="mono">${esc(def.logPathInGuest || '—')}</div></div><div class="section">Maintenance</div><div class="sw-toolbar"><button class="btn" ${uiAction('action',[def.id,'update'])}>Update server</button>${profile?.caps?.config ? `<button class="btn" ${uiAction('action',[def.id,'apply'])}>Apply config</button>` : ''}<div class="spacer"></div><button class="btn danger" ${uiAction('deleteServer',[def.id])}>Delete / remove server</button></div>`;
 }
 
 function serverWorkspaceRefreshTab(tab = SERVER_WORKSPACE.tab) {
@@ -540,7 +540,7 @@ async function renderServerConsole(def, body) {
   const readOnly = mode === 'log';
   const rconReady = !!def.rconPort && !!def.rconPassword;
 
-  body.innerHTML = `<div class="sw-console"><div class="sw-console-head"><span class="sw-console-dot"></span><span>${isRcon ? 'RCON console' : isStdin ? 'Interactive process console' : 'Live log'}</span><span class="spacer"></span><span>${readOnly ? 'read only' : isRcon ? esc((def.rconHost || 'auto') + ':' + (def.rconPort || '—')) : 'stdin / stdout'}</span></div><pre id="swTerminal" class="sw-terminal"></pre>${readOnly ? '' : `<div class="sw-consolebar"><input id="swConsoleInput" autocomplete="off" placeholder="Type a server command…" ${isRcon && !rconReady ? 'disabled' : ''} onkeydown="if(event.key==='Enter')serverWorkspaceSendConsole('${jsq(def.id)}')"><button id="swConsoleSend" class="btn primary" ${isRcon && !rconReady ? 'disabled' : ''} onclick="serverWorkspaceSendConsole('${jsq(def.id)}')">Send</button></div>`}<div id="swConsoleHelp" class="sw-help">${readOnly ? esc(def.logPathInGuest || 'Following configured server log') : isRcon ? (rconReady ? 'Commands are sent through the game RCON handler.' : 'Configure RCON port/password in Settings first.') : 'Waiting for attached console state…'}</div></div>`;
+  body.innerHTML = `<div class="sw-console"><div class="sw-console-head"><span class="sw-console-dot"></span><span>${isRcon ? 'RCON console' : isStdin ? 'Interactive process console' : 'Live log'}</span><span class="spacer"></span><span>${readOnly ? 'read only' : isRcon ? esc((def.rconHost || 'auto') + ':' + (def.rconPort || '—')) : 'stdin / stdout'}</span></div><pre id="swTerminal" class="sw-terminal"></pre>${readOnly ? '' : `<div class="sw-consolebar"><input id="swConsoleInput" autocomplete="off" placeholder="Type a server command…" ${isRcon && !rconReady ? 'disabled' : ''} ${uiAction('serverWorkspaceSendConsole',[def.id],{event:'keydown',key:'Enter'})}><button id="swConsoleSend" class="btn primary" ${isRcon && !rconReady ? 'disabled' : ''} ${uiAction('serverWorkspaceSendConsole',[def.id])}>Send</button></div>`}<div id="swConsoleHelp" class="sw-help">${readOnly ? esc(def.logPathInGuest || 'Following configured server log') : isRcon ? (rconReady ? 'Commands are sent through the game RCON handler.' : 'Configure RCON port/password in Settings first.') : 'Waiting for attached console state…'}</div></div>`;
 
   const terminal = $('#swTerminal');
   if (isRcon) {
@@ -681,7 +681,7 @@ renderServerNetwork = function (def, body) {
     ? ports.map(port => `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(port.name || 'Game port')}</div><div class="sw-row-meta mono">${esc(formatNetworkPort(port))}</div></div></div>`).join('')
     : '<div class="sw-empty">This profile has no curated network ports yet.</div>';
 
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Network</b><div class="tiny muted">Game profile ports, collision reservations and firewall behavior.</div></div></div><div class="sw-metrics"><div class="sw-metric"><span>Profile</span><b>${esc(profile?.label || 'Custom')}</b></div><div class="sw-metric"><span>Reservations</span><b>${ports.length}</b></div><div class="sw-metric"><span>Game ports</span><b>${portCount}</b></div><div class="sw-metric"><span>Profile defaults</span><b>${profileCount}</b></div></div>${firewallInfo}${rconInfo}<div class="sw-section"><h3>Effective game ports</h3><div class="tiny muted" style="margin-bottom:10px">These reservations prevent conflicting BareMetal servers on the same Agent and tell you what to allow/forward. Hyper-V guests have independent network stacks.</div>${portRows}</div><details class="advanced"><summary>Advanced port override</summary><div class="advanced-body"><div class="field"><label>One port or range per line</label><textarea id="swNetworkPorts" class="mono" style="min-height:180px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: UDP 2456-2457 Game or TCP 7777 Game/API. Keep this aligned with the actual game configuration.</div></div><div class="sw-toolbar">${profilePorts.length ? `<button class="btn" onclick="serverWorkspaceResetNetwork('${jsq(def.id)}')">Reset to ${esc(profile.label)} defaults</button>` : ''}<div class="spacer"></div><button class="btn primary" onclick="serverWorkspaceSaveNetwork('${jsq(def.id)}')">Save override</button></div></div></details>`;
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Network</b><div class="tiny muted">Game profile ports, collision reservations and firewall behavior.</div></div></div><div class="sw-metrics"><div class="sw-metric"><span>Profile</span><b>${esc(profile?.label || 'Custom')}</b></div><div class="sw-metric"><span>Reservations</span><b>${ports.length}</b></div><div class="sw-metric"><span>Game ports</span><b>${portCount}</b></div><div class="sw-metric"><span>Profile defaults</span><b>${profileCount}</b></div></div>${firewallInfo}${rconInfo}<div class="sw-section"><h3>Effective game ports</h3><div class="tiny muted" style="margin-bottom:10px">These reservations prevent conflicting BareMetal servers on the same Agent and tell you what to allow/forward. Hyper-V guests have independent network stacks.</div>${portRows}</div><details class="advanced"><summary>Advanced port override</summary><div class="advanced-body"><div class="field"><label>One port or range per line</label><textarea id="swNetworkPorts" class="mono" style="min-height:180px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: UDP 2456-2457 Game or TCP 7777 Game/API. Keep this aligned with the actual game configuration.</div></div><div class="sw-toolbar">${profilePorts.length ? `<button class="btn" ${uiAction('serverWorkspaceResetNetwork',[def.id])}>Reset to ${esc(profile.label)} defaults</button>` : ''}<div class="spacer"></div><button class="btn primary" ${uiAction('serverWorkspaceSaveNetwork',[def.id])}>Save override</button></div></div></details>`;
 };
 
 renderServerSchedule = async function (def, body) {
@@ -689,7 +689,7 @@ renderServerSchedule = async function (def, body) {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const linux = def.hostingMode !== 'Vm' && !serverWorkspaceLooksWindows(def);
   const platformInfo = linux ? '<div class="callout info">Dashboard maintenance scheduling currently uses Windows Task Scheduler. On Linux use systemd timers or cron to call the local GameServerControl API.</div>' : '';
-  body.innerHTML = `${platformInfo}<div class="sw-toolbar"><div><b>Schedule</b><div class="tiny muted">Automated restart, update and backup maintenance.</div></div><div class="spacer"></div><button class="btn danger" onclick="serverWorkspaceClearSchedule('${jsq(def.id)}')">Clear</button><button class="btn primary" ${linux ? 'disabled' : ''} onclick="serverWorkspaceSaveSchedule('${jsq(def.id)}')">Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
+  body.innerHTML = `${platformInfo}<div class="sw-toolbar"><div><b>Schedule</b><div class="tiny muted">Automated restart, update and backup maintenance.</div></div><div class="spacer"></div><button class="btn danger" ${uiAction('serverWorkspaceClearSchedule',[def.id])}>Clear</button><button class="btn primary" ${linux ? 'disabled' : ''} ${uiAction('serverWorkspaceSaveSchedule',[def.id])}>Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
 };
 
 const SERVER_WORKSPACE_BASE_OPEN_CREATE_SETTINGS = openCreateSettings;
@@ -718,3 +718,209 @@ startInstall = async function (key) {
   }
   return SERVER_WORKSPACE_BASE_START_INSTALL(key);
 };
+
+/* Workspace overrides externalized from index.html for CSP. */
+/* Safe config-file workspace. The Agent API remains the filesystem authority. */
+(() => {
+  const state={serverId:null,list:[],selected:null,content:null,history:[],dirty:false,filter:'',validationTimer:null,validationSeq:0};
+  window.GSC_FILES=state;
+
+  const style=document.createElement('style');
+  style.id='gscFilesEditorStyles';
+  style.textContent=`
+    .fse-layout{display:grid;grid-template-columns:minmax(250px,330px) minmax(0,1fr);gap:12px;min-height:520px}.fse-sidebar,.fse-main{border:1px solid var(--line);border-radius:9px;background:#101318;overflow:hidden}.fse-filter{padding:10px;border-bottom:1px solid var(--line)}.fse-filter input{width:100%}.fse-list{max-height:650px;overflow:auto;padding:8px}.fse-group{margin:10px 5px 5px;color:var(--muted);font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.55px}.fse-file{display:block;width:100%;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;border-radius:7px;padding:8px 9px;margin:2px 0;cursor:pointer}.fse-file:hover{background:#171c23;border-color:#2c3440}.fse-file.active{background:#1a2028;border-color:#536171}.fse-file-name{font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-meta{font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-badges{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap}.fse-badge{font-size:9px;border:1px solid var(--line);border-radius:999px;padding:2px 6px;color:var(--muted)}.fse-badge.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-main{padding:12px}.fse-head{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px}.fse-title{font-size:14px;font-weight:850}.fse-path{font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted);overflow-wrap:anywhere;margin-top:3px}.fse-head-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}.fse-statusbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:9px}.fse-status{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:3px 7px;color:var(--muted)}.fse-status.ok{color:var(--ok);border-color:rgba(63,185,80,.45)}.fse-status.err{color:var(--danger);border-color:rgba(248,81,73,.55)}.fse-status.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-editgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px}.fse-pane-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:0 0 5px}.fse-editor{box-sizing:border-box;width:100%;min-height:390px;max-height:58vh;resize:vertical;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}.fse-preview{box-sizing:border-box;min-height:390px;max-height:58vh;overflow:auto;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;margin:0;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;tab-size:2}.fse-history{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}.fse-history-row{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}.fse-history-row:last-child{border-bottom:0}.fse-history-row .grow{min-width:0}.fse-token-comment{color:#7f8b99}.fse-token-string{color:#a5d6ff}.fse-token-number{color:#d2a8ff}.fse-token-literal{color:#ff7b72}.fse-token-key{color:#79c0ff}.fse-token-section{color:#ffa657;font-weight:700}.fse-token-tag{color:#7ee787}.fse-empty{padding:45px 20px;text-align:center;color:var(--muted)}
+    @media(max-width:1000px){.fse-layout{grid-template-columns:1fr}.fse-list{max-height:260px}.fse-editgrid{grid-template-columns:1fr}.fse-preview{min-height:220px;max-height:360px}}
+  `;
+  document.head.appendChild(style);
+
+  const baseTabs=serverWorkspaceTabs;
+  serverWorkspaceTabs=function(def){
+    const tabs=baseTabs(def);
+    if(!tabs.some(x=>x[0]==='files')){
+      const at=tabs.findIndex(x=>x[0]==='backups');
+      tabs.splice(at<0?tabs.length:at,0,['files','Files']);
+    }
+    return tabs;
+  };
+
+  const baseRenderTab=renderServerWorkspaceTab;
+  renderServerWorkspaceTab=async function(def,tab){
+    if(tab!=='files')return baseRenderTab(def,tab);
+    const token=++SERVER_WORKSPACE.renderToken,body=$('#swTabBody');
+    if(!body)return;
+    body.innerHTML='<div class="muted">Loading config files…</div>';
+    try{await renderServerFiles(def,body);if(token!==SERVER_WORKSPACE.renderToken)return}
+    catch(e){body.innerHTML=`<div class="callout">${esc(e.message)}</div>`}
+  };
+
+  function sizeText(bytes){
+    const n=Number(bytes)||0;if(n<1024)return n+' B';if(n<1024*1024)return (n/1024).toFixed(n<10240?1:0)+' KB';return (n/1024/1024).toFixed(1)+' MB';
+  }
+
+  function fileOwner(file){
+    const path=String(file.path||'').replace(/\\/g,'/'),parts=path.split('/').filter(Boolean),lower=parts.map(x=>x.toLowerCase());
+    const patterns=[['bepinex','plugins'],['factorygame','mods'],['pal','binaries','win64','mods']];
+    for(const pattern of patterns){
+      for(let i=0;i<=lower.length-pattern.length;i++){
+        if(pattern.every((p,j)=>lower[i+j]===p)&&parts[i+pattern.length])return parts[i+pattern.length];
+      }
+    }
+    for(const root of ['plugins','mods']){const i=lower.indexOf(root);if(i>=0&&parts[i+1])return parts[i+1]}
+    for(const root of ['config','configs']){const i=lower.indexOf(root);if(i>=0&&parts[i+2])return parts[i+1]}
+    const bi=lower.indexOf('bepinex');
+    if(bi>=0&&lower[bi+1]==='config'&&parts[bi+2])return parts[bi+2].replace(/\.[^.]+$/,'');
+    if(String(file.group||'').toLowerCase().includes('mod'))return String(file.name||'').replace(/\.[^.]+$/,'');
+    return '';
+  }
+
+  function groupLabel(file){const owner=fileOwner(file);return owner?`${file.group||'Config'} · ${owner}`:(file.group||'Config')}
+
+  function renderSidebar(){
+    const host=$('#fseList');if(!host)return;
+    const q=state.filter.trim().toLowerCase();
+    const files=state.list.filter(file=>!q||[file.name,file.path,file.group,fileOwner(file),file.format].some(v=>String(v||'').toLowerCase().includes(q)));
+    if(!files.length){host.innerHTML='<div class="fse-empty">No matching config files.</div>';return}
+    const groups=new Map();
+    for(const file of files){const label=groupLabel(file);if(!groups.has(label))groups.set(label,[]);groups.get(label).push(file)}
+    host.innerHTML=[...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([label,items])=>`<div class="fse-group">${esc(label)}</div>${items.sort((a,b)=>String(a.path).localeCompare(String(b.path))).map(file=>`<button class="fse-file ${state.selected===file.path?'active':''}" ${uiAction('gscFilesOpen',[state.serverId,file.path])}><div class="fse-file-name">${esc(file.name)}</div><div class="fse-file-meta">${esc(file.path)}</div><div class="fse-file-badges"><span class="fse-badge">${esc(String(file.format||'text').toUpperCase())}</span><span class="fse-badge">${esc(sizeText(file.sizeBytes))}</span>${file.restartRecommended?'<span class="fse-badge warn">restart</span>':''}</div></button>`).join('')}`).join('');
+  }
+
+  function tokenSpan(cls,value){return `<span class="${cls}">${esc(value)}</span>`}
+  function tokenizedLine(line,format){
+    const trimmed=line.trimStart();
+    if(/^(#|;|\/\/)/.test(trimmed))return tokenSpan('fse-token-comment',line);
+    if(format==='xml'||format==='config'){
+      let out='',at=0;for(const match of line.matchAll(/<[^>]+>/g)){out+=esc(line.slice(at,match.index))+tokenSpan('fse-token-tag',match[0]);at=match.index+match[0].length}return out+esc(line.slice(at));
+    }
+    if(format==='json'||format==='jsonc'){
+      const re=/"(?:\\.|[^"\\])*"|-?(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(?:true|false|null)\b|\/\/.*$/g;let out='',at=0;
+      for(const match of line.matchAll(re)){out+=esc(line.slice(at,match.index));const v=match[0];let cls='fse-token-literal';if(v.startsWith('//'))cls='fse-token-comment';else if(v.startsWith('"'))cls=/^\s*:/.test(line.slice(match.index+v.length))?'fse-token-key':'fse-token-string';else if(/^[-\d]/.test(v))cls='fse-token-number';out+=tokenSpan(cls,v);at=match.index+v.length}return out+esc(line.slice(at));
+    }
+    if(/^\s*\[.*\]\s*$/.test(line))return tokenSpan('fse-token-section',line);
+    const separator=format==='yaml'?line.indexOf(':'):Math.max(line.indexOf('='),line.indexOf(':'));
+    if(separator>0){const key=line.slice(0,separator),rest=line.slice(separator);return tokenSpan('fse-token-key',key)+esc(rest).replace(/\b(true|false|null)\b/g,'<span class="fse-token-literal">$1</span>')}
+    return esc(line);
+  }
+
+  function highlight(content,format){
+    const text=String(content||''),limit=140000,visible=text.length>limit?text.slice(0,limit):text;
+    const rendered=visible.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').map(line=>tokenizedLine(line,String(format||'').toLowerCase())).join('\n');
+    return rendered+(text.length>limit?'\n\n<span class="fse-token-comment">[Highlighted preview truncated; the editor still contains the complete file.]</span>':'');
+  }
+
+  function currentInfo(){return state.list.find(x=>x.path===state.selected)||null}
+  function setValidation(kind,text){const el=$('#fseValidation');if(!el)return;el.className='fse-status '+(kind||'');el.textContent=text}
+  function updatePreview(){const input=$('#fseText'),preview=$('#fsePreview');if(!input||!preview)return;preview.innerHTML=highlight(input.value,state.content?.format||currentInfo()?.format);}
+
+  function editorHtml(){
+    const info=currentInfo(),c=state.content;
+    if(!c||!info)return '<div class="fse-empty">Select a config file.</div>';
+    const running=serverWorkspaceStatus(state.serverId).processState==='Running';
+    const restart=info.restartRecommended?`<span class="fse-status warn">Restart recommended${running?' · server running':''}</span>`:'<span class="fse-status ok">Reload usually not required</span>';
+    const history=state.history.length?state.history.map(x=>`<div class="fse-history-row"><div class="grow"><div class="fse-file-name">${new Date(x.createdAt).toLocaleString()}</div><div class="fse-file-meta">${esc(sizeText(x.sizeBytes))} · ${esc(x.id)}</div></div><button class="btn" ${uiAction('gscFilesRestore',[x.id])}>Restore</button></div>`).join(''):'<div class="muted tiny">No edit history yet. A snapshot is created automatically before every save or restore.</div>';
+    return `<div class="fse-head"><div class="grow"><div class="fse-title">${esc(info.name)}</div><div class="fse-path">${esc(info.path)}</div></div><div class="fse-head-actions"><button class="btn" ${uiAction('gscFilesReload')}>Reload</button><button id="fseSave" class="btn primary" ${state.dirty?'':'disabled'} ${uiAction('gscFilesSave')}>Save</button></div></div><div class="fse-statusbar"><span class="fse-status">${esc(String(c.format||info.format||'text').toUpperCase())}</span><span class="fse-status">${esc(sizeText(c.sizeBytes))}</span><span class="fse-status">${new Date(c.modifiedAt).toLocaleString()}</span>${restart}<span id="fseValidation" class="fse-status">Unchanged</span></div>${info.restartRecommended&&running?'<div class="callout info">This file is normally read when the server/plugin starts. Save is allowed while running, but a restart is recommended for the change to take effect.</div>':''}<div class="fse-editgrid"><div><div class="fse-pane-title">Editor · Ctrl+S to save</div><textarea id="fseText" class="fse-editor" spellcheck="false" ${uiAction('gscFilesInput',[],{event:'input'})} ${uiAction('gscFilesKeydown',[],{event:'keydown',pass:'event'})}>${esc(c.content)}</textarea></div><div><div class="fse-pane-title">Syntax-highlighted preview</div><pre id="fsePreview" class="fse-preview">${highlight(c.content,c.format||info.format)}</pre></div></div><div class="fse-history"><div class="sw-toolbar"><div><b>Edit history</b><div class="tiny muted">Last ${state.history.length} snapshots for this file.</div></div><div class="spacer"></div></div>${history}</div>`;
+  }
+
+  function renderEditor(){const host=$('#fseMain');if(host)host.innerHTML=editorHtml()}
+
+  window.gscFilesFilter=function(value){state.filter=String(value||'');renderSidebar()};
+
+  window.gscFilesOpen=async function(serverId,path,force=false){
+    if(state.dirty&&!force&&state.selected&&state.selected!==path&&!confirm('Discard unsaved changes in the current config file?'))return;
+    state.serverId=serverId;state.selected=path;state.dirty=false;renderSidebar();
+    const host=$('#fseMain');if(host)host.innerHTML='<div class="fse-empty">Loading file…</div>';
+    try{
+      const encoded=encodeURIComponent(path);const [content,history]=await Promise.all([api(`/api/servers/${encodeURIComponent(serverId)}/files/content?path=${encoded}`),api(`/api/servers/${encodeURIComponent(serverId)}/files/history?path=${encoded}`)]);
+      if(state.selected!==path)return;state.content=content;state.history=history||[];renderEditor();
+    }catch(e){if(host)host.innerHTML=`<div class="callout">${esc(e.message)}</div>`}
+  };
+
+  window.gscFilesInput=function(){
+    if(!state.content)return;state.dirty=true;const save=$('#fseSave');if(save)save.disabled=false;updatePreview();setValidation('','Checking syntax…');
+    clearTimeout(state.validationTimer);const seq=++state.validationSeq;
+    state.validationTimer=setTimeout(async()=>{const input=$('#fseText');if(!input||seq!==state.validationSeq)return;try{await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify({path:state.selected,content:input.value})});if(seq===state.validationSeq)setValidation('ok','Syntax valid')}catch(e){if(seq===state.validationSeq)setValidation('err',e.message)}},650);
+  };
+
+  window.gscFilesKeydown=function(event){if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();gscFilesSave()}};
+
+  async function refreshList(){
+    const list=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files`);state.list=list.files||[];renderSidebar();
+  }
+  async function refreshHistory(){state.history=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/history?path=${encodeURIComponent(state.selected)}`)||[];renderEditor()}
+
+  window.gscFilesSave=async function(){
+    const input=$('#fseText');if(!input||!state.content||!state.selected||!state.dirty)return;
+    const save=$('#fseSave');if(save){save.disabled=true;save.textContent='Saving…'}
+    try{
+      const payload={path:state.selected,content:input.value};
+      await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify(payload)});
+      const result=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/content`,{method:'PUT',body:JSON.stringify({...payload,expectedSha256:state.content.sha256})});
+      state.content={...state.content,content:input.value,sha256:result.sha256,sizeBytes:result.sizeBytes,modifiedAt:result.modifiedAt};state.dirty=false;setValidation('ok','Saved · syntax valid');
+      await refreshList();await refreshHistory();const info=currentInfo();setNotice(info?.restartRecommended?'Config saved. Restart recommended for this change.':'Config saved.','ok',false);
+    }catch(e){setValidation('err',e.message);setNotice('Config save failed: '+e.message,'err',false);if(save)save.disabled=false}
+    finally{if(save)save.textContent='Save'}
+  };
+
+  window.gscFilesReload=function(){if(!state.selected)return;if(state.dirty&&!confirm('Discard unsaved changes and reload this file?'))return;gscFilesOpen(state.serverId,state.selected,true)};
+
+  window.gscFilesRestore=async function(backupId){
+    if(!state.selected||!state.content)return;if(!confirm('Restore this config snapshot? The current file will be saved as an undo snapshot first.'))return;
+    try{
+      await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/restore`,{method:'POST',body:JSON.stringify({path:state.selected,backupId,expectedSha256:state.content.sha256})});
+      setNotice('Config snapshot restored. An undo snapshot was created.','ok',false);await refreshList();await gscFilesOpen(state.serverId,state.selected,true);
+    }catch(e){setNotice('Restore failed: '+e.message,'err',false)}
+  };
+
+  window.renderServerFiles=async function(def,body){
+    if(state.serverId!==def.id){clearTimeout(state.validationTimer);state.serverId=def.id;state.list=[];state.selected=null;state.content=null;state.history=[];state.dirty=false;state.filter=''}
+    const result=await api(`/api/servers/${encodeURIComponent(def.id)}/files`);
+    if(!result.supported){body.innerHTML=`<div class="callout info"><b>Files editor unavailable.</b><br>${esc(result.reason||'This server does not support safe config-file access.')}</div>`;return}
+    state.list=result.files||[];
+    if(state.selected&&!state.list.some(x=>x.path===state.selected)){state.selected=null;state.content=null;state.history=[];state.dirty=false}
+    if(!state.selected&&state.list.length)state.selected=state.list[0].path;
+    body.innerHTML=`<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Only existing text configs inside allowlisted server/mod roots are exposed. Arbitrary filesystem access is not available.</div></div><div class="spacer"></div><button class="btn" ${uiAction('serverWorkspaceRefreshTab',['files'])}>Rescan</button></div><div class="fse-layout"><aside class="fse-sidebar"><div class="fse-filter"><input placeholder="Filter files, paths or plugins…" value="${esc(state.filter)}" ${uiAction('gscFilesFilter',[],{event:'input',pass:'value'})}></div><div id="fseList" class="fse-list"></div></aside><main id="fseMain" class="fse-main"></main></div>`;
+    renderSidebar();renderEditor();if(state.selected&&!state.content)await gscFilesOpen(def.id,state.selected,true);
+  };
+})();
+
+/* Parallel install polling + live detail log. */
+refreshJobs=async function(render=true){
+  const refs=loadJobRefs();let active=0;
+  await Promise.all(refs.map(async r=>{try{JOB_CACHE[r.jobId]=await api('/api/servers/install/'+encodeURIComponent(r.jobId));if(!JOB_CACHE[r.jobId].finished)active++}catch{JOB_CACHE[r.jobId]={jobId:r.jobId,phase:'expired',line:'Job no longer available (Agent may have restarted).',finished:true,success:false,logLines:[]}}}));
+  const badge=$('#installBadge');if(badge){badge.textContent=active;badge.classList.toggle('hidden',active===0)}if(render||CURRENT_VIEW==='installs')renderJobs();
+};
+
+async function updateLiveJobDetail(id){
+  try{const p=await api('/api/servers/install/'+encodeURIComponent(id));JOB_CACHE[id]=p;const phase=$('#liveJobPhase'),bar=$('#liveJobBar'),line=$('#liveJobLine'),log=$('#liveJobLog'),state=$('#liveJobState');if(!log)return p;const nearBottom=log.scrollHeight-log.scrollTop-log.clientHeight<50;if(phase)phase.textContent=phaseText(p.phase||'');if(bar)bar.style.width=Math.max(0,Math.min(100,p.percentHint??0))+'%';if(line)line.textContent=p.line||'';if(state){state.textContent=p.finished?(p.success?'DONE':'FAILED'):'ACTIVE';state.className='state '+(p.success?'up':p.finished?'down':'warn')}log.textContent=(p.logLines||[]).join('\n')||'Waiting for SteamCMD output…';if(nearBottom)log.scrollTop=log.scrollHeight;return p}catch(e){const line=$('#liveJobLine');if(line)line.textContent='Log refresh failed: '+e.message;return null}}
+openJob=async function(id){
+  const r=loadJobRefs().find(x=>x.jobId===id)||{jobId:id};
+  openModal(r.name||id,`<div class="install-live-head"><div><div class="jobphase">Job ${esc(id)} · <span id="liveJobPhase">Loading</span></div><div id="liveJobLine" class="jobline" style="margin-top:5px">Loading…</div></div><div class="spacer"></div><span id="liveJobState" class="state warn">ACTIVE</span></div><div class="progress"><div id="liveJobBar" class="bar" style="width:0"></div></div><pre id="liveJobLog" class="log install-live-log">Connecting…</pre>`,`<button class="btn" ${uiAction('closeModal')}>Run in background</button>`,true);
+  let stopped=false;const tick=async()=>{if(stopped)return;const p=await updateLiveJobDetail(id);if(p?.finished&&timer){clearInterval(timer);timer=null}};let timer=setInterval(tick,650);MODAL_CLEANUP=()=>{stopped=true;if(timer)clearInterval(timer)};await tick();
+};
+
+/* Password visibility for login, RCON and every game-config Password field. */
+function enhancePasswordFields(root=document){
+  root.querySelectorAll('input[type="password"]:not([data-eye-ready])').forEach(input=>{input.dataset.eyeReady='1';const wrap=document.createElement('div');wrap.className='password-wrap';input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);const b=document.createElement('button');b.type='button';b.className='password-eye';b.textContent='◉';b.title='Show password';b.setAttribute('aria-label','Show password');b.addEventListener('click',()=>{const show=input.type==='password';input.type=show?'text':'password';b.title=show?'Hide password':'Show password';b.setAttribute('aria-label',b.title);b.textContent=show?'○':'◉'});wrap.appendChild(b)})
+}
+const baseOpenModal=openModal;openModal=function(...args){baseOpenModal(...args);enhancePasswordFields($('#modal'))};enhancePasswordFields(document);
+new MutationObserver(()=>enhancePasswordFields(document)).observe(document.body,{childList:true,subtree:true});
+
+/* Reconnect attached stdin consoles after lifecycle changes performed from the workspace. */
+const baseServerAction=action;
+action=async function(id,a){
+  await baseServerAction(id,a);
+  if(!['start','restart','stop'].includes(a))return;
+  if(SERVER_WORKSPACE.serverId!==id||SERVER_WORKSPACE.tab!=='console')return;
+  const d=SERVERS.find(x=>x.id===id);if(!d||profileFor(d)?.caps?.console!=='stdin')return;
+  await renderServerWorkspaceTab(d,'console');
+};
+
+/* Keep the complete-delete behavior introduced earlier. */
+window.deleteServer=function(id){
+  const d=SERVERS.find(x=>x.id===id);if(!d)return;const bareMetal=d.hostingMode!=='Vm',hasSaves=Array.isArray(d.saveDirs)&&d.saveDirs.length>0;
+  const permanent=bareMetal?`<div class="section">Delete server completely</div><div class="callout">This permanently stops the server and deletes the entire server folder. This cannot be undone.</div><div class="kv compact"><div>Folder to delete</div><div class="mono">${esc(d.guestWorkingDir||'')}</div></div><div class="checkrow" style="margin-top:14px"><input id="deleteFinalBackup" type="checkbox" ${hasSaves?'checked':'disabled'}><label for="deleteFinalBackup">Create a final save backup before deletion${hasSaves?'':' (no save folders configured)'}</label></div><div class="field"><label>Type the exact server name to confirm</label><input id="deleteConfirm" autocomplete="off" placeholder="${esc(d.name)}" ${uiAction('syncPermanentDeleteButton',[id],{event:'input'})}><div class="help">Required: <b>${esc(d.name)}</b></div></div><button id="permanentDeleteBtn" class="btn danger" disabled ${uiAction('permanentDeleteServer',[id])}>Permanently delete server and files</button>`:`<div class="section">Delete server completely</div><div class="callout info">Complete file deletion is disabled for Hyper-V servers because the server folder is inside the guest VM.</div>`;
+  openModal('Delete — '+d.name,`<div class="section">Remove from GameServerControl</div><div class="help">Removes only the server definition. All game files and saves remain untouched.</div><button class="btn" ${uiAction('removeServerOnly',[id])}>Remove only</button>${permanent}`,`<button class="btn" ${uiAction('closeModal')}>Cancel</button>`,true)
+};
+window.removeServerOnly=async function(id){const d=SERVERS.find(x=>x.id===id);if(!confirm(`Remove "${d?.name||id}" from GameServerControl?\n\nServer files will remain untouched.`))return;try{await api(`/api/servers/${encodeURIComponent(id)}`,{method:'DELETE'});setNotice('Server removed. Files were kept.','ok');closeModal();await loadServers()}catch(e){setNotice('Remove failed: '+e.message,'err')}};
+window.syncPermanentDeleteButton=function(id){const d=SERVERS.find(x=>x.id===id),input=$('#deleteConfirm'),button=$('#permanentDeleteBtn');if(button)button.disabled=!d||!input||input.value!==d.name};
+window.permanentDeleteServer=async function(id){const d=SERVERS.find(x=>x.id===id);if(!d)return;const confirmation=$('#deleteConfirm')?.value||'';if(confirmation!==d.name)return setNotice('Type the exact server name first.','err');const createFinalBackup=!!$('#deleteFinalBackup')?.checked,button=$('#permanentDeleteBtn');if(button){button.disabled=true;button.textContent='Deleting…'}try{const result=await api(`/api/servers/${encodeURIComponent(id)}/delete-completely`,{method:'POST',body:JSON.stringify({confirmation,createFinalBackup})});setNotice(result.message||'Server permanently deleted.','ok');closeModal();await loadServers()}catch(e){setNotice('Permanent deletion cancelled/failed: '+e.message,'err');if(button){button.textContent='Permanently delete server and files';syncPermanentDeleteButton(id)}}};

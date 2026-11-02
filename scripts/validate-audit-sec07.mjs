@@ -1,0 +1,71 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+const webUiDir = 'src/GameServerControl.Agent/WebUi';
+const indexHtml = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
+const webUiSources = fs.readdirSync(webUiDir)
+  .filter(name => /\.(?:html|js)$/i.test(name))
+  .map(name => [name, fs.readFileSync(path.join(webUiDir, name), 'utf8')]);
+const admin = fs.readFileSync(path.join(webUiDir, 'server-admin.js'), 'utf8');
+const roleMiddleware = fs.readFileSync('src/GameServerControl.Agent/Auth/RoleEnforcementMiddleware.cs', 'utf8');
+const securityHeadersPath = 'src/GameServerControl.Agent/Security/WebSecurityHeadersMiddleware.cs';
+const securityHeaders = fs.existsSync(securityHeadersPath) ? fs.readFileSync(securityHeadersPath, 'utf8') : '';
+const cloudWorker = fs.readFileSync('src/GameServerControl.Cloud/src/index.js', 'utf8');
+const cloudAdapter = fs.readFileSync('src/GameServerControl.Cloud/static/cloud-adapter.js', 'utf8');
+const cloudBuild = fs.readFileSync('src/GameServerControl.Cloud/scripts/build.mjs', 'utf8');
+
+function requireToken(source, token, message) {
+  if (!source.includes(token)) throw new Error(`${message}: missing ${token}`);
+}
+
+function rejectPattern(source, pattern, message, fileName) {
+  const match = source.match(pattern);
+  if (match) throw new Error(`${message} in ${fileName}: ${match[0]}`);
+}
+
+for (const [name, source] of [...webUiSources, ['cloud-adapter.js', cloudAdapter]]) {
+  rejectPattern(source, /\bon(?:click|change|input|keydown|keyup|submit|focus|blur)\s*=/i,
+    'SEC-07 forbids inline DOM event-handler attributes', name);
+  rejectPattern(source, /\.on(?:click|change|input|keydown|keyup|submit|focus|blur)\s*=/i,
+    'SEC-07 requires addEventListener/delegation instead of event-handler properties', name);
+  rejectPattern(source, /javascript\s*:/i,
+    'SEC-07 forbids javascript: URLs', name);
+  rejectPattern(source, /\bjsq\s*\(/,
+    'SEC-07 forbids embedding JavaScript argument strings into generated HTML', name);
+  rejectPattern(source, /\beval\s*\(|\bnew\s+Function\s*\(/,
+    'SEC-07 forbids dynamic JavaScript evaluation', name);
+}
+
+rejectPattern(indexHtml, /<script(?![^>]*\bsrc\s*=)[^>]*>[\s\S]*?<\/script>/i,
+  'SEC-07 requires all executable JavaScript to come from external same-origin files', 'index.html');
+requireToken(indexHtml, '/webui/core.js', 'SEC-07 must keep control-room logic in an external same-origin script');
+requireToken(indexHtml, '/webui/server-workspace.js', 'SEC-07 must keep workspace logic in an external same-origin script');
+rejectPattern(cloudBuild, /<script>[^<]*GSC_CLOUD_MODE/i,
+  'Cloud staging must not inject an inline executable bootstrap', 'build.mjs');
+requireToken(cloudBuild, '/webui/cloud-adapter.js', 'Cloud staging must use the external adapter script');
+
+// The legacy config editor template contains two delegated declarations on one textarea.
+// A trusted post-render binder must strip those ambiguous metadata attributes and attach both
+// behaviors explicitly, so browser duplicate-attribute parsing cannot drop input or Ctrl+S.
+requireToken(admin, 'FILE_EDITOR_ACTION_ATTRS', 'Config editor must remove ambiguous delegated metadata before rebinding');
+requireToken(admin, "editor.addEventListener('input'", 'Config editor must bind input through trusted external JavaScript');
+requireToken(admin, "editor.addEventListener('keydown'", 'Config editor must bind Ctrl+S through trusted external JavaScript');
+requireToken(admin, 'editor.removeAttribute(attr)', 'Config editor must remove duplicate data-gsc action attributes before direct binding');
+
+requireToken(roleMiddleware, 'WebSecurityHeadersMiddleware.Apply', 'The registered Agent middleware must apply WebUI security headers');
+requireToken(securityHeaders, 'Content-Security-Policy', 'Agent must emit a Content-Security-Policy header');
+requireToken(securityHeaders, "script-src 'self'", 'Agent CSP must restrict scripts to same-origin files');
+requireToken(securityHeaders, "script-src-attr 'none'", 'Agent CSP must disable inline event-handler attributes');
+requireToken(securityHeaders, "object-src 'none'", 'Agent CSP must disable plugin/object execution');
+requireToken(securityHeaders, "base-uri 'none'", 'Agent CSP must disable injected base URLs');
+requireToken(securityHeaders, "frame-ancestors 'none'", 'Agent CSP must prevent framing');
+requireToken(securityHeaders, 'X-Content-Type-Options', 'Agent must emit nosniff protection');
+requireToken(securityHeaders, 'Referrer-Policy', 'Agent must emit a restrictive referrer policy');
+
+requireToken(cloudWorker, 'content-security-policy', 'Cloud gateway must emit the same CSP protections');
+requireToken(cloudWorker, "script-src 'self'", 'Cloud CSP must restrict scripts to same-origin files');
+requireToken(cloudWorker, "script-src-attr 'none'", 'Cloud CSP must disable inline event-handler attributes');
+requireToken(cloudWorker, "frame-ancestors 'none'", 'Cloud CSP must prevent framing');
+requireToken(cloudWorker, 'x-content-type-options', 'Cloud gateway must emit nosniff protection');
+
+console.log('Audit SEC-07 WebUI XSS/CSP contract OK.');

@@ -34,6 +34,14 @@ Bearer tokens are accepted from the `Authorization` header for normal Agent API 
 
 The Agent also includes bounded, in-memory authentication-failure throttling for protected `/api` and `/hubs` requests. Repeated failed authentication from the same direct peer address triggers a temporary HTTP 429 response with `Retry-After`. A successful authentication clears that peer's failure state. This is defense in depth, not a replacement for private networking, firewall policy or Cloudflare Access.
 
+## Browser hardening
+
+The direct Agent UI and Cloudflare gateway send a Content Security Policy that permits executable JavaScript only from same-origin external files and disables inline event-handler attributes (`script-src 'self'` and `script-src-attr 'none'`). The policy also disables object/plugin execution, injected base URLs and framing. Responses include `X-Content-Type-Options: nosniff`, a no-referrer policy and restrictive browser feature permissions.
+
+Web UI actions use delegated event listeners rather than executable HTML attributes. Arguments embedded into generated UI markup are encoded as data rather than JavaScript source before they can be dispatched to a registered action. Keep new UI code compatible with this model; do not add inline `<script>` blocks, `javascript:` URLs or `on*=` event attributes.
+
+Inline CSS remains allowed because the existing UI uses style attributes and runtime style updates. This does not relax the JavaScript execution policy.
+
 ## Sensitive files
 
 Protect the Agent directory. In particular:
@@ -92,6 +100,7 @@ Optional marketplace/provider keys such as the CurseForge API key are stored ser
 - [ ] `appsettings.json`, `servers.json` and `tokens.json` have restricted filesystem permissions.
 - [ ] Admin and ReadOnly tokens are assigned appropriately.
 - [ ] Public browser access, if used, is protected by Cloudflare Access or an equivalent authentication layer.
+- [ ] Web UI responses include the restrictive Content Security Policy/security headers.
 - [ ] HTTPS is terminated at a trusted proxy/tunnel or configured appropriately for direct private access.
 - [ ] Audit logs are writable and periodically reviewed.
 

@@ -6,19 +6,7 @@
 <meta name="theme-color" content="#0b0d10" />
 <title>GameServerControl</title>
 <link rel="stylesheet" href="/webui/styles.css" />
-<style>
-/* Control-room layout. Kept here so the web-only Agent remains a single deployable UI bundle. */
-.noticebar{display:flex;align-items:center;gap:10px;margin:0 0 14px;padding:10px 12px;border:1px solid var(--line);background:var(--panel);border-radius:9px;font-size:12px}.noticebar.hidden{display:none}.noticebar.ok{border-color:rgba(63,185,80,.5);background:rgba(63,185,80,.06)}.noticebar.err{border-color:rgba(248,81,73,.55);background:rgba(248,81,73,.07)}.noticebar.info{border-color:rgba(88,166,255,.45);background:rgba(88,166,255,.06)}
-.server-control-layout{display:grid;grid-template-columns:minmax(270px,340px) minmax(0,1fr);gap:14px;align-items:start}.server-list{display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 150px);overflow:auto;padding-right:3px}.server-row{width:100%;display:flex;gap:10px;align-items:center;text-align:left;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:10px;padding:12px;transition:.12s}.server-row:hover{border-color:#4f5a68;background:#181c22}.server-row.selected{border-color:#657181;background:#1a1f26;box-shadow:inset 3px 0 0 var(--accent)}.server-row .server-row-icon{width:30px;text-align:center;font-size:22px}.server-row .server-row-main{flex:1;min-width:0}.server-row .server-row-name{font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.server-row .server-row-meta{color:var(--muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}.server-row-state{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.35px}.server-row-state.up{color:var(--ok)}.server-row-state.warn{color:var(--warn)}.server-row-state.down{color:var(--muted)}
-.server-detail-panel{border:1px solid var(--line);background:var(--panel);border-radius:11px;min-height:420px;overflow:hidden}.server-detail-head{display:flex;gap:13px;align-items:flex-start;padding:18px;border-bottom:1px solid var(--line)}.server-detail-icon{font-size:31px;width:42px;text-align:center}.server-detail-title{font-size:20px;font-weight:850}.server-detail-sub{font-size:12px;color:var(--muted);margin-top:3px;overflow-wrap:anywhere}.server-detail-body{padding:17px}.server-state-large{margin-left:auto;font-size:12px;font-weight:850;border:1px solid var(--line);border-radius:999px;padding:5px 10px}.server-state-large.up{color:var(--ok);border-color:rgba(63,185,80,.45);background:rgba(63,185,80,.06)}.server-state-large.warn{color:var(--warn);border-color:rgba(210,153,34,.45);background:rgba(210,153,34,.06)}.server-state-large.down{color:var(--muted)}
-.operation-banner{display:flex;gap:10px;align-items:center;border:1px solid rgba(88,166,255,.4);background:rgba(88,166,255,.06);border-radius:9px;padding:11px 12px;margin-bottom:14px}.operation-banner.err{border-color:rgba(248,81,73,.5);background:rgba(248,81,73,.07)}.operation-banner.ok{border-color:rgba(63,185,80,.45);background:rgba(63,185,80,.06)}.spinner{width:15px;height:15px;border:2px solid rgba(255,255,255,.22);border-top-color:var(--info);border-radius:50%;animation:gscspin .7s linear infinite;flex:0 0 auto}@keyframes gscspin{to{transform:rotate(360deg)}}
-.control-buttons{display:grid;grid-template-columns:repeat(3,minmax(110px,1fr));gap:9px;margin-bottom:15px}.control-btn{min-height:46px;font-size:14px}.control-btn.stop:not(:disabled){border-color:rgba(248,81,73,.5)}.control-btn.restart:not(:disabled){border-color:rgba(210,153,34,.45)}
-.detail-metrics{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:8px;margin-bottom:16px}.metric-box{border:1px solid var(--line);background:#101318;border-radius:8px;padding:9px 10px}.metric-box span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.45px}.metric-box b{display:block;margin-top:3px;font-size:14px}.quick-panel{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}.quick-panel .manage-tile{min-height:66px}.server-path{margin-top:15px;border-top:1px solid var(--line);padding-top:12px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}.server-path .mono{color:#c8d0da}
-.password-wrap{position:relative;display:flex;align-items:center}.password-wrap>input{padding-right:42px!important}.password-eye{position:absolute;right:5px;height:30px;min-width:32px;border:0;background:transparent;color:var(--muted);border-radius:5px;padding:0 7px}.password-eye:hover{color:var(--text);background:var(--panel2)}
-.install-live-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}.install-live-head .spacer{flex:1}.install-live-log{min-height:320px;max-height:55vh}.toast{display:none!important}
-@media(max-width:900px){.server-control-layout{grid-template-columns:1fr}.server-list{max-height:none}.server-detail-panel{min-height:0}.detail-metrics{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:560px){.control-buttons{grid-template-columns:1fr}.detail-metrics{grid-template-columns:1fr 1fr}.server-detail-head{padding:14px}.server-detail-body{padding:13px}}
-</style>
+
 </head>
 
 <body>
@@ -26,314 +14,38 @@
   <h1>GameServerControl</h1><div class="muted">Connect this browser to the Agent.</div>
   <div class="field"><label>Agent URL</label><input id="loginUrl"></div>
   <div class="field"><label>API token</label><input id="loginToken" type="password" autocomplete="off"></div>
-  <button class="btn primary" style="width:100%" onclick="login()">Connect</button>
+  <button id="loginConnectBtn" class="btn primary" style="width:100%">Connect</button>
 </div>
 <div id="app" class="hidden">
   <div class="top">
     <div class="brand">GameServer<span>Control</span></div><div id="agentLabel" class="tiny muted hide-sm"></div><div class="spacer"></div>
-    <button id="updateBtn" class="btn hidden" onclick="openUpdate()">Update</button>
-    <button class="btn primary" onclick="openCreate()">＋ Create server</button>
-    <button class="btn" onclick="openDiscover()">Discover</button>
-    <button class="btn" onclick="openAddExisting()">Add existing</button>
-    <button class="btn hide-sm" onclick="openTokens()">Tokens</button>
-    <button class="btn" onclick="refreshAll()">Refresh</button>
-    <button class="btn hide-sm" onclick="logout()">Sign out</button>
+    <button id="updateBtn" class="btn hidden">Update</button>
+    <button id="createServerBtn" class="btn primary">＋ Create server</button>
+    <button id="discoverBtn" class="btn">Discover</button>
+    <button id="addExistingBtn" class="btn">Add existing</button>
+    <button id="tokensBtn" class="btn hide-sm">Tokens</button>
+    <button id="refreshBtn" class="btn">Refresh</button>
+    <button id="logoutBtn" class="btn hide-sm">Sign out</button>
   </div>
   <div class="shell">
-    <div class="tabs"><button id="tabServers" class="tab active" onclick="showView('servers')">Servers</button><button id="tabInstalls" class="tab" onclick="showView('installs')">Installations <span id="installBadge" class="badge hidden">0</span></button></div>
-    <div id="noticeBar" class="noticebar hidden"><strong id="noticeTitle">Status</strong><span id="noticeText" class="grow"></span><button class="btn" style="padding:4px 8px" onclick="clearNotice()">×</button></div>
+    <div class="tabs"><button id="tabServers" class="tab active">Servers</button><button id="tabInstalls" class="tab">Installations <span id="installBadge" class="badge hidden">0</span></button></div>
+    <div id="noticeBar" class="noticebar hidden"><strong id="noticeTitle">Status</strong><span id="noticeText" class="grow"></span><button id="noticeCloseBtn" class="btn" style="padding:4px 8px">×</button></div>
     <section id="serversView"><div id="servers"></div></section>
-    <section id="installsView" class="hidden"><div class="summarybar"><div class="muted tiny">Install jobs keep running when this page is closed. Active jobs stream their log continuously.</div><div class="spacer"></div><button class="btn" onclick="clearFinishedJobs()">Clear finished</button></div><div id="jobs"></div></section>
+    <section id="installsView" class="hidden"><div class="summarybar"><div class="muted tiny">Install jobs keep running when this page is closed. Active jobs stream their log continuously.</div><div class="spacer"></div><button id="clearFinishedJobsBtn" class="btn">Clear finished</button></div><div id="jobs"></div></section>
   </div>
 </div>
-<div id="overlay" class="overlay hidden" onclick="if(event.target===this)closeModal()">
-  <div id="modal" class="modal"><div class="modalhead"><h2 id="modalTitle">Dialog</h2><div class="spacer"></div><button class="btn" onclick="closeModal()">Close</button></div><div id="modalBody" class="modalbody"></div><div id="modalFoot" class="modalfoot"></div></div>
+<div id="overlay" class="overlay hidden">
+  <div id="modal" class="modal"><div class="modalhead"><h2 id="modalTitle">Dialog</h2><div class="spacer"></div><button id="modalCloseBtn" class="btn">Close</button></div><div id="modalBody" class="modalbody"></div><div id="modalFoot" class="modalfoot"></div></div>
 </div>
 <div id="toast" class="toast"></div>
 
-<!-- Scripts are at the end of body, so they do not need defer. core loads first, then the
-     control-room overrides install before config-backups performs its legacy immediate boot. -->
+<!-- Scripts are at the end of body, so they do not need defer. core loads first and contains
+     the control-room overrides before the feature modules perform their immediate boot. -->
 <script src="/webui/core.js"></script>
-<script>
-window.GSCUX={booted:false,selected:null,actions:{},refreshing:false,noticeTimer:null};
-
-function clearNotice(){const n=$('#noticeBar');if(n)n.classList.add('hidden');if(GSCUX.noticeTimer){clearTimeout(GSCUX.noticeTimer);GSCUX.noticeTimer=null}}
-function setNotice(msg,kind='info',persistent=false,title=null){
-  const n=$('#noticeBar'),text=$('#noticeText'),head=$('#noticeTitle');if(!n||!text||!head)return;
-  clearNotice();n.className='noticebar '+(kind||'info');text.textContent=msg||'';head.textContent=title||(kind==='err'?'Error':kind==='ok'?'Done':'Status');n.classList.remove('hidden');
-  if(!persistent)GSCUX.noticeTimer=setTimeout(clearNotice,kind==='err'?9000:5000);
-}
-toast=function(msg,kind=''){setNotice(msg,kind==='err'?'err':kind==='ok'?'ok':'info',false)};
-
-boot=async function(){
-  if(GSCUX.booted)return;GSCUX.booted=true;
-  $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
-  try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
-  await Promise.allSettled([loadServers(),refreshJobs(false)]);
-  await checkForUpdate(false);
-  setInterval(()=>loadServers(true),2000);
-  setInterval(()=>{try{const active=loadJobRefs().some(r=>!(JOB_CACHE[r.jobId]?.finished));if(CURRENT_VIEW==='installs'||active)refreshJobs(false)}catch{}},1000);
-  setInterval(()=>checkForUpdate(false),30*60*1000);
-};
-
-loadServers=async function(silent=false){
-  if(GSCUX.refreshing)return;GSCUX.refreshing=true;
-  try{
-    const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;
-    if(GSCUX.selected&&!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=null;
-    if(!GSCUX.selected&&SERVERS.length)GSCUX.selected=SERVERS[0].id;
-    renderServers();
-  }catch(e){if(!silent)setNotice('Refresh failed: '+e.message,'err',false)}finally{GSCUX.refreshing=false}
-};
-
-window.selectServer=function(id){GSCUX.selected=id;renderServers()};
-function actionVisual(id,actual){const a=GSCUX.actions[id];return a?.state||actual||'Unknown'}
-function stateClass(state){return state==='Running'?'up':['Starting','Stopping','Restarting','Working'].includes(state)?'warn':'down'}
-function quickTile(icon,title,desc,onclick){return `<button class="manage-tile" onclick="${onclick}"><span class="manage-icon">${icon}</span><span><b>${esc(title)}</b><small>${esc(desc)}</small></span></button>`}
-
-renderServers=function(){
-  const root=$('#servers');if(!root)return;
-  if(!SERVERS.length){root.innerHTML='<div class="empty">No servers registered yet.<br><br><button class="btn primary" onclick="openCreate()">Create your first server</button> <button class="btn" onclick="openDiscover()">Discover installed servers</button> <button class="btn" onclick="openAddExisting()">Add existing server</button></div>';return}
-  if(!GSCUX.selected||!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=SERVERS[0].id;
-  const rows=SERVERS.map(d=>{const s=STATUS[d.id]||{},m=serverMeta(d),state=actionVisual(d.id,s.processState),selected=d.id===GSCUX.selected;return `<button class="server-row ${selected?'selected':''}" onclick="selectServer('${jsq(d.id)}')"><span class="server-row-icon">${m.icon}</span><span class="server-row-main"><span class="server-row-name">${esc(d.name)}</span><span class="server-row-meta">${esc(m.label)} · ${s.pidInGuest?'PID '+s.pidInGuest:(d.hostingMode==='Vm'?'Hyper-V':'This machine')}</span></span><span class="server-row-state ${stateClass(state)}">${esc(state)}</span></button>`}).join('');
-  root.innerHTML=`<div class="server-control-layout"><aside class="server-list">${rows}</aside><div id="serverControlPanel"></div></div>`;
-  renderServerControlPanel();
-};
-
-window.renderServerControlPanel=function(){
-  const host=$('#serverControlPanel'),d=SERVERS.find(x=>x.id===GSCUX.selected);if(!host||!d)return;
-  const s=STATUS[d.id]||{},m=serverMeta(d),g=m.profile||{},caps=g.caps||{},pending=GSCUX.actions[d.id],actual=s.processState||'Unknown',display=actionVisual(d.id,actual),up=actual==='Running',busy=!!pending||['Starting','Stopping'].includes(actual);
-  let op='';if(pending){op=`<div class="operation-banner ${pending.error?'err':pending.done?'ok':''}">${pending.done||pending.error?'':'<span class="spinner"></span>'}<div><b>${esc(pending.label)}</b>${pending.detail?`<div class="tiny muted">${esc(pending.detail)}</div>`:''}</div></div>`}
-  const consoleTile=caps.console==='rcon'?(d.rconPort&&d.rconPassword?quickTile('⌨','Console','Interactive RCON console',`openConsole('${jsq(d.id)}')`):quickTile('⌨','Set up console','RCON port/password required',`openEdit('${jsq(d.id)}')`)):caps.console==='log'&&d.logPathInGuest?quickTile('▤','Live log','Follow server output live',`openLog('${jsq(d.id)}')`):'';
-  const configTile=caps.config?quickTile('⚙','Configuration','Game-specific settings',`openConfig('${jsq(d.id)}')`):'';
-  const modsTile=caps.mods?quickTile('◇','Mods','Browse, install and update',`openMods('${jsq(d.id)}')`):'';
-  const network=(typeof effectiveNetworkPorts==='function'?effectiveNetworkPorts(d):d.networkPorts||[]).map(formatNetworkPort).join(', ');
-  host.innerHTML=`<div class="server-detail-panel"><div class="server-detail-head"><div class="server-detail-icon">${m.icon}</div><div class="grow"><div class="server-detail-title">${esc(d.name)}</div><div class="server-detail-sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V virtual machine':'This machine'}</div></div><div class="server-state-large ${stateClass(display)}">${esc(display)}</div></div><div class="server-detail-body">${op}${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="control-buttons"><button class="btn primary control-btn" ${up||busy?'disabled':''} onclick="action('${jsq(d.id)}','start')">Start</button><button class="btn danger control-btn stop" ${!up||busy?'disabled':''} onclick="action('${jsq(d.id)}','stop')">Stop</button><button class="btn control-btn restart" ${!up||busy?'disabled':''} onclick="action('${jsq(d.id)}','restart')">Restart</button></div><div class="detail-metrics"><div class="metric-box"><span>PID</span><b>${s.pidInGuest??'—'}</b></div><div class="metric-box"><span>CPU</span><b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></div><div class="metric-box"><span>RAM</span><b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></div><div class="metric-box"><span>Last backup</span><b>${s.lastBackupAt?new Date(s.lastBackupAt).toLocaleString():'—'}</b></div></div><div class="quick-panel">${consoleTile}${configTile}${modsTile}${quickTile('▣','Backups','Create and restore saves',`openBackups('${jsq(d.id)}')`)}${quickTile('◎','Network','Ports and Windows Firewall',`openNetwork('${jsq(d.id)}')`)}${quickTile('⋯','More settings','Schedule, update, edit, delete…',`openManage('${jsq(d.id)}')`)}</div><div class="server-path"><div><b>Folder:</b> <span class="mono">${esc(d.guestWorkingDir||'')}</span></div>${network?`<div style="margin-top:4px"><b>Ports:</b> ${esc(network)}</div>`:''}</div></div></div>`;
-};
-
-action=async function(id,a){
-  if(GSCUX.actions[id])return;
-  const labels={start:['Starting server…','Starting'],stop:['Stopping server…','Stopping'],restart:['Restarting server…','Restarting'],backup:['Creating backup…','Working'],update:['Updating server…','Working'],apply:['Applying configuration…','Working']};
-  const spec=labels[a]||['Working…','Working'];GSCUX.selected=id;GSCUX.actions[id]={kind:a,label:spec[0],state:spec[1],detail:a==='stop'?'Waiting for the server process to exit.':a==='restart'?'Stopping first, then starting again.':''};renderServers();setNotice(spec[0],'info',true);
-  try{
-    const r=await api(`/api/servers/${encodeURIComponent(id)}/${a}`,{method:'POST'});
-    if(!r?.success)throw new Error(r?.message||`${a} failed`);
-    GSCUX.actions[id]={kind:a,label:r.message||'Completed',state:a==='stop'?'NotRunning':a==='start'||a==='restart'?'Running':'Working',done:true};
-    await loadServers(true);setNotice(r.message||`${a} completed`,'ok',false);
-    setTimeout(()=>{delete GSCUX.actions[id];renderServers()},1200);
-  }catch(e){GSCUX.actions[id]={kind:a,label:`${a} failed`,state:STATUS[id]?.processState||'Unknown',error:true,detail:e.message};renderServers();setNotice(`${a} failed: ${e.message}`,'err',false);setTimeout(()=>{delete GSCUX.actions[id];renderServers()},5000)}
-};
-</script>
 <script src="/webui/server-admin.js"></script>
 <script src="/webui/jobs-mods.js"></script>
 <script src="/webui/config-backups.js"></script>
 <script src="/webui/server-workspace.js"></script>
-<script>
-/* Safe config-file workspace. The Agent API remains the filesystem authority. */
-(() => {
-  const state={serverId:null,list:[],selected:null,content:null,history:[],dirty:false,filter:'',validationTimer:null,validationSeq:0};
-  window.GSC_FILES=state;
 
-  const style=document.createElement('style');
-  style.id='gscFilesEditorStyles';
-  style.textContent=`
-    .fse-layout{display:grid;grid-template-columns:minmax(250px,330px) minmax(0,1fr);gap:12px;min-height:520px}.fse-sidebar,.fse-main{border:1px solid var(--line);border-radius:9px;background:#101318;overflow:hidden}.fse-filter{padding:10px;border-bottom:1px solid var(--line)}.fse-filter input{width:100%}.fse-list{max-height:650px;overflow:auto;padding:8px}.fse-group{margin:10px 5px 5px;color:var(--muted);font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.55px}.fse-file{display:block;width:100%;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;border-radius:7px;padding:8px 9px;margin:2px 0;cursor:pointer}.fse-file:hover{background:#171c23;border-color:#2c3440}.fse-file.active{background:#1a2028;border-color:#536171}.fse-file-name{font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-meta{font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-badges{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap}.fse-badge{font-size:9px;border:1px solid var(--line);border-radius:999px;padding:2px 6px;color:var(--muted)}.fse-badge.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-main{padding:12px}.fse-head{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px}.fse-title{font-size:14px;font-weight:850}.fse-path{font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted);overflow-wrap:anywhere;margin-top:3px}.fse-head-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}.fse-statusbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:9px}.fse-status{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:3px 7px;color:var(--muted)}.fse-status.ok{color:var(--ok);border-color:rgba(63,185,80,.45)}.fse-status.err{color:var(--danger);border-color:rgba(248,81,73,.55)}.fse-status.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-editgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px}.fse-pane-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:0 0 5px}.fse-editor{box-sizing:border-box;width:100%;min-height:390px;max-height:58vh;resize:vertical;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}.fse-preview{box-sizing:border-box;min-height:390px;max-height:58vh;overflow:auto;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;margin:0;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;tab-size:2}.fse-history{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}.fse-history-row{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}.fse-history-row:last-child{border-bottom:0}.fse-history-row .grow{min-width:0}.fse-token-comment{color:#7f8b99}.fse-token-string{color:#a5d6ff}.fse-token-number{color:#d2a8ff}.fse-token-literal{color:#ff7b72}.fse-token-key{color:#79c0ff}.fse-token-section{color:#ffa657;font-weight:700}.fse-token-tag{color:#7ee787}.fse-empty{padding:45px 20px;text-align:center;color:var(--muted)}
-    @media(max-width:1000px){.fse-layout{grid-template-columns:1fr}.fse-list{max-height:260px}.fse-editgrid{grid-template-columns:1fr}.fse-preview{min-height:220px;max-height:360px}}
-  `;
-  document.head.appendChild(style);
-
-  const baseTabs=serverWorkspaceTabs;
-  serverWorkspaceTabs=function(def){
-    const tabs=baseTabs(def);
-    if(!tabs.some(x=>x[0]==='files')){
-      const at=tabs.findIndex(x=>x[0]==='backups');
-      tabs.splice(at<0?tabs.length:at,0,['files','Files']);
-    }
-    return tabs;
-  };
-
-  const baseRenderTab=renderServerWorkspaceTab;
-  renderServerWorkspaceTab=async function(def,tab){
-    if(tab!=='files')return baseRenderTab(def,tab);
-    const token=++SERVER_WORKSPACE.renderToken,body=$('#swTabBody');
-    if(!body)return;
-    body.innerHTML='<div class="muted">Loading config files…</div>';
-    try{await renderServerFiles(def,body);if(token!==SERVER_WORKSPACE.renderToken)return}
-    catch(e){body.innerHTML=`<div class="callout">${esc(e.message)}</div>`}
-  };
-
-  function sizeText(bytes){
-    const n=Number(bytes)||0;if(n<1024)return n+' B';if(n<1024*1024)return (n/1024).toFixed(n<10240?1:0)+' KB';return (n/1024/1024).toFixed(1)+' MB';
-  }
-
-  function fileOwner(file){
-    const path=String(file.path||'').replace(/\\/g,'/'),parts=path.split('/').filter(Boolean),lower=parts.map(x=>x.toLowerCase());
-    const patterns=[['bepinex','plugins'],['factorygame','mods'],['pal','binaries','win64','mods']];
-    for(const pattern of patterns){
-      for(let i=0;i<=lower.length-pattern.length;i++){
-        if(pattern.every((p,j)=>lower[i+j]===p)&&parts[i+pattern.length])return parts[i+pattern.length];
-      }
-    }
-    for(const root of ['plugins','mods']){const i=lower.indexOf(root);if(i>=0&&parts[i+1])return parts[i+1]}
-    for(const root of ['config','configs']){const i=lower.indexOf(root);if(i>=0&&parts[i+2])return parts[i+1]}
-    const bi=lower.indexOf('bepinex');
-    if(bi>=0&&lower[bi+1]==='config'&&parts[bi+2])return parts[bi+2].replace(/\.[^.]+$/,'');
-    if(String(file.group||'').toLowerCase().includes('mod'))return String(file.name||'').replace(/\.[^.]+$/,'');
-    return '';
-  }
-
-  function groupLabel(file){const owner=fileOwner(file);return owner?`${file.group||'Config'} · ${owner}`:(file.group||'Config')}
-
-  function renderSidebar(){
-    const host=$('#fseList');if(!host)return;
-    const q=state.filter.trim().toLowerCase();
-    const files=state.list.filter(file=>!q||[file.name,file.path,file.group,fileOwner(file),file.format].some(v=>String(v||'').toLowerCase().includes(q)));
-    if(!files.length){host.innerHTML='<div class="fse-empty">No matching config files.</div>';return}
-    const groups=new Map();
-    for(const file of files){const label=groupLabel(file);if(!groups.has(label))groups.set(label,[]);groups.get(label).push(file)}
-    host.innerHTML=[...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([label,items])=>`<div class="fse-group">${esc(label)}</div>${items.sort((a,b)=>String(a.path).localeCompare(String(b.path))).map(file=>`<button class="fse-file ${state.selected===file.path?'active':''}" onclick="gscFilesOpen('${jsq(state.serverId)}','${jsq(file.path)}')"><div class="fse-file-name">${esc(file.name)}</div><div class="fse-file-meta">${esc(file.path)}</div><div class="fse-file-badges"><span class="fse-badge">${esc(String(file.format||'text').toUpperCase())}</span><span class="fse-badge">${esc(sizeText(file.sizeBytes))}</span>${file.restartRecommended?'<span class="fse-badge warn">restart</span>':''}</div></button>`).join('')}`).join('');
-  }
-
-  function tokenSpan(cls,value){return `<span class="${cls}">${esc(value)}</span>`}
-  function tokenizedLine(line,format){
-    const trimmed=line.trimStart();
-    if(/^(#|;|\/\/)/.test(trimmed))return tokenSpan('fse-token-comment',line);
-    if(format==='xml'||format==='config'){
-      let out='',at=0;for(const match of line.matchAll(/<[^>]+>/g)){out+=esc(line.slice(at,match.index))+tokenSpan('fse-token-tag',match[0]);at=match.index+match[0].length}return out+esc(line.slice(at));
-    }
-    if(format==='json'||format==='jsonc'){
-      const re=/"(?:\\.|[^"\\])*"|-?(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(?:true|false|null)\b|\/\/.*$/g;let out='',at=0;
-      for(const match of line.matchAll(re)){out+=esc(line.slice(at,match.index));const v=match[0];let cls='fse-token-literal';if(v.startsWith('//'))cls='fse-token-comment';else if(v.startsWith('"'))cls=/^\s*:/.test(line.slice(match.index+v.length))?'fse-token-key':'fse-token-string';else if(/^[-\d]/.test(v))cls='fse-token-number';out+=tokenSpan(cls,v);at=match.index+v.length}return out+esc(line.slice(at));
-    }
-    if(/^\s*\[.*\]\s*$/.test(line))return tokenSpan('fse-token-section',line);
-    const separator=format==='yaml'?line.indexOf(':'):Math.max(line.indexOf('='),line.indexOf(':'));
-    if(separator>0){const key=line.slice(0,separator),rest=line.slice(separator);return tokenSpan('fse-token-key',key)+esc(rest).replace(/\b(true|false|null)\b/g,'<span class="fse-token-literal">$1</span>')}
-    return esc(line);
-  }
-
-  function highlight(content,format){
-    const text=String(content||''),limit=140000,visible=text.length>limit?text.slice(0,limit):text;
-    const rendered=visible.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').map(line=>tokenizedLine(line,String(format||'').toLowerCase())).join('\n');
-    return rendered+(text.length>limit?'\n\n<span class="fse-token-comment">[Highlighted preview truncated; the editor still contains the complete file.]</span>':'');
-  }
-
-  function currentInfo(){return state.list.find(x=>x.path===state.selected)||null}
-  function setValidation(kind,text){const el=$('#fseValidation');if(!el)return;el.className='fse-status '+(kind||'');el.textContent=text}
-  function updatePreview(){const input=$('#fseText'),preview=$('#fsePreview');if(!input||!preview)return;preview.innerHTML=highlight(input.value,state.content?.format||currentInfo()?.format);}
-
-  function editorHtml(){
-    const info=currentInfo(),c=state.content;
-    if(!c||!info)return '<div class="fse-empty">Select a config file.</div>';
-    const running=serverWorkspaceStatus(state.serverId).processState==='Running';
-    const restart=info.restartRecommended?`<span class="fse-status warn">Restart recommended${running?' · server running':''}</span>`:'<span class="fse-status ok">Reload usually not required</span>';
-    const history=state.history.length?state.history.map(x=>`<div class="fse-history-row"><div class="grow"><div class="fse-file-name">${new Date(x.createdAt).toLocaleString()}</div><div class="fse-file-meta">${esc(sizeText(x.sizeBytes))} · ${esc(x.id)}</div></div><button class="btn" onclick="gscFilesRestore('${jsq(x.id)}')">Restore</button></div>`).join(''):'<div class="muted tiny">No edit history yet. A snapshot is created automatically before every save or restore.</div>';
-    return `<div class="fse-head"><div class="grow"><div class="fse-title">${esc(info.name)}</div><div class="fse-path">${esc(info.path)}</div></div><div class="fse-head-actions"><button class="btn" onclick="gscFilesReload()">Reload</button><button id="fseSave" class="btn primary" ${state.dirty?'':'disabled'} onclick="gscFilesSave()">Save</button></div></div><div class="fse-statusbar"><span class="fse-status">${esc(String(c.format||info.format||'text').toUpperCase())}</span><span class="fse-status">${esc(sizeText(c.sizeBytes))}</span><span class="fse-status">${new Date(c.modifiedAt).toLocaleString()}</span>${restart}<span id="fseValidation" class="fse-status">Unchanged</span></div>${info.restartRecommended&&running?'<div class="callout info">This file is normally read when the server/plugin starts. Save is allowed while running, but a restart is recommended for the change to take effect.</div>':''}<div class="fse-editgrid"><div><div class="fse-pane-title">Editor · Ctrl+S to save</div><textarea id="fseText" class="fse-editor" spellcheck="false" oninput="gscFilesInput()" onkeydown="gscFilesKeydown(event)">${esc(c.content)}</textarea></div><div><div class="fse-pane-title">Syntax-highlighted preview</div><pre id="fsePreview" class="fse-preview">${highlight(c.content,c.format||info.format)}</pre></div></div><div class="fse-history"><div class="sw-toolbar"><div><b>Edit history</b><div class="tiny muted">Last ${state.history.length} snapshots for this file.</div></div><div class="spacer"></div></div>${history}</div>`;
-  }
-
-  function renderEditor(){const host=$('#fseMain');if(host)host.innerHTML=editorHtml()}
-
-  window.gscFilesFilter=function(value){state.filter=String(value||'');renderSidebar()};
-
-  window.gscFilesOpen=async function(serverId,path,force=false){
-    if(state.dirty&&!force&&state.selected&&state.selected!==path&&!confirm('Discard unsaved changes in the current config file?'))return;
-    state.serverId=serverId;state.selected=path;state.dirty=false;renderSidebar();
-    const host=$('#fseMain');if(host)host.innerHTML='<div class="fse-empty">Loading file…</div>';
-    try{
-      const encoded=encodeURIComponent(path);const [content,history]=await Promise.all([api(`/api/servers/${encodeURIComponent(serverId)}/files/content?path=${encoded}`),api(`/api/servers/${encodeURIComponent(serverId)}/files/history?path=${encoded}`)]);
-      if(state.selected!==path)return;state.content=content;state.history=history||[];renderEditor();
-    }catch(e){if(host)host.innerHTML=`<div class="callout">${esc(e.message)}</div>`}
-  };
-
-  window.gscFilesInput=function(){
-    if(!state.content)return;state.dirty=true;const save=$('#fseSave');if(save)save.disabled=false;updatePreview();setValidation('','Checking syntax…');
-    clearTimeout(state.validationTimer);const seq=++state.validationSeq;
-    state.validationTimer=setTimeout(async()=>{const input=$('#fseText');if(!input||seq!==state.validationSeq)return;try{await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify({path:state.selected,content:input.value})});if(seq===state.validationSeq)setValidation('ok','Syntax valid')}catch(e){if(seq===state.validationSeq)setValidation('err',e.message)}},650);
-  };
-
-  window.gscFilesKeydown=function(event){if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();gscFilesSave()}};
-
-  async function refreshList(){
-    const list=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files`);state.list=list.files||[];renderSidebar();
-  }
-  async function refreshHistory(){state.history=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/history?path=${encodeURIComponent(state.selected)}`)||[];renderEditor()}
-
-  window.gscFilesSave=async function(){
-    const input=$('#fseText');if(!input||!state.content||!state.selected||!state.dirty)return;
-    const save=$('#fseSave');if(save){save.disabled=true;save.textContent='Saving…'}
-    try{
-      const payload={path:state.selected,content:input.value};
-      await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify(payload)});
-      const result=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/content`,{method:'PUT',body:JSON.stringify({...payload,expectedSha256:state.content.sha256})});
-      state.content={...state.content,content:input.value,sha256:result.sha256,sizeBytes:result.sizeBytes,modifiedAt:result.modifiedAt};state.dirty=false;setValidation('ok','Saved · syntax valid');
-      await refreshList();await refreshHistory();const info=currentInfo();setNotice(info?.restartRecommended?'Config saved. Restart recommended for this change.':'Config saved.','ok',false);
-    }catch(e){setValidation('err',e.message);setNotice('Config save failed: '+e.message,'err',false);if(save)save.disabled=false}
-    finally{if(save)save.textContent='Save'}
-  };
-
-  window.gscFilesReload=function(){if(!state.selected)return;if(state.dirty&&!confirm('Discard unsaved changes and reload this file?'))return;gscFilesOpen(state.serverId,state.selected,true)};
-
-  window.gscFilesRestore=async function(backupId){
-    if(!state.selected||!state.content)return;if(!confirm('Restore this config snapshot? The current file will be saved as an undo snapshot first.'))return;
-    try{
-      await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/restore`,{method:'POST',body:JSON.stringify({path:state.selected,backupId,expectedSha256:state.content.sha256})});
-      setNotice('Config snapshot restored. An undo snapshot was created.','ok',false);await refreshList();await gscFilesOpen(state.serverId,state.selected,true);
-    }catch(e){setNotice('Restore failed: '+e.message,'err',false)}
-  };
-
-  window.renderServerFiles=async function(def,body){
-    if(state.serverId!==def.id){clearTimeout(state.validationTimer);state.serverId=def.id;state.list=[];state.selected=null;state.content=null;state.history=[];state.dirty=false;state.filter=''}
-    const result=await api(`/api/servers/${encodeURIComponent(def.id)}/files`);
-    if(!result.supported){body.innerHTML=`<div class="callout info"><b>Files editor unavailable.</b><br>${esc(result.reason||'This server does not support safe config-file access.')}</div>`;return}
-    state.list=result.files||[];
-    if(state.selected&&!state.list.some(x=>x.path===state.selected)){state.selected=null;state.content=null;state.history=[];state.dirty=false}
-    if(!state.selected&&state.list.length)state.selected=state.list[0].path;
-    body.innerHTML=`<div class="sw-toolbar"><div><b>Config files</b><div class="tiny muted">Only existing text configs inside allowlisted server/mod roots are exposed. Arbitrary filesystem access is not available.</div></div><div class="spacer"></div><button class="btn" onclick="serverWorkspaceRefreshTab('files')">Rescan</button></div><div class="fse-layout"><aside class="fse-sidebar"><div class="fse-filter"><input placeholder="Filter files, paths or plugins…" value="${esc(state.filter)}" oninput="gscFilesFilter(this.value)"></div><div id="fseList" class="fse-list"></div></aside><main id="fseMain" class="fse-main"></main></div>`;
-    renderSidebar();renderEditor();if(state.selected&&!state.content)await gscFilesOpen(def.id,state.selected,true);
-  };
-})();
-</script>
-<script>
-/* Parallel install polling + live detail log. */
-refreshJobs=async function(render=true){
-  const refs=loadJobRefs();let active=0;
-  await Promise.all(refs.map(async r=>{try{JOB_CACHE[r.jobId]=await api('/api/servers/install/'+encodeURIComponent(r.jobId));if(!JOB_CACHE[r.jobId].finished)active++}catch{JOB_CACHE[r.jobId]={jobId:r.jobId,phase:'expired',line:'Job no longer available (Agent may have restarted).',finished:true,success:false,logLines:[]}}}));
-  const badge=$('#installBadge');if(badge){badge.textContent=active;badge.classList.toggle('hidden',active===0)}if(render||CURRENT_VIEW==='installs')renderJobs();
-};
-
-async function updateLiveJobDetail(id){
-  try{const p=await api('/api/servers/install/'+encodeURIComponent(id));JOB_CACHE[id]=p;const phase=$('#liveJobPhase'),bar=$('#liveJobBar'),line=$('#liveJobLine'),log=$('#liveJobLog'),state=$('#liveJobState');if(!log)return p;const nearBottom=log.scrollHeight-log.scrollTop-log.clientHeight<50;if(phase)phase.textContent=phaseText(p.phase||'');if(bar)bar.style.width=Math.max(0,Math.min(100,p.percentHint??0))+'%';if(line)line.textContent=p.line||'';if(state){state.textContent=p.finished?(p.success?'DONE':'FAILED'):'ACTIVE';state.className='state '+(p.success?'up':p.finished?'down':'warn')}log.textContent=(p.logLines||[]).join('\n')||'Waiting for SteamCMD output…';if(nearBottom)log.scrollTop=log.scrollHeight;return p}catch(e){const line=$('#liveJobLine');if(line)line.textContent='Log refresh failed: '+e.message;return null}}
-openJob=async function(id){
-  const r=loadJobRefs().find(x=>x.jobId===id)||{jobId:id};
-  openModal(r.name||id,`<div class="install-live-head"><div><div class="jobphase">Job ${esc(id)} · <span id="liveJobPhase">Loading</span></div><div id="liveJobLine" class="jobline" style="margin-top:5px">Loading…</div></div><div class="spacer"></div><span id="liveJobState" class="state warn">ACTIVE</span></div><div class="progress"><div id="liveJobBar" class="bar" style="width:0"></div></div><pre id="liveJobLog" class="log install-live-log">Connecting…</pre>`,`<button class="btn" onclick="closeModal()">Run in background</button>`,true);
-  let stopped=false;const tick=async()=>{if(stopped)return;const p=await updateLiveJobDetail(id);if(p?.finished&&timer){clearInterval(timer);timer=null}};let timer=setInterval(tick,650);MODAL_CLEANUP=()=>{stopped=true;if(timer)clearInterval(timer)};await tick();
-};
-
-/* Password visibility for login, RCON and every game-config Password field. */
-function enhancePasswordFields(root=document){
-  root.querySelectorAll('input[type="password"]:not([data-eye-ready])').forEach(input=>{input.dataset.eyeReady='1';const wrap=document.createElement('div');wrap.className='password-wrap';input.parentNode.insertBefore(wrap,input);wrap.appendChild(input);const b=document.createElement('button');b.type='button';b.className='password-eye';b.textContent='◉';b.title='Show password';b.setAttribute('aria-label','Show password');b.onclick=()=>{const show=input.type==='password';input.type=show?'text':'password';b.title=show?'Hide password':'Show password';b.setAttribute('aria-label',b.title);b.textContent=show?'○':'◉'};wrap.appendChild(b)})
-}
-const baseOpenModal=openModal;openModal=function(...args){baseOpenModal(...args);enhancePasswordFields($('#modal'))};enhancePasswordFields(document);
-new MutationObserver(()=>enhancePasswordFields(document)).observe(document.body,{childList:true,subtree:true});
-
-/* Reconnect attached stdin consoles after lifecycle changes performed from the workspace. */
-const baseServerAction=action;
-action=async function(id,a){
-  await baseServerAction(id,a);
-  if(!['start','restart','stop'].includes(a))return;
-  if(SERVER_WORKSPACE.serverId!==id||SERVER_WORKSPACE.tab!=='console')return;
-  const d=SERVERS.find(x=>x.id===id);if(!d||profileFor(d)?.caps?.console!=='stdin')return;
-  await renderServerWorkspaceTab(d,'console');
-};
-
-/* Keep the complete-delete behavior introduced earlier. */
-window.deleteServer=function(id){
-  const d=SERVERS.find(x=>x.id===id);if(!d)return;const bareMetal=d.hostingMode!=='Vm',hasSaves=Array.isArray(d.saveDirs)&&d.saveDirs.length>0;
-  const permanent=bareMetal?`<div class="section">Delete server completely</div><div class="callout">This permanently stops the server and deletes the entire server folder. This cannot be undone.</div><div class="kv compact"><div>Folder to delete</div><div class="mono">${esc(d.guestWorkingDir||'')}</div></div><div class="checkrow" style="margin-top:14px"><input id="deleteFinalBackup" type="checkbox" ${hasSaves?'checked':'disabled'}><label for="deleteFinalBackup">Create a final save backup before deletion${hasSaves?'':' (no save folders configured)'}</label></div><div class="field"><label>Type the exact server name to confirm</label><input id="deleteConfirm" autocomplete="off" placeholder="${esc(d.name)}" oninput="syncPermanentDeleteButton('${jsq(id)}')"><div class="help">Required: <b>${esc(d.name)}</b></div></div><button id="permanentDeleteBtn" class="btn danger" disabled onclick="permanentDeleteServer('${jsq(id)}')">Permanently delete server and files</button>`:`<div class="section">Delete server completely</div><div class="callout info">Complete file deletion is disabled for Hyper-V servers because the server folder is inside the guest VM.</div>`;
-  openModal('Delete — '+d.name,`<div class="section">Remove from GameServerControl</div><div class="help">Removes only the server definition. All game files and saves remain untouched.</div><button class="btn" onclick="removeServerOnly('${jsq(id)}')">Remove only</button>${permanent}`,'<button class="btn" onclick="closeModal()">Cancel</button>',true)
-};
-window.removeServerOnly=async function(id){const d=SERVERS.find(x=>x.id===id);if(!confirm(`Remove "${d?.name||id}" from GameServerControl?\n\nServer files will remain untouched.`))return;try{await api(`/api/servers/${encodeURIComponent(id)}`,{method:'DELETE'});setNotice('Server removed. Files were kept.','ok');closeModal();await loadServers()}catch(e){setNotice('Remove failed: '+e.message,'err')}};
-window.syncPermanentDeleteButton=function(id){const d=SERVERS.find(x=>x.id===id),input=$('#deleteConfirm'),button=$('#permanentDeleteBtn');if(button)button.disabled=!d||!input||input.value!==d.name};
-window.permanentDeleteServer=async function(id){const d=SERVERS.find(x=>x.id===id);if(!d)return;const confirmation=$('#deleteConfirm')?.value||'';if(confirmation!==d.name)return setNotice('Type the exact server name first.','err');const createFinalBackup=!!$('#deleteFinalBackup')?.checked,button=$('#permanentDeleteBtn');if(button){button.disabled=true;button.textContent='Deleting…'}try{const result=await api(`/api/servers/${encodeURIComponent(id)}/delete-completely`,{method:'POST',body:JSON.stringify({confirmation,createFinalBackup})});setNotice(result.message||'Server permanently deleted.','ok');closeModal();await loadServers()}catch(e){setNotice('Permanent deletion cancelled/failed: '+e.message,'err');if(button){button.textContent='Permanently delete server and files';syncPermanentDeleteButton(id)}}};
-</script>
 </body>
 </html>
