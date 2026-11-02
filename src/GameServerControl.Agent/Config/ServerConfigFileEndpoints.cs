@@ -1,6 +1,6 @@
-using Microsoft.AspNetCore.Http.HttpResults;
-
 namespace GameServerControl.Agent.Config;
+
+public sealed record ServerConfigFileValidationRequest(string Path, string Content);
 
 public static class ServerConfigFileEndpoints
 {
@@ -23,9 +23,27 @@ public static class ServerConfigFileEndpoints
             { return Results.BadRequest(new { error = ex.Message }); }
         });
 
+        api.MapPost("/servers/{id}/files/validate", (string id, ServerConfigFileValidationRequest request, ServerRegistry registry) =>
+        {
+            if (registry.Get(id) is null) return Results.NotFound(new { error = "Server not found." });
+            try
+            {
+                ServerConfigSyntaxValidator.Validate(request.Path, request.Content ?? string.Empty);
+                return Results.Ok(new { valid = true });
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidDataException)
+            {
+                return Results.BadRequest(new { valid = false, error = ex.Message });
+            }
+        });
+
         api.MapPut("/servers/{id}/files/content", async (string id, ServerConfigFileWriteRequest request, ServerConfigFileService files, CancellationToken ct) =>
         {
-            try { return Results.Ok(await files.WriteAsync(id, request, ct)); }
+            try
+            {
+                ServerConfigSyntaxValidator.Validate(request.Path, request.Content ?? string.Empty);
+                return Results.Ok(await files.WriteAsync(id, request, ct));
+            }
             catch (KeyNotFoundException) { return Results.NotFound(new { error = "Server not found." }); }
             catch (FileNotFoundException ex) { return Results.NotFound(new { error = ex.Message }); }
             catch (ServerConfigFileConflictException ex) { return Results.Conflict(new { error = ex.Message }); }
