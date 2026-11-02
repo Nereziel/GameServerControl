@@ -6,20 +6,25 @@ using GameServerControl.Shared;
 namespace GameServerControl.Agent.Auth;
 
 /// <summary>
-/// On first startup, if Agent:ApiToken is empty or a known placeholder, generates a
-/// random 32-byte token and persists it only through the encrypted configuration secret store.
+/// On startup, migrates reusable configuration credentials into encrypted state and,
+/// when Agent:ApiToken is still a placeholder, generates a random bootstrap token.
 /// </summary>
 public static class FirstRunTokenGenerator
 {
     private static readonly string[] PlaceholderTokens =
     {
-        "",
-        "REPLACE_WITH_32_CHARS+",
-        "CHANGE_ME",
-        "your-token-here",
-        "<generate>",
-        ConfigurationSecretStore.Sentinel
+        "", "REPLACE_WITH_32_CHARS+", "CHANGE_ME", "your-token-here", "<generate>", ConfigurationSecretStore.Sentinel
     };
+
+    // Compatibility entry point used by Program.cs. General configuration-secret migration
+    // happens here before TokenRegistry/authentication services are instantiated.
+    public static bool EnsureToken(IConfiguration cfg, string baseDir, ILogger logger, out string token)
+    {
+        var protector = new SecretProtector(baseDir);
+        var secretStore = new ConfigurationSecretStore(baseDir, protector);
+        secretStore.MigrateAndApply(cfg);
+        return EnsureToken(cfg, baseDir, secretStore, logger, out token);
+    }
 
     public static bool EnsureToken(
         IConfiguration cfg,
@@ -37,12 +42,10 @@ public static class FirstRunTokenGenerator
 
         token = GenerateToken();
         var appsettingsPath = Path.Combine(baseDir, "appsettings.json");
-
         try
         {
             EnsureAppSettingsExists(baseDir, appsettingsPath, logger);
             secretStore.SetSecret(cfg, "Agent:ApiToken", token);
-
             logger.LogInformation("Generated a new agent API token. The credential was saved to encrypted local secret state.");
             Console.WriteLine();
             Console.WriteLine("====================================================================");
@@ -117,9 +120,6 @@ public static class FirstRunTokenGenerator
     private static string GenerateToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);
-        return Convert.ToBase64String(bytes)
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .TrimEnd('=');
+        return Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
     }
 }
