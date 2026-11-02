@@ -34,6 +34,9 @@ jobs:
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
 
+      - name: Validate global Settings ownership
+        run: node scripts/validate-global-settings.mjs
+
       - name: Restore
         run: dotnet restore
 
@@ -82,6 +85,9 @@ jobs:
 
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
+
+      - name: Validate global Settings ownership
+        run: node scripts/validate-global-settings.mjs
 
       - name: Validate Cloudflare Worker bundle
         working-directory: src/GameServerControl.Cloud
