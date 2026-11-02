@@ -40,7 +40,8 @@
         <h1>GameServerControl</h1>
         <div class="muted">Cloud gateway could not reach the Agent.</div>
         <div class="callout" style="margin-top:16px">Check Cloudflare Tunnel, Access service credentials and the Agent service.</div>
-        <button class="btn primary" style="width:100%;margin-top:12px" onclick="location.reload()">Retry</button>`;
+        <button id="cloudRetryBtn" class="btn primary" style="width:100%;margin-top:12px">Retry</button>`;
+      document.querySelector('#cloudRetryBtn')?.addEventListener('click', () => location.reload());
     }, 1200);
   });
 })();
