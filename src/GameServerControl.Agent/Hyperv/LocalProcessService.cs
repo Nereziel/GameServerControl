@@ -158,7 +158,7 @@ public sealed class LocalProcessService
 
         var result = await GetConsoleStateCoreAsync(def, ct);
         if (OperatingSystem.IsWindows() && result.State.InputAvailable)
-            EnsureRunnerConsolePump(def, result.LastSequence, connectionId);
+            EnsureRunnerConsolePump(def, result.ConsoleGeneration, result.LastSequence, connectionId);
         return result.State;
     }
 
@@ -190,32 +190,32 @@ public sealed class LocalProcessService
         }
     }
 
-    private async Task<(LocalConsoleState State, long LastSequence)> GetConsoleStateCoreAsync(
+    private async Task<(LocalConsoleState State, string? ConsoleGeneration, long LastSequence)> GetConsoleStateCoreAsync(
         ServerDef def,
         CancellationToken ct)
     {
         var supported = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
         if (!supported)
-            return (new LocalConsoleState(false, false, "This game profile does not use a stdin console.", Array.Empty<LogLine>()), 0);
+            return (new LocalConsoleState(false, false, "This game profile does not use a stdin console.", Array.Empty<LogLine>()), null, 0);
         if (def.HostingMode != HostingMode.BareMetal)
-            return (new LocalConsoleState(true, false, "Interactive stdin is currently available only for servers running on this machine.", Array.Empty<LogLine>()), 0);
+            return (new LocalConsoleState(true, false, "Interactive stdin is currently available only for servers running on this machine.", Array.Empty<LogLine>()), null, 0);
 
         if (OperatingSystem.IsWindows())
         {
             var response = await _windowsRunner.ConsoleStateAsync(def, ct);
             if (!response.Ok)
-                return (new LocalConsoleState(true, false, response.Error ?? "Runner console is unavailable.", Array.Empty<LogLine>()), 0);
+                return (new LocalConsoleState(true, false, response.Error ?? "Runner console is unavailable.", Array.Empty<LogLine>()), null, 0);
             var snapshot = response.Console;
             if (snapshot is null)
-                return (new LocalConsoleState(true, false, "Runner returned no console state.", Array.Empty<LogLine>()), 0);
+                return (new LocalConsoleState(true, false, "Runner returned no console state.", Array.Empty<LogLine>()), null, 0);
             var lines = snapshot.Lines.Select(line => new LogLine(def.Id, line.At, line.Source, line.Text)).ToArray();
-            return (new LocalConsoleState(snapshot.Supported, snapshot.InputAvailable, snapshot.Message, lines), snapshot.LastSequence);
+            return (new LocalConsoleState(snapshot.Supported, snapshot.InputAvailable, snapshot.Message, lines), snapshot.Generation, snapshot.LastSequence);
         }
 
-        return (GetLocalConsoleState(def), 0);
+        return (GetLocalConsoleState(def), null, 0);
     }
 
-    private void EnsureRunnerConsolePump(ServerDef def, long lastSequence, string connectionId)
+    private void EnsureRunnerConsolePump(ServerDef def, string? consoleGeneration, long lastSequence, string connectionId)
     {
         RunnerConsolePump pump;
         var startPump = false;
@@ -238,10 +238,10 @@ public sealed class LocalProcessService
         }
 
         if (startPump)
-            _ = Task.Run(() => PumpRunnerConsoleAsync(def, lastSequence, pump), CancellationToken.None);
+            _ = Task.Run(() => PumpRunnerConsoleAsync(def, consoleGeneration, lastSequence, pump), CancellationToken.None);
     }
 
-    private async Task PumpRunnerConsoleAsync(ServerDef def, long lastSequence, RunnerConsolePump pump)
+    private async Task PumpRunnerConsoleAsync(ServerDef def, string? consoleGeneration, long lastSequence, RunnerConsolePump pump)
     {
         var ct = pump.Cancellation.Token;
         var consecutiveFailures = 0;
@@ -249,7 +249,7 @@ public sealed class LocalProcessService
         {
             while (!ct.IsCancellationRequested)
             {
-                var response = await _windowsRunner.PollConsoleStateAsync(def, lastSequence, ct);
+                var response = await _windowsRunner.PollConsoleStateAsync(def, consoleGeneration, lastSequence, ct);
                 if (!response.Ok || response.Console is null)
                 {
                     consecutiveFailures++;
@@ -260,8 +260,12 @@ public sealed class LocalProcessService
 
                 consecutiveFailures = 0;
                 var snapshot = response.Console;
-                if (snapshot.LastSequence < lastSequence)
+                var generationChanged = snapshot.Generation is not null
+                    && !string.Equals(consoleGeneration, snapshot.Generation, StringComparison.Ordinal);
+                if (generationChanged || snapshot.LastSequence < lastSequence)
                     lastSequence = 0;
+                if (snapshot.Generation is not null)
+                    consoleGeneration = snapshot.Generation;
 
                 foreach (var runnerLine in snapshot.Lines
                              .Where(line => line.Sequence > lastSequence)
