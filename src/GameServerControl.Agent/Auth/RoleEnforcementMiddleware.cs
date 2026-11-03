@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using GameServerControl.Agent.Logs;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 
@@ -6,8 +7,8 @@ namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// Rejects state-changing API requests from ReadOnly tokens and sanitizes sensitive GET responses.
-/// A narrowly scoped POST used only to start/stop the caller's live-log subscription is treated as
-/// read control-plane traffic. SignalR negotiation is outside /api and SendConsoleInput is
+/// The legacy ReadOnly log-tail POST remains a side-effect-free compatibility read; SignalR owns
+/// the caller's live-log lifecycle. SignalR negotiation is outside /api and SendConsoleInput is
 /// independently Admin-only on the hub.
 /// </summary>
 public sealed class RoleEnforcementMiddleware
@@ -51,11 +52,18 @@ public sealed class RoleEnforcementMiddleware
             }
         }
 
+        if (isReadOnly && TryGetReadOnlyLogTailServerId(ctx, p, out var serverId))
+        {
+            var tail = ctx.RequestServices.GetRequiredService<LogTailService>();
+            await Results.Ok(new { tailing = tail.IsTailing(serverId) }).ExecuteAsync(ctx);
+            return;
+        }
+
         var isWrite = HttpMethods.IsPost(ctx.Request.Method)
             || HttpMethods.IsPut(ctx.Request.Method)
             || HttpMethods.IsDelete(ctx.Request.Method)
             || HttpMethods.IsPatch(ctx.Request.Method);
-        if (!isWrite || !p.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) || IsReadOnlyControlPost(ctx, p))
+        if (!isWrite || !p.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
         {
             await _next(ctx);
             return;
@@ -156,8 +164,9 @@ public sealed class RoleEnforcementMiddleware
         return serverId.Length > 0 && !serverId.Contains('/');
     }
 
-    private static bool IsReadOnlyControlPost(HttpContext ctx, string path)
+    private static bool TryGetReadOnlyLogTailServerId(HttpContext ctx, string path, out string serverId)
     {
+        serverId = "";
         if (!HttpMethods.IsPost(ctx.Request.Method)) return false;
         if (!path.StartsWith(ServerPrefix, StringComparison.OrdinalIgnoreCase)
             || !path.EndsWith(LogTailSuffix, StringComparison.OrdinalIgnoreCase))
@@ -165,7 +174,7 @@ public sealed class RoleEnforcementMiddleware
 
         var idLength = path.Length - ServerPrefix.Length - LogTailSuffix.Length;
         if (idLength <= 0) return false;
-        var serverId = path.Substring(ServerPrefix.Length, idLength).Trim('/');
+        serverId = path.Substring(ServerPrefix.Length, idLength).Trim('/');
         return serverId.Length > 0 && !serverId.Contains('/');
     }
 }
