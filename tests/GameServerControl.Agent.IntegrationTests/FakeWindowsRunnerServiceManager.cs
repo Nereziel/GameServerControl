@@ -13,6 +13,7 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
     public Func<string, bool>? ServerExists { get; set; }
     public RunnerResponse ConsoleStateResponse { get; set; } =
         new(true, Console: new RunnerConsoleSnapshot(false, false, "fake", 0, Array.Empty<RunnerConsoleLine>()));
+    public RunnerResponse? PollConsoleResponse { get; set; }
     public int DeprovisionCalls { get; private set; }
     public int CompleteCalls { get; private set; }
     public bool? DeprovisionObservedServerPresent { get; private set; }
@@ -38,7 +39,7 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
     {
         Interlocked.Exchange(ref _lastPollAfterSequence, afterSequence);
         Interlocked.Increment(ref _pollConsoleCalls);
-        return Task.FromResult(ConsoleStateResponse);
+        return Task.FromResult(PollConsoleResponse ?? ConsoleStateResponse);
     }
 
     public Task<RunnerResponse> SendConsoleInputAsync(ServerDef def, string command, CancellationToken ct = default) =>
