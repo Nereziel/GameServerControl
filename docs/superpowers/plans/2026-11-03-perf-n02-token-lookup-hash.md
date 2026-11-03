@@ -1,0 +1,63 @@
+# PERF-N02 Token Lookup Hashing Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Make managed-token lookup hash the presented credential once and eliminate allocations that scale with managed-token count.
+
+**Architecture:** Keep `TokenRegistry` and its persisted schema unchanged. `Lookup` computes one presented SHA-256 digest, then each stored hex digest is decoded into a stack buffer and compared with `CryptographicOperations.FixedTimeEquals`.
+
+**Tech Stack:** .NET 8, ASP.NET Core, xUnit, `System.Security.Cryptography`.
+
+**Spec:** `docs/superpowers/specs/2026-11-03-perf-n02-token-lookup-hash.md`
+
+## Global Constraints
+
+- Work only in `Nereziel/GameServerControl`.
+- Preserve legacy `Agent:ApiToken` behavior and all managed-token auth semantics.
+- Preserve `tokens.json` format and migration behavior.
+- Keep secret comparisons constant-time.
+- Do not add dependencies or broaden this change into token-count limits or indexing.
+
+## Review Focus
+
+- Managed-token hit still returns the correct id/name/role.
+- Managed-token miss remains null.
+- Legacy-token hit is unchanged.
+- Large managed-token registries do not cause lookup allocations to scale with token count.
+- Invalid stored hashes remain rejected by reload validation and cannot break lookup.
+
+---
+
+### Task 1: Remove per-token hashing and allocations
+
+**Files:**
+- Create: `tests/GameServerControl.Agent.IntegrationTests/TokenRegistryPerformanceTests.cs`
+- Modify: `src/GameServerControl.Agent/Auth/TokenRegistry.cs`
+
+**Interfaces:**
+- Consumes: `TokenRegistry.Lookup(string)` and persisted `TokenHash` hex strings.
+- Produces: the same `Lookup` results with allocation cost independent of managed-token count.
+
+- [ ] **Step 1: Write the failing allocation regression**
+
+Create two temporary registries containing 1 and 128 valid managed-token records. Warm both registries, measure allocations for repeated missing-token `Lookup` calls with `GC.GetAllocatedBytesForCurrentThread`, and assert the 128-token registry stays within a fixed 32 KiB delta of the one-token registry.
+
+- [ ] **Step 2: Run runtime integration tests and verify RED**
+
+Run: `dotnet test tests/GameServerControl.Agent.IntegrationTests/GameServerControl.Agent.IntegrationTests.csproj -c Release --filter TokenRegistryPerformanceTests`
+
+Expected: FAIL because current `HashMatches` re-hashes the presented token and allocates a decoded stored hash for every managed token.
+
+- [ ] **Step 3: Implement the minimal optimization**
+
+In `TokenRegistry.Lookup`, compute `SHA256.HashData(Encoding.UTF8.GetBytes(presented))` once after the legacy-token check. Change `HashMatches` to accept the presented digest, decode each stored hash into `stackalloc byte[32]` via `Convert.TryFromHexString`, and retain `CryptographicOperations.FixedTimeEquals`.
+
+- [ ] **Step 4: Verify GREEN and regression behavior**
+
+Run the focused test, the full integration project, and require every PR workflow to pass.
+
+Expected: allocation regression passes, existing authentication/token behavior remains green, and Build/runtime workflows succeed on Linux and Windows.
+
+- [ ] **Step 5: Review and merge**
+
+Review the final diff for persisted-format/auth-semantic changes. Squash-merge only after all PR workflows are green.
