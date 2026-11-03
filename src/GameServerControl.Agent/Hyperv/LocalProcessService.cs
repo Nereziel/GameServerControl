@@ -35,7 +35,9 @@ public sealed class LocalProcessService
     private readonly IHubContext<StatusHub> _hub;
     private readonly IWindowsRunnerServiceManager _windowsRunner;
     private readonly ConcurrentDictionary<string, ConsoleSession> _consoleSessions = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, CancellationTokenSource> _runnerConsolePumps = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _runnerConsolePumpGate = new();
+    private readonly Dictionary<string, RunnerConsolePump> _runnerConsolePumps = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _runnerConsoleServersByConnection = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, bool> _firewallStates = new(StringComparer.OrdinalIgnoreCase);
 
     public LocalProcessService(
@@ -144,44 +146,104 @@ public sealed class LocalProcessService
     }
 
     public async Task<LocalConsoleState> GetConsoleStateAsync(ServerDef def, CancellationToken ct = default)
+        => (await GetConsoleStateCoreAsync(def, ct)).State;
+
+    public async Task<LocalConsoleState> SubscribeConsoleAsync(
+        ServerDef def,
+        string connectionId,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(connectionId))
+            throw new ArgumentException("SignalR connection ID is required.", nameof(connectionId));
+
+        var result = await GetConsoleStateCoreAsync(def, ct);
+        if (OperatingSystem.IsWindows() && result.State.InputAvailable)
+            EnsureRunnerConsolePump(def, result.LastSequence, connectionId);
+        return result.State;
+    }
+
+    public void UnsubscribeConsoleConnection(string connectionId)
+    {
+        if (string.IsNullOrWhiteSpace(connectionId)) return;
+
+        List<RunnerConsolePump>? toCancel = null;
+        lock (_runnerConsolePumpGate)
+        {
+            if (!_runnerConsoleServersByConnection.Remove(connectionId, out var serverIds)) return;
+
+            foreach (var serverId in serverIds)
+            {
+                if (!_runnerConsolePumps.TryGetValue(serverId, out var pump)) continue;
+                pump.Subscribers.Remove(connectionId);
+                if (pump.Subscribers.Count != 0) continue;
+
+                _runnerConsolePumps.Remove(serverId);
+                (toCancel ??= new List<RunnerConsolePump>()).Add(pump);
+            }
+        }
+
+        if (toCancel is null) return;
+        foreach (var pump in toCancel)
+        {
+            try { pump.Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { }
+        }
+    }
+
+    private async Task<(LocalConsoleState State, long LastSequence)> GetConsoleStateCoreAsync(
+        ServerDef def,
+        CancellationToken ct)
     {
         var supported = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
         if (!supported)
-            return new LocalConsoleState(false, false, "This game profile does not use a stdin console.", Array.Empty<LogLine>());
+            return (new LocalConsoleState(false, false, "This game profile does not use a stdin console.", Array.Empty<LogLine>()), 0);
         if (def.HostingMode != HostingMode.BareMetal)
-            return new LocalConsoleState(true, false, "Interactive stdin is currently available only for servers running on this machine.", Array.Empty<LogLine>());
+            return (new LocalConsoleState(true, false, "Interactive stdin is currently available only for servers running on this machine.", Array.Empty<LogLine>()), 0);
 
         if (OperatingSystem.IsWindows())
         {
             var response = await _windowsRunner.ConsoleStateAsync(def, ct);
             if (!response.Ok)
-                return new LocalConsoleState(true, false, response.Error ?? "Runner console is unavailable.", Array.Empty<LogLine>());
+                return (new LocalConsoleState(true, false, response.Error ?? "Runner console is unavailable.", Array.Empty<LogLine>()), 0);
             var snapshot = response.Console;
             if (snapshot is null)
-                return new LocalConsoleState(true, false, "Runner returned no console state.", Array.Empty<LogLine>());
+                return (new LocalConsoleState(true, false, "Runner returned no console state.", Array.Empty<LogLine>()), 0);
             var lines = snapshot.Lines.Select(line => new LogLine(def.Id, line.At, line.Source, line.Text)).ToArray();
-            if (snapshot.InputAvailable) EnsureRunnerConsolePump(def, snapshot.LastSequence);
-            return new LocalConsoleState(snapshot.Supported, snapshot.InputAvailable, snapshot.Message, lines);
+            return (new LocalConsoleState(snapshot.Supported, snapshot.InputAvailable, snapshot.Message, lines), snapshot.LastSequence);
         }
 
-        return GetLocalConsoleState(def);
+        return (GetLocalConsoleState(def), 0);
     }
 
-    private void EnsureRunnerConsolePump(ServerDef def, long lastSequence)
+    private void EnsureRunnerConsolePump(ServerDef def, long lastSequence, string connectionId)
     {
-        var cts = new CancellationTokenSource();
-        if (!_runnerConsolePumps.TryAdd(def.Id, cts))
+        RunnerConsolePump pump;
+        var startPump = false;
+        lock (_runnerConsolePumpGate)
         {
-            cts.Dispose();
-            return;
+            if (!_runnerConsolePumps.TryGetValue(def.Id, out pump!))
+            {
+                pump = new RunnerConsolePump();
+                _runnerConsolePumps.Add(def.Id, pump);
+                startPump = true;
+            }
+
+            pump.Subscribers.Add(connectionId);
+            if (!_runnerConsoleServersByConnection.TryGetValue(connectionId, out var serverIds))
+            {
+                serverIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                _runnerConsoleServersByConnection.Add(connectionId, serverIds);
+            }
+            serverIds.Add(def.Id);
         }
 
-        _ = Task.Run(() => PumpRunnerConsoleAsync(def, lastSequence, cts), CancellationToken.None);
+        if (startPump)
+            _ = Task.Run(() => PumpRunnerConsoleAsync(def, lastSequence, pump), CancellationToken.None);
     }
 
-    private async Task PumpRunnerConsoleAsync(ServerDef def, long lastSequence, CancellationTokenSource pumpCts)
+    private async Task PumpRunnerConsoleAsync(ServerDef def, long lastSequence, RunnerConsolePump pump)
     {
-        var ct = pumpCts.Token;
+        var ct = pump.Cancellation.Token;
         var consecutiveFailures = 0;
         try
         {
@@ -198,6 +260,9 @@ public sealed class LocalProcessService
 
                 consecutiveFailures = 0;
                 var snapshot = response.Console;
+                if (snapshot.LastSequence < lastSequence)
+                    lastSequence = 0;
+
                 foreach (var runnerLine in snapshot.Lines
                              .Where(line => line.Sequence > lastSequence)
                              .OrderBy(line => line.Sequence))
@@ -225,7 +290,21 @@ public sealed class LocalProcessService
         }
         finally
         {
-            if (_runnerConsolePumps.TryRemove(def.Id, out var removed)) removed.Dispose();
+            lock (_runnerConsolePumpGate)
+            {
+                if (_runnerConsolePumps.TryGetValue(def.Id, out var current) && ReferenceEquals(current, pump))
+                {
+                    _runnerConsolePumps.Remove(def.Id);
+                    foreach (var connectionId in pump.Subscribers)
+                    {
+                        if (!_runnerConsoleServersByConnection.TryGetValue(connectionId, out var serverIds)) continue;
+                        serverIds.Remove(def.Id);
+                        if (serverIds.Count == 0)
+                            _runnerConsoleServersByConnection.Remove(connectionId);
+                    }
+                }
+            }
+            pump.Cancellation.Dispose();
         }
     }
 
@@ -672,6 +751,12 @@ public sealed class LocalProcessService
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         }
         catch { return string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal); }
+    }
+
+    private sealed class RunnerConsolePump
+    {
+        public CancellationTokenSource Cancellation { get; } = new();
+        public HashSet<string> Subscribers { get; } = new(StringComparer.Ordinal);
     }
 
     private sealed class ConsoleSession
