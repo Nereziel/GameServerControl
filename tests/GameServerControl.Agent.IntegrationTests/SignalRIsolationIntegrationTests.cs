@@ -64,6 +64,58 @@ public sealed class SignalRIsolationIntegrationTests
     }
 
     [Fact]
+    public async Task Repeated_log_tail_start_does_not_replay_recent_backlog()
+    {
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
+        var history = "history-" + Guid.NewGuid().ToString("N");
+        await File.WriteAllTextAsync(factory.AlphaLogPath, history + Environment.NewLine);
+
+        var readOnlyToken = factory.CreateReadOnlyToken();
+        await using var connection = factory.CreateHubConnection(readOnlyToken);
+        using var client = factory.CreateClientWithToken(readOnlyToken);
+        var received = new List<LogLine>();
+        var gate = new object();
+
+        connection.On<LogLine>("logLine", line =>
+        {
+            if (line.ServerId != "alpha") return;
+            lock (gate) received.Add(line);
+        });
+
+        await connection.StartAsync();
+        await connection.InvokeAsync("SubscribeConsole", "alpha");
+
+        try
+        {
+            using var firstStart = await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "start" });
+            Assert.Equal(HttpStatusCode.OK, firstStart.StatusCode);
+
+            await WaitUntilAsync(() =>
+            {
+                lock (gate) return received.Count(line => line.Text == history) >= 1;
+            }, TimeSpan.FromSeconds(5));
+
+            int beforeSecondStart;
+            lock (gate) beforeSecondStart = received.Count(line => line.Text == history);
+            Assert.Equal(1, beforeSecondStart);
+
+            using var secondStart = await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "start" });
+            Assert.Equal(HttpStatusCode.OK, secondStart.StatusCode);
+
+            await Task.Delay(TimeSpan.FromSeconds(1));
+
+            int afterSecondStart;
+            lock (gate) afterSecondStart = received.Count(line => line.Text == history);
+            Assert.Equal(beforeSecondStart, afterSecondStart);
+        }
+        finally
+        {
+            try { await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "stop" }); } catch { }
+            try { await connection.StopAsync(); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Windows_runner_console_generation_change_replays_new_generation_from_sequence_one()
     {
         if (!OperatingSystem.IsWindows()) return;
