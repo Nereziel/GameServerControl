@@ -16,8 +16,9 @@ Backup listing was reviewed and does not expose absolute backup paths; its ident
 
 ## Required behavior
 
-- `GET /api/discover` is Admin-only.
-- `GET /api/servers/install/{jobId}` is Admin-only, including nonexistent job IDs so authorization runs before job lookup.
+- ReadOnly `GET /api/discover` is denied before host discovery runs.
+- ReadOnly `GET /api/servers/install/{jobId}` is denied before job lookup, including nonexistent IDs.
+- Admin discovery and install-job responses keep their existing behavior.
 - ReadOnly may continue to list installed mods, but `ModListResponse.ModsFolder` must be null for ReadOnly callers.
 - Admin mod-list responses keep the existing absolute `ModsFolder` value for troubleshooting/reference.
 - Relative `ModInfo.Files`, marketplace metadata, backup metadata, status/history and existing redacted server/config views remain available to ReadOnly.
@@ -26,13 +27,13 @@ Backup listing was reviewed and does not expose absolute backup paths; its ident
 
 ## Chosen approach
 
-Use endpoint-level Admin authorization for discovery and install-job progress because those endpoints exist solely for administrative installation workflows. Keep mod listing readable, but make `Program.cs` role-aware when constructing `ModListResponse`: expose the folder only to Admin callers.
+Extend `RoleEnforcementMiddleware`, which is already the centralized ReadOnly GET policy for server-list sanitization, config password redaction and raw-file denial. For ReadOnly GETs it denies the exact discovery route and the single-segment install-job route before `_next` executes. For the exact per-server `/mods` list route it buffers the normal response and rewrites only `modsFolder` to JSON null, leaving the mod array and support metadata unchanged.
 
-Extend the security-access validation contract so future changes cannot accidentally reopen the two Admin-only GET endpoints or return `ModsFolder` unconditionally.
+Admin requests bypass these ReadOnly branches and therefore retain the existing endpoint responses. Extend the security-access validation contract so future changes cannot remove the discovery/install denial or return `ModsFolder` unconditionally.
 
 ## Verification
 
-- RED: ReadOnly `GET /api/discover` currently returns 200 instead of 403.
-- RED: ReadOnly `GET /api/servers/install/does-not-exist` currently reaches the handler and returns 404 instead of 403.
-- RED: for a Valheim BareMetal fixture, ReadOnly `GET /api/servers/alpha/mods` currently contains the absolute `BepInEx/plugins` folder.
+- RED: ReadOnly `GET /api/discover` returned 200 instead of 403.
+- RED: ReadOnly `GET /api/servers/install/does-not-exist` reached the handler and returned 404 instead of 403.
+- RED: for a Valheim BareMetal fixture, ReadOnly `GET /api/servers/alpha/mods` returned an absolute `BepInEx/plugins` folder.
 - GREEN: Admin discovery remains usable; Admin nonexistent install-job lookup remains 404; Admin mod list retains `ModsFolder`; ReadOnly mod list retains mod metadata with `ModsFolder = null`.
