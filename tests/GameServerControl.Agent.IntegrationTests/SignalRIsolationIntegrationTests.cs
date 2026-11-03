@@ -228,6 +228,42 @@ public sealed class SignalRIsolationIntegrationTests
     }
 
     [Fact]
+    public async Task ReadOnly_log_tail_stop_does_not_stop_active_signalr_subscriber()
+    {
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
+        var readOnlyToken = factory.CreateReadOnlyToken();
+        await using var connection = factory.CreateHubConnection(readOnlyToken);
+        using var client = factory.CreateClientWithToken(readOnlyToken);
+        var tail = factory.Services.GetRequiredService<LogTailService>();
+        var sentinel = "after-readonly-stop-" + Guid.NewGuid().ToString("N");
+        var received = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        connection.On<LogLine>("logLine", line =>
+        {
+            if (line.ServerId == "alpha" && line.Text == sentinel)
+                received.TrySetResult(true);
+        });
+
+        await connection.StartAsync();
+        try
+        {
+            await connection.InvokeAsync("SubscribeConsole", "alpha");
+            await WaitUntilAsync(() => tail.IsTailing("alpha"), TimeSpan.FromSeconds(5));
+
+            using var stopped = await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "stop" });
+            Assert.Equal(HttpStatusCode.OK, stopped.StatusCode);
+            Assert.True(tail.IsTailing("alpha"), "ReadOnly HTTP stop cancelled a subscriber-owned tail");
+
+            await File.AppendAllTextAsync(factory.AlphaLogPath, sentinel + Environment.NewLine);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(8));
+        }
+        finally
+        {
+            try { await connection.StopAsync(); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Windows_runner_console_generation_change_replays_new_generation_from_sequence_one()
     {
         if (!OperatingSystem.IsWindows()) return;
