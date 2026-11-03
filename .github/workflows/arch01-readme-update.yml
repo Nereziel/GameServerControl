@@ -1,0 +1,28 @@
+name: Apply ARCH-01 README update
+
+on:
+  push:
+    branches: [fix/arch01-low-priv-runner]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: fix/arch01-low-priv-runner
+      - name: Update README and self-clean
+        shell: bash
+        run: |
+          python3 scripts/arch01-readme-update.py
+          node scripts/validate-release-workflow.mjs
+          git rm .github/workflows/arch01-readme-update.yml scripts/arch01-readme-update.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md
+          git commit -m 'docs: describe Windows Runner architecture'
+          git push origin HEAD:fix/arch01-low-priv-runner
