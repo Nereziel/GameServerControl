@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using GameServerControl.Agent.Auth;
 using GameServerControl.Agent.Servers;
 using Microsoft.AspNetCore.Authentication;
@@ -96,6 +97,58 @@ public sealed class AuthenticationIntegrationTests
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
         Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
         Assert.Equal(2, factory.Services.GetRequiredService<ServerRegistry>().All.Count);
+    }
+
+    [Fact]
+    public async Task ReadOnly_cannot_enumerate_host_discovery_paths_but_admin_can()
+    {
+        using var factory = new AgentTestFactory();
+        var token = factory.CreateReadOnlyToken();
+        using var readOnly = factory.CreateClientWithToken(token);
+        using var admin = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+
+        using var denied = await readOnly.GetAsync("/api/discover");
+        using var allowed = await admin.GetAsync("/api/discover");
+
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReadOnly_cannot_probe_install_job_progress_but_admin_can_probe_missing_job()
+    {
+        using var factory = new AgentTestFactory();
+        var token = factory.CreateReadOnlyToken();
+        using var readOnly = factory.CreateClientWithToken(token);
+        using var admin = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+
+        using var denied = await readOnly.GetAsync("/api/servers/install/does-not-exist");
+        using var adminMissing = await admin.GetAsync("/api/servers/install/does-not-exist");
+
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, adminMissing.StatusCode);
+    }
+
+    [Fact]
+    public async Task ReadOnly_mod_list_redacts_absolute_mods_folder_but_admin_keeps_it()
+    {
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
+        var token = factory.CreateReadOnlyToken();
+        using var readOnly = factory.CreateClientWithToken(token);
+        using var admin = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+
+        using var readOnlyResponse = await readOnly.GetAsync("/api/servers/alpha/mods");
+        using var adminResponse = await admin.GetAsync("/api/servers/alpha/mods");
+
+        Assert.Equal(HttpStatusCode.OK, readOnlyResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, adminResponse.StatusCode);
+
+        using var readOnlyJson = JsonDocument.Parse(await readOnlyResponse.Content.ReadAsStringAsync());
+        using var adminJson = JsonDocument.Parse(await adminResponse.Content.ReadAsStringAsync());
+        Assert.Equal(JsonValueKind.Null, readOnlyJson.RootElement.GetProperty("modsFolder").ValueKind);
+
+        var expectedFolder = Path.Combine(factory.TempRoot, "alpha-game", "BepInEx", "plugins");
+        Assert.Equal(expectedFolder, adminJson.RootElement.GetProperty("modsFolder").GetString());
     }
 
     [Fact]
