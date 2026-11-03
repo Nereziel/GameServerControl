@@ -9,6 +9,7 @@ Remove the new Windows Runner console polling regression without replacing the e
 - Keep at most one Agent-side Runner console pump per server.
 - Preserve the current initial bounded console history for a new subscriber.
 - Add a cursor to `ConsoleState` polling so subsequent IPC responses contain only lines newer than the caller's last sequence.
+- Recover immediately with bounded history if the Runner restarts and its sequence counter resets below the Agent pump cursor.
 - Stop the per-server pump after its last subscriber disconnects.
 - Support one SignalR connection subscribing to multiple servers and multiple connections subscribing to one server.
 - Keep the existing 250 ms active polling cadence; this fix targets payload amplification and orphan polling, not a transport rewrite.
@@ -38,7 +39,7 @@ Would remove polling entirely, but requires a long-lived protocol, reconnection 
 
 ## Protocol behavior
 
-`RunnerRequest.AfterSequence` is nullable. When null, `ConsoleState` returns the current bounded history. When present, it must be zero or positive and only accompanies `RunnerCommand.ConsoleState`; the Runner returns only lines whose `Sequence` is greater than the cursor while `LastSequence` still reports the current global console sequence.
+`RunnerRequest.AfterSequence` is nullable. When null, `ConsoleState` returns the current bounded history. When present, it must be zero or positive and only accompanies `RunnerCommand.ConsoleState`; the Runner returns only lines whose `Sequence` is greater than the cursor while `LastSequence` still reports the current global console sequence. If the supplied cursor is greater than the Runner's current `LastSequence`, the Runner treats that as a sequence reset and returns the current bounded history so the Agent resynchronizes in the same poll.
 
 ## Subscription lifecycle
 
@@ -49,6 +50,6 @@ On disconnect, `StatusHub.OnDisconnectedAsync` removes that connection from ever
 ## Verification
 
 - Protocol tests prove the cursor exists, is command-scoped and rejects negative values.
-- Runner behavior test proves initial history is full and cursor polling returns only newer lines.
-- Subscription lifecycle test proves duplicate registration does not create multiple pumps and last-subscriber removal cancels polling.
+- Runner behavior test proves initial history is full, cursor polling returns only newer lines, and a cursor beyond the current sequence triggers immediate bounded resynchronization.
+- Subscription lifecycle test proves the pump stops after the last subscriber disconnects.
 - Existing runtime integration, ARCH-01 and Build workflows remain green.
