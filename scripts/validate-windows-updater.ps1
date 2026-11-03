@@ -74,3 +74,15 @@ if ($bootstrapSource.Contains('raw.githubusercontent.com/Nereziel/GameServerCont
 }
 
 Write-Host 'Windows release-verified one-line bootstrap syntax/security contract OK.'
+
+# Regression: inherited ACL removal must not leave Agent/Runner files with empty ACLs.
+# Folder inheritance grants are supplemented by explicit permissions for descendants.
+$installerSource = Get-Content -LiteralPath $installerPath -Raw
+$explicitFileGrant = "icacls.exe `$Path /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /T /C"
+if (([regex]::Matches($installerSource, [regex]::Escape($explicitFileGrant))).Count -ne 2) {
+    throw 'Both Agent and Runner must grant SYSTEM/Administrators explicit file permissions.'
+}
+if (-not $installerSource.Contains('icacls.exe $Path /grant "${serviceAccount}:(RX)" /T /C', [StringComparison]::Ordinal)) {
+    throw 'Runner payloads must have explicit read/execute rights for their service account.'
+}
+Write-Host 'Windows explicit Agent/Runner file ACL regression contract OK.'

@@ -86,8 +86,13 @@ function Set-AgentDirectoryAcl {
     # Stable well-known SIDs avoid localized account-name issues. The managed service runs
     # as LocalSystem, so these correspond to SYSTEM:(OI)(CI)F and
     # BUILTIN\Administrators:(OI)(CI)F and are inherited by secret state files.
+    # /inheritance:r removes inherited file ACEs. Inheritable (OI)(CI) grants alone
+    # do not guarantee effective access on existing files after /T; explicitly grant
+    # SYSTEM and Administrators access on each descendant too.
     $aclOutput = & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Agent directory ACL: $($aclOutput -join ' | ')" }
+    $fileAclOutput = & icacls.exe $Path /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /T /C 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Failed to grant Agent file access to SYSTEM and Administrators: $($fileAclOutput -join ' | ')" }
 }
 
 function Set-RunnerDirectoryAcl {
@@ -96,11 +101,15 @@ function Set-RunnerDirectoryAcl {
 
     $aclOutput = & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Runner directory ACL: $($aclOutput -join ' | ')" }
+    $fileAclOutput = & icacls.exe $Path /grant '*S-1-5-18:F' '*S-1-5-32-544:F' /T /C 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Failed to grant Runner file access to SYSTEM and Administrators: $($fileAclOutput -join ' | ')" }
 
     foreach ($runnerService in @(Get-Service -Name 'GameServerControlRunner_*' -ErrorAction SilentlyContinue)) {
         $serviceAccount = "NT SERVICE\$($runnerService.Name)"
         $grantOutput = & icacls.exe $Path /grant "${serviceAccount}:(OI)(CI)(RX)" /T /C 2>&1
         if ($LASTEXITCODE -ne 0) { throw "Failed to grant Runner payload access to ${serviceAccount}: $($grantOutput -join ' | ')" }
+        $fileGrantOutput = & icacls.exe $Path /grant "${serviceAccount}:(RX)" /T /C 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Failed to grant Runner file read/execute access to ${serviceAccount}: $($fileGrantOutput -join ' | ')" }
     }
 }
 
