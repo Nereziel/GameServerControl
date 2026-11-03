@@ -58,8 +58,7 @@ public sealed record RunnerManifest(
             foreach (var raw in StopProcessNames)
             {
                 if (string.IsNullOrWhiteSpace(raw)) return "Additional process names must not be blank.";
-                var leaf = Path.GetFileName(raw);
-                if (!string.Equals(leaf, raw, StringComparison.Ordinal))
+                if (raw.Contains('/') || raw.Contains('\\'))
                     return "Additional process names must be file names, not paths.";
             }
         }

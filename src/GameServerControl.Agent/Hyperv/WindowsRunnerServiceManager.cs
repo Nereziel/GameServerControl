@@ -8,7 +8,7 @@ using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Hyperv;
 
-public sealed class WindowsRunnerServiceManager
+public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
 {
     private static readonly TimeSpan ToolTimeout = TimeSpan.FromSeconds(20);
     private static readonly JsonSerializerOptions ManifestJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
@@ -44,7 +44,7 @@ public sealed class WindowsRunnerServiceManager
     public async Task<RunnerResponse> ConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
         await SendForServerAsync(def, new RunnerRequest(RunnerCommand.ConsoleState), ct);
 
-    internal Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
+    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
         _client.SendAsync(RunnerIdentity.ForServer(def.Id), new RunnerRequest(RunnerCommand.ConsoleState), ct);
 
     public async Task<RunnerResponse> SendConsoleInputAsync(ServerDef def, string command, CancellationToken ct = default) =>
