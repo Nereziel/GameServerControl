@@ -34,6 +34,20 @@ function checkInlineScripts(html, tempDir, labelPrefix) {
 
 for (const file of files) check(file);
 
+// HTML must be revalidated, while JS/CSS URLs change with the deployed asset bytes.
+const indexHtml = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
+const programSource = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Program.cs'), 'utf8');
+for (const name of ['styles.css', 'core.js', 'server-admin.js', 'jobs-mods.js', 'config-backups.js', 'server-workspace.js']) {
+  if (!indexHtml.includes(`/webui/${name}?v=__GSC_ASSET_VERSION__`))
+    throw new Error(`Missing content-versioned asset reference: ${name}`);
+}
+if (!programSource.includes('webUiHasher.AppendData(File.ReadAllBytes(assetPath))') ||
+    !programSource.includes('Replace("__GSC_ASSET_VERSION__", webUiAssetVersion)') ||
+    !programSource.includes('context.Response.Headers.CacheControl = "no-store"'))
+  throw new Error('WebUI cache-busting or HTML revalidation contract missing');
+
+
+
 /* Regression: a childList MutationObserver runs applyAuthUi -> ensureAuthRoleBadge.
  * Writing the same textContent again schedules another observer callback forever. */
 const authUiSource = fs.readFileSync(path.join(webUiDir, 'server-admin.js'), 'utf8');
