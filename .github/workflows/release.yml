@@ -65,6 +65,9 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.ref }}
 
+      - name: Validate release SemVer
+        run: node scripts/version.mjs check "${{ needs.prepare.outputs.tag }}"
+
       - name: Setup .NET 8
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
