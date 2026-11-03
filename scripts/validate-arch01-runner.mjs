@@ -12,6 +12,7 @@ const managerPath = 'src/GameServerControl.Agent/Hyperv/WindowsRunnerServiceMana
 const clientPath = 'src/GameServerControl.Agent/Hyperv/WindowsRunnerPipeClient.cs';
 const localPath = 'src/GameServerControl.Agent/Hyperv/LocalProcessService.cs';
 const orchestratorPath = 'src/GameServerControl.Agent/Servers/ServerOrchestrator.cs';
+const programPath = 'src/GameServerControl.Agent/Program.cs';
 const installerPath = 'deploy/windows/install.ps1';
 const buildPath = '.github/workflows/build.yml';
 const releasePath = '.github/workflows/release.yml';
@@ -29,6 +30,7 @@ const runnerPipe = read(runnerPipePath);
 const client = read(clientPath);
 const local = read(localPath);
 const orchestrator = read(orchestratorPath);
+const program = read(programPath);
 const manager = read(managerPath);
 const installer = read(installerPath);
 const build = read(buildPath);
@@ -46,6 +48,7 @@ requireCheck(runnerPipe.includes('RunnerProtocolLimits.MaxRequestBytes') && runn
 requireCheck(client.includes('NamedPipeClientStream'), 'Agent Runner client must use the local named-pipe transport.');
 requireCheck(client.includes('RunnerProtocolLimits.MaxRequestBytes') && client.includes('RunnerProtocolLimits.MaxResponseBytes'), 'Agent Runner client must enforce protocol frame limits.');
 requireCheck(client.includes('ConnectAsync') && client.includes('CancellationTokenSource'), 'Agent Runner client must use bounded/cancellable pipe connection attempts.');
+requireCheck(client.includes('OperationTimeout') && /WriteFrameAsync\([^;]*operationCts\.Token/.test(client) && /ReadFrameAsync\([^;]*operationCts\.Token/.test(client), 'Runner IPC must bound the complete request/response operation, not only pipe connect.');
 
 requireCheck(local.includes('WindowsRunnerServiceManager'), 'LocalProcessService must delegate Windows BareMetal runtime to WindowsRunnerServiceManager.');
 requireCheck(local.includes('_windowsRunner.StartAsync(def, ct)'), 'Windows start path must delegate to the Runner.');
@@ -65,6 +68,8 @@ requireCheck(manager.includes('icacls.exe') && manager.includes('(OI)(CI)(M)') &
 requireCheck(manager.includes('schtasks.exe') && manager.includes('/disable') && manager.includes('/end'), 'Legacy Scheduled Tasks must be disabled and ended during Runner migration.');
 requireCheck(manager.includes('1690800') && manager.includes('FactoryGame') && manager.includes('CreateSymbolicLink'), 'Satisfactory must preserve its existing SystemProfile data through an idempotent directory link.');
 requireCheck(manager.includes('SetAutostartAsync') && manager.includes('GetAutostartAsync'), 'Runner manager must own Windows BareMetal autostart state.');
+requireCheck(manager.includes('DeprovisionAsync') && manager.includes('"delete", identity.ServiceName') && manager.includes('"/remove:g"'), 'Deleting a server must stop/delete its Runner and remove that service SID from game/save ACLs.');
+requireCheck(/MapDelete\("\/servers\/\{id\}"[\s\S]{0,900}?runners\.DeprovisionAsync\(def, ct\)[\s\S]{0,500}?store\.Delete\(id\)/m.test(program), 'Server deletion must deprovision the Runner before deleting the server definition.');
 
 requireCheck(build.includes('GameServerControl.Runner'), 'Build workflow must build/publish the Windows Runner.');
 requireCheck(release.includes('GameServerControl.Runner'), 'Release workflow must publish the Windows Runner.');
