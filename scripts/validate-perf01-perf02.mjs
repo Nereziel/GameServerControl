@@ -22,12 +22,18 @@ for (const [name, source] of [['LogTailService', logTail], ['LocalProcessService
 }
 
 const renderConsoleAt = workspace.indexOf('async function renderServerConsole');
-const readOnlyAt = workspace.indexOf('if (readOnly)', renderConsoleAt);
-const subscribeAt = workspace.indexOf("await connection.invoke('SubscribeConsole', [def.id]);", renderConsoleAt);
-requireMatch(renderConsoleAt >= 0 && readOnlyAt > renderConsoleAt,
-  'PERF-01: could not locate read-only console branch.');
-requireMatch(subscribeAt > renderConsoleAt && subscribeAt < readOnlyAt,
-  'PERF-01: every live console connection must subscribe before the read-only/stdin branch split.');
+const renderConsoleEnd = workspace.indexOf('async function serverWorkspaceSendConsole', renderConsoleAt);
+requireMatch(renderConsoleAt >= 0 && renderConsoleEnd > renderConsoleAt,
+  'PERF-01: could not locate the live-console render function.');
+const renderConsole = workspace.slice(renderConsoleAt, renderConsoleEnd);
+const subscribeAt = renderConsole.indexOf("await connection.invoke('SubscribeConsole', [def.id]);");
+const storeConnectionAt = renderConsole.indexOf('SERVER_WORKSPACE.console = connection;');
+requireMatch(subscribeAt >= 0,
+  'PERF-01: every live console connection must subscribe to its validated server group.');
+requireMatch(storeConnectionAt > subscribeAt,
+  'PERF-01: the live console connection must subscribe before it is retained by the workspace.');
+requireMatch(!/\/logs\/tail/.test(renderConsole),
+  'PERF-01: LogOnly UI lifecycle must stay on the scoped SignalR connection instead of global HTTP tail control.');
 
 requireMatch(/private\s+DateTimeOffset\s+_nextPruneAt/.test(installer),
   'PERF-02: GET-side retention cleanup must be rate-limited instead of scanning every request.');
