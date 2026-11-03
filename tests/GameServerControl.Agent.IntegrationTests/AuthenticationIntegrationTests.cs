@@ -1,6 +1,13 @@
 using System.Net;
-using Microsoft.Extensions.DependencyInjection;
+using System.Text.Encodings.Web;
+using GameServerControl.Agent.Auth;
 using GameServerControl.Agent.Servers;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace GameServerControl.Agent.IntegrationTests;
@@ -72,5 +79,62 @@ public sealed class AuthenticationIntegrationTests
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
         Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
         Assert.Equal(2, factory.Services.GetRequiredService<ServerRegistry>().All.Count);
+    }
+
+    [Fact]
+    public async Task Valid_admin_token_authenticates_after_same_peer_is_throttled()
+    {
+        using var factory = new AgentTestFactory();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agent:ApiToken"] = AgentTestFactory.AdminToken,
+                ["Agent:DataDir"] = factory.TempRoot
+            })
+            .Build();
+        var registry = new TokenRegistry(config, loggerFactory.CreateLogger<TokenRegistry>());
+        var peer = IPAddress.Parse("192.0.2.123");
+
+        for (var i = 0; i < 8; i++)
+        {
+            var rejected = await AuthenticateAsync(registry, loggerFactory, peer, "invalid-token-" + i);
+            Assert.False(rejected.Succeeded);
+        }
+
+        var valid = await AuthenticateAsync(registry, loggerFactory, peer, AgentTestFactory.AdminToken);
+
+        Assert.True(valid.Succeeded);
+    }
+
+    private static async Task<AuthenticateResult> AuthenticateAsync(
+        TokenRegistry registry,
+        ILoggerFactory loggerFactory,
+        IPAddress peer,
+        string bearerToken)
+    {
+        var handler = new TokenAuthHandler(
+            new FixedOptionsMonitor<TokenAuthOptions>(new TokenAuthOptions()),
+            loggerFactory,
+            UrlEncoder.Default,
+            registry);
+        var context = new DefaultHttpContext();
+        context.Connection.RemoteIpAddress = peer;
+        context.Request.Path = "/api/health";
+        context.Request.Headers.Authorization = "Bearer " + bearerToken;
+        var scheme = new AuthenticationScheme(
+            TokenAuthHandler.SchemeName,
+            TokenAuthHandler.SchemeName,
+            typeof(TokenAuthHandler));
+
+        await handler.InitializeAsync(scheme, context);
+        return await handler.AuthenticateAsync();
+    }
+
+    private sealed class FixedOptionsMonitor<TOptions>(TOptions value) : IOptionsMonitor<TOptions>
+    {
+        public TOptions CurrentValue => value;
+        public TOptions Get(string? name) => value;
+        public IDisposable? OnChange(Action<TOptions, string?> listener) => null;
     }
 }
