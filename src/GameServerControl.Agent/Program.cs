@@ -213,8 +213,24 @@ api.MapPut("/servers/{id}", (string id, ServerDef def, ServerStore store) =>
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
-api.MapDelete("/servers/{id}", async (string id, ServerStore store, PublicRelayManager relay, CancellationToken ct) =>
+api.MapDelete("/servers/{id}", async (
+    string id,
+    ServerRegistry reg,
+    ServerStore store,
+    WindowsRunnerServiceManager runners,
+    PublicRelayManager relay,
+    CancellationToken ct) =>
 {
+    var def = reg.Get(id);
+    if (def is null) return Results.NotFound();
+
+    if (runners.Supports(def))
+    {
+        var cleanup = await runners.DeprovisionAsync(def, ct);
+        if (!cleanup.Ok)
+            return Results.Json(new { error = cleanup.Error }, statusCode: StatusCodes.Status502BadGateway);
+    }
+
     if (!store.Delete(id)) return Results.NotFound();
     await relay.RemoveServerAsync(id, ct);
     return Results.NoContent();

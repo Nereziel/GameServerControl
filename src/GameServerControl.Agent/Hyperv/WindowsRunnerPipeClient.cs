@@ -11,6 +11,7 @@ internal readonly record struct RunnerPipeResult(RunnerResponse Response, bool T
 public sealed class WindowsRunnerPipeClient
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(12);
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
@@ -40,18 +41,21 @@ public sealed class WindowsRunnerPipeClient
 
         try
         {
+            using var operationCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            operationCts.CancelAfter(OperationTimeout);
+
             await using var pipe = new NamedPipeClientStream(
                 ".",
                 identity.PipeName,
                 PipeDirection.InOut,
                 PipeOptions.Asynchronous);
 
-            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(operationCts.Token);
             connectCts.CancelAfter(ConnectTimeout);
             await pipe.ConnectAsync(connectCts.Token);
 
-            await WriteFrameAsync(pipe, payload, ct);
-            var responseBytes = await ReadFrameAsync(pipe, RunnerProtocolLimits.MaxResponseBytes, ct);
+            await WriteFrameAsync(pipe, payload, operationCts.Token);
+            var responseBytes = await ReadFrameAsync(pipe, RunnerProtocolLimits.MaxResponseBytes, operationCts.Token);
             var response = JsonSerializer.Deserialize<RunnerResponse>(responseBytes, _json)
                            ?? new RunnerResponse(false, "Runner returned an empty response.");
             return new RunnerPipeResult(response, TransportFailure: false);
