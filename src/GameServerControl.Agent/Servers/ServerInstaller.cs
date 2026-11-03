@@ -186,7 +186,7 @@ public sealed class ServerInstaller
             else if (!steamOk)
             {
                 await PublishAsync(jobId, "failed",
-                    $"SteamCMD exited with code {exitCode}. Review the install log above for the actual Steam error.",
+                    SteamInstallFailure(exitCode, req.InstallPath),
                     null, true, false);
                 return;
             }
@@ -195,8 +195,8 @@ public sealed class ServerInstaller
             if (!File.Exists(expectedExe))
             {
                 await PublishAsync(jobId, "failed",
-                    $"Installer finished, but the expected server executable was not found: {expectedExe}. " +
-                    "The partial files were left in place for troubleshooting; the server was not registered.",
+                    $"[GSC-INSTALL-EXE] Expected server executable not found: {expectedExe}. " +
+                    "Check the game's install path and SteamCMD output. Partial files were kept; registration was skipped.",
                     null, true, false);
                 return;
             }
@@ -208,7 +208,8 @@ public sealed class ServerInstaller
             catch (Exception ex)
             {
                 await PublishAsync(jobId, "failed",
-                    $"Files are installed, but registration failed: {ex.Message}. Install path: {req.InstallPath}",
+                    $"[GSC-INSTALL-REGISTER] Game files are present, but registration failed: {ex.Message}. " +
+                    $"Installation remains in {req.InstallPath}. Check for a duplicate server ID and retry registration.",
                     null, true, false);
                 return;
             }
@@ -223,13 +224,32 @@ public sealed class ServerInstaller
         catch (Exception ex)
         {
             _logger.LogError(ex, "Install job {Id} crashed", jobId);
-            await PublishAsync(jobId, "failed", "Exception: " + ex.Message, null, true, false);
+            await PublishAsync(jobId, "failed", InstallExceptionMessage(ex), null, true, false);
         }
         finally
         {
             if (gateHeld) _installGate.Release();
         }
     }
+
+    private static string SteamInstallFailure(int exitCode, string installPath) =>
+        $"[GSC-INSTALL-STEAM] SteamCMD failed (exit {exitCode}) while installing to {installPath}. " +
+        "Check the job log for Steam errors, available disk space, write permissions, " +
+        "and whether Steam is reachable, then retry. Existing partial files were kept.";
+
+    private static string InstallExceptionMessage(Exception ex) => ex switch
+    {
+        UnauthorizedAccessException =>
+            "[GSC-INSTALL-ACCESS] Access denied. Check write permissions on the selected installation directory.",
+        DirectoryNotFoundException =>
+            "[GSC-INSTALL-PATH] Required installation directory was not found. Verify the configured path.",
+        IOException =>
+            "[GSC-INSTALL-IO] File operation failed. Check available disk space, locked files and directory permissions.",
+        OperationCanceledException =>
+            "[GSC-INSTALL-CANCELLED] Installation was cancelled.",
+        _ => "[GSC-INSTALL-ERROR] Installation failed: " + ex.Message +
+             ". Check the installation job log and retry."
+    };
 
     private static void EnsureUnixExecutable(string path)
     {

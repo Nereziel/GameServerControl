@@ -20,6 +20,10 @@ public sealed class RunnerProcessHost
     private int _consoleChars;
     private long _nextSequence;
     private Process? _attachedProcess;
+    private volatile bool _restartDesired;
+    private volatile bool _cleanExitObserved;
+
+    public bool RestartDesired => _restartDesired && !_cleanExitObserved;
 
     public RunnerProcessHost(RunnerManifest manifest, ILogger<RunnerProcessHost> logger)
     {
@@ -31,7 +35,12 @@ public sealed class RunnerProcessHost
     {
         var existing = await FindAsync(ct);
         if (!existing.Ok) return existing;
-        if (existing.Pid is not null) return existing;
+        if (existing.Pid is not null)
+        {
+            _cleanExitObserved = false;
+            _restartDesired = true;
+            return existing;
+        }
 
         try
         {
@@ -56,7 +65,15 @@ public sealed class RunnerProcessHost
 
             var process = Process.Start(psi);
             if (process is null) return new RunnerResponse(false, "Process.Start returned null.");
+            _cleanExitObserved = false;
+            _restartDesired = true;
             if (interactive) AttachConsole(process);
+            else
+            {
+                // A normal game shutdown (exit code zero) is not a crash.
+                process.EnableRaisingEvents = true;
+                process.Exited += (_, _) => RecordProcessExit(process);
+            }
             return new RunnerResponse(true, Pid: process.Id, InputAvailable: interactive);
         }
         catch (Exception ex)
@@ -106,6 +123,8 @@ public sealed class RunnerProcessHost
 
     public async Task<RunnerResponse> StopAsync(bool force, CancellationToken ct)
     {
+        // Operator-initiated stops must never trigger the crash-recovery monitor.
+        _restartDesired = false;
         var process = ResolveAttachedProcess();
         if (process is null)
         {
@@ -217,14 +236,25 @@ public sealed class RunnerProcessHost
         process.ErrorDataReceived += (_, e) => { if (e.Data is not null) RecordConsole("stderr", e.Data); };
         process.Exited += (_, _) =>
         {
-            var code = "?";
-            try { code = process.ExitCode.ToString(); } catch { }
-            RecordConsole("process", $"[process exited with code {code}]");
+            RecordProcessExit(process);
             if (ReferenceEquals(_attachedProcess, process)) _attachedProcess = null;
         };
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         RecordConsole("process", $"[interactive console attached — pid {process.Id}]");
+    }
+
+    private void RecordProcessExit(Process process)
+    {
+        var code = "?";
+        try
+        {
+            var exitCode = process.ExitCode;
+            code = exitCode.ToString();
+            if (exitCode == 0) _cleanExitObserved = true;
+        }
+        catch { }
+        RecordConsole("process", $"[process exited with code {code}]");
     }
 
     private Process? ResolveAttachedProcess()

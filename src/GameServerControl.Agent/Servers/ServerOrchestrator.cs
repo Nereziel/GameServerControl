@@ -24,6 +24,7 @@ public sealed class ServerOrchestrator
     private readonly DiscordNotifier _discord;
     private readonly SteamCmdManager _steamCmd;
     private readonly DragonwildsConfig _dragonwildsConfig;
+    private readonly BackupService _backups;
     private readonly IConfiguration _cfg;
     private readonly ILogger<ServerOrchestrator> _logger;
 
@@ -37,6 +38,7 @@ public sealed class ServerOrchestrator
         DiscordNotifier discord,
         SteamCmdManager steamCmd,
         DragonwildsConfig dragonwildsConfig,
+        BackupService backups,
         IConfiguration cfg,
         ILogger<ServerOrchestrator> logger)
     {
@@ -49,6 +51,7 @@ public sealed class ServerOrchestrator
         _discord = discord;
         _steamCmd = steamCmd;
         _dragonwildsConfig = dragonwildsConfig;
+        _backups = backups;
         _cfg = cfg;
         _logger = logger;
     }
@@ -220,6 +223,26 @@ public sealed class ServerOrchestrator
             : await StartVmAsync(def, corr, ct);
     }
 
+    private ActionResult StartFailure(string id, string correlation, string message)
+    {
+        _tracker.Update(id, status => status with { LastError = message });
+        _logger.LogWarning("Server start failed for {ServerId}: {Message}", id, message);
+        return new ActionResult(false, message, correlation);
+    }
+
+    private static string ExplainLaunchError(string? error)
+    {
+        var detail = string.IsNullOrWhiteSpace(error) ? "Unknown process error." : error;
+        var hint = detail.Contains("denied", StringComparison.OrdinalIgnoreCase) ||
+                   detail.Contains("access", StringComparison.OrdinalIgnoreCase)
+            ? "Check the Runner account's permissions on the executable, working directory and save folders."
+            : detail.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
+              detail.Contains("cannot find", StringComparison.OrdinalIgnoreCase)
+            ? "Check the executable and working directory in server configuration."
+            : "Check the server executable path, permissions and game logs.";
+        return "[GSC-START-PROCESS] " + detail + " " + hint;
+    }
+
     private async Task<ActionResult> StartBareMetalAsync(ServerDef def, string corr, CancellationToken ct)
     {
         var (alreadyOk, existingPid) = await _local.FindProcessAsync(def.GuestExePath, ct);
@@ -232,7 +255,7 @@ public sealed class ServerOrchestrator
 
         await LogAsync(def.Id, "orch", "Launching " + def.GuestExePath);
         var (started, pid, err) = await _local.StartProcessAsync(def.GuestExePath, def.StartArgs, def.GuestWorkingDir, ct);
-        if (!started) return new ActionResult(false, "Process launch failed: " + err, corr);
+        if (!started) return StartFailure(def.Id, corr, ExplainLaunchError(err));
 
         _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pid, StartedAt = DateTimeOffset.UtcNow, LastError = null });
         await RefreshStatusAsync(def.Id, ct);
@@ -250,7 +273,8 @@ public sealed class ServerOrchestrator
         {
             await LogAsync(def.Id, "orch", "Starting VM " + def.VmName);
             if (!await _hv.StartVmAsync(def.VmName, ct))
-                return new ActionResult(false, "Failed to start VM", corr);
+                return StartFailure(def.Id, corr,
+                    "[GSC-START-VM] Hyper-V could not start the VM. Check Hyper-V service and VM configuration.");
 
             var deadline = DateTime.UtcNow.AddMinutes(3);
             while (DateTime.UtcNow < deadline)
@@ -260,7 +284,8 @@ public sealed class ServerOrchestrator
                 if (state == VmState.Running) break;
                 await Task.Delay(2000, ct);
             }
-            if (state != VmState.Running) return new ActionResult(false, "VM did not reach Running state", corr);
+            if (state != VmState.Running) return StartFailure(def.Id, corr,
+                "[GSC-START-VM-TIMEOUT] VM did not reach Running state within three minutes. Check Hyper-V events.");
         }
 
         var cred = GetCred(def.GuestCredentialId);
@@ -277,7 +302,8 @@ public sealed class ServerOrchestrator
             catch { }
             await Task.Delay(3000, ct);
         }
-        if (!reachable) return new ActionResult(false, "VM running but guest not reachable via PowerShell Direct", corr);
+        if (!reachable) return StartFailure(def.Id, corr,
+            "[GSC-START-GUEST] VM is running but PowerShell Direct is unavailable. Check guest credentials and integration services.");
 
         await LogAsync(def.Id, "orch", "Launching " + def.GuestExePath);
         var (started, pid, err) = await _guest.StartProcessAsync(def.VmName, cred, def.GuestExePath, def.StartArgs, def.GuestWorkingDir, ct);
@@ -523,6 +549,14 @@ public sealed class ServerOrchestrator
         if (def is null) return new ActionResult(false, "Unknown server", corr);
         if (string.IsNullOrWhiteSpace(def.SteamAppId))
             return new ActionResult(false, "No SteamAppId set; cannot update via SteamCMD", corr);
+
+        // Never modify installed game files without first preserving all configured
+        // save data. Operator can restore this named snapshot if SteamCMD fails.
+        var preUpdate = await _backups.CreatePreUpdateAsync(id, ct);
+        if (!preUpdate.Success)
+            return new ActionResult(false,
+                "Update cancelled: pre-update backup failed: " + preUpdate.Message, corr);
+        await LogAsync(id, "backup", preUpdate.Message);
 
         if (def.HostingMode == HostingMode.BareMetal)
         {

@@ -160,6 +160,42 @@ public sealed class BackupService
         return new ActionResult(true, "Checkpoint created: " + name, corr);
     }
 
+    /// <summary>
+    /// Create a complete, restorable snapshot before changing installed game files.
+    /// Abort updates when a configured save cannot be read instead of silently
+    /// producing a partial archive.
+    /// </summary>
+    public async Task<ActionResult> CreatePreUpdateAsync(string id, CancellationToken ct = default)
+    {
+        var corr = Guid.NewGuid().ToString("n");
+        var def = _registry.Get(id);
+        if (def is null) return new ActionResult(false, "Unknown server", corr);
+        if (def.HostingMode != HostingMode.BareMetal)
+            return await CreateAsync(id, "Pre-update backup", ct);
+
+        ArchiveCreateResult created;
+        try
+        {
+            // A pre-update snapshot must include every configured save directory.
+            var saveTargets = GetSaveTargets(def, requireAnyExisting: true);
+            if (saveTargets.Any(target => !Directory.Exists(target.Path)))
+                return new ActionResult(false, "One or more configured save directories are missing.", corr);
+            created = await CreateBareMetalArchiveAsync(def, "Pre-update backup",
+                BackupKind.SafetyArchive, requireComplete: true, ct);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or DirectoryNotFoundException)
+        {
+            return new ActionResult(false, ex.Message, corr);
+        }
+
+        if (!created.Success)
+            return new ActionResult(false, created.Error ?? "Pre-update backup failed", corr);
+
+        await PruneBareMetalAsync(def, ct);
+        _tracker.Update(id, current => current with { LastBackupAt = DateTimeOffset.UtcNow });
+        return new ActionResult(true, "Pre-update backup: " + Path.GetFileName(created.Path), corr);
+    }
+
     public async Task<List<BackupInfo>> ListAsync(string id, CancellationToken ct = default)
     {
         var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
@@ -347,7 +383,7 @@ public sealed class BackupService
         Directory.CreateDirectory(serverDir);
         var safety = kind == BackupKind.SafetyArchive;
         var baseName = safety
-            ? $"{def.Id}-prerestore-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip"
+            ? $"{def.Id}-{(label == "Pre-update backup" ? "preupdate" : "prerestore")}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip"
             : $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip";
         var zipPath = UniqueArchivePath(serverDir, baseName);
         var createdAt = DateTimeOffset.UtcNow;
