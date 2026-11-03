@@ -44,8 +44,11 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     public async Task<RunnerResponse> ConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
         await SendForServerAsync(def, new RunnerRequest(RunnerCommand.ConsoleState), ct);
 
-    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
-        _client.SendAsync(RunnerIdentity.ForServer(def.Id), new RunnerRequest(RunnerCommand.ConsoleState), ct);
+    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, long afterSequence, CancellationToken ct = default) =>
+        _client.SendAsync(
+            RunnerIdentity.ForServer(def.Id),
+            new RunnerRequest(RunnerCommand.ConsoleState, AfterSequence: afterSequence),
+            ct);
 
     public async Task<RunnerResponse> SendConsoleInputAsync(ServerDef def, string command, CancellationToken ct = default) =>
         await SendForServerAsync(def, new RunnerRequest(RunnerCommand.SendConsoleInput, ConsoleInput: command), ct);
@@ -236,65 +239,65 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
             var stateDirectory = StateDirectory(identity);
             Directory.CreateDirectory(stateDirectory);
 
-        var existingManifest = await ReadManifestAsync(manifestPath, ct);
-        var autoStart = existingManifest?.AutoStart ?? false;
-        var firstProvision = existingManifest is null;
-        if (firstProvision && !string.IsNullOrWhiteSpace(def.ScheduledTaskName))
-        {
-            var legacy = await QueryLegacyTaskEnabledAsync(def.ScheduledTaskName, ct);
-            if (legacy is null)
-                return ProvisionResult.Fail("Could not read legacy Scheduled Task state before Runner migration.");
-            autoStart = legacy.Value;
-        }
+            var existingManifest = await ReadManifestAsync(manifestPath, ct);
+            var autoStart = existingManifest?.AutoStart ?? false;
+            var firstProvision = existingManifest is null;
+            if (firstProvision && !string.IsNullOrWhiteSpace(def.ScheduledTaskName))
+            {
+                var legacy = await QueryLegacyTaskEnabledAsync(def.ScheduledTaskName, ct);
+                if (legacy is null)
+                    return ProvisionResult.Fail("Could not read legacy Scheduled Task state before Runner migration.");
+                autoStart = legacy.Value;
+            }
 
-        var interactive = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
-        var manifest = new RunnerManifest(
-            def.Id,
-            def.GuestExePath,
-            def.GuestWorkingDir,
-            def.StartArgs ?? Array.Empty<string>(),
-            interactive,
-            def.SteamAppId,
-            def.StopProcessNames,
-            autoStart);
-        if (manifest.Validate() is { } validation) return ProvisionResult.Fail(validation);
+            var interactive = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
+            var manifest = new RunnerManifest(
+                def.Id,
+                def.GuestExePath,
+                def.GuestWorkingDir,
+                def.StartArgs ?? Array.Empty<string>(),
+                interactive,
+                def.SteamAppId,
+                def.StopProcessNames,
+                autoStart);
+            if (manifest.Validate() is { } validation) return ProvisionResult.Fail(validation);
 
-        await WriteManifestAsync(manifestPath, manifest, ct);
+            await WriteManifestAsync(manifestPath, manifest, ct);
 
-        var serviceAccount = "NT SERVICE\\" + identity.ServiceName;
-        var binPath = $"\"{runnerExe}\" --manifest \"{manifestPath}\"";
-        var startMode = autoStart ? "auto" : "demand";
-        var query = await RunToolAsync("sc.exe", ["query", identity.ServiceName], ToolTimeout, ct);
-        ToolResult serviceResult;
-        if (!query.Ok)
-        {
-            serviceResult = await RunToolAsync("sc.exe", [
-                "create", identity.ServiceName,
-                "binPath=", binPath,
-                "start=", startMode,
-                "obj=", serviceAccount,
-                "DisplayName=", "GameServerControl Runner " + identity.Key
-            ], ToolTimeout, ct);
-        }
-        else
-        {
-            serviceResult = await RunToolAsync("sc.exe", [
-                "config", identity.ServiceName,
-                "binPath=", binPath,
-                "start=", startMode,
-                "obj=", serviceAccount
-            ], ToolTimeout, ct);
-        }
-        if (!serviceResult.Ok) return ProvisionResult.Fail("Runner service provisioning failed: " + serviceResult.Output);
+            var serviceAccount = "NT SERVICE\\" + identity.ServiceName;
+            var binPath = $"\"{runnerExe}\" --manifest \"{manifestPath}\"";
+            var startMode = autoStart ? "auto" : "demand";
+            var query = await RunToolAsync("sc.exe", ["query", identity.ServiceName], ToolTimeout, ct);
+            ToolResult serviceResult;
+            if (!query.Ok)
+            {
+                serviceResult = await RunToolAsync("sc.exe", [
+                    "create", identity.ServiceName,
+                    "binPath=", binPath,
+                    "start=", startMode,
+                    "obj=", serviceAccount,
+                    "DisplayName=", "GameServerControl Runner " + identity.Key
+                ], ToolTimeout, ct);
+            }
+            else
+            {
+                serviceResult = await RunToolAsync("sc.exe", [
+                    "config", identity.ServiceName,
+                    "binPath=", binPath,
+                    "start=", startMode,
+                    "obj=", serviceAccount
+                ], ToolTimeout, ct);
+            }
+            if (!serviceResult.Ok) return ProvisionResult.Fail("Runner service provisioning failed: " + serviceResult.Output);
 
-        var acl = await ReconcileAclsAsync(def, identity, stateDirectory, ct);
-        if (!acl.Ok) return ProvisionResult.Fail(acl.Error);
+            var acl = await ReconcileAclsAsync(def, identity, stateDirectory, ct);
+            if (!acl.Ok) return ProvisionResult.Fail(acl.Error);
 
-        if (firstProvision && !string.IsNullOrWhiteSpace(def.ScheduledTaskName))
-        {
-            var migrated = await DisableLegacyTaskAsync(def.ScheduledTaskName, ct);
-            if (!migrated.Ok) return ProvisionResult.Fail(migrated.Error);
-        }
+            if (firstProvision && !string.IsNullOrWhiteSpace(def.ScheduledTaskName))
+            {
+                var migrated = await DisableLegacyTaskAsync(def.ScheduledTaskName, ct);
+                if (!migrated.Ok) return ProvisionResult.Fail(migrated.Error);
+            }
 
             var compatibility = await EnsureSatisfactoryCompatibilityAsync(def, identity, manifest, ct);
             if (!compatibility.Ok) return ProvisionResult.Fail(compatibility.Error);

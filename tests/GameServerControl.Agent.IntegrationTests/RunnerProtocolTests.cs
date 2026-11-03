@@ -1,4 +1,5 @@
 using System.Reflection;
+using GameServerControl.Agent.Hyperv;
 using GameServerControl.Shared;
 using Xunit;
 
@@ -62,7 +63,34 @@ public sealed class RunnerProtocolTests
             .OrderBy(x => x)
             .ToArray();
 
-        Assert.Equal(new[] { "Command", "ConsoleInput", "Force" }.OrderBy(x => x), names);
+        Assert.Equal(new[] { "AfterSequence", "Command", "ConsoleInput", "Force" }.OrderBy(x => x), names);
+    }
+
+    [Fact]
+    public void Runner_request_console_cursor_is_nonnegative_and_console_state_only()
+    {
+        var property = typeof(RunnerRequest).GetProperty("AfterSequence", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(property);
+
+        var ctor = typeof(RunnerRequest).GetConstructors().Single();
+        var valid = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, 12L });
+        var negative = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, -1L });
+        var wrongCommand = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.Start, false, null, 12L });
+
+        Assert.Null(valid.Validate());
+        Assert.NotNull(negative.Validate());
+        Assert.NotNull(wrongCommand.Validate());
+    }
+
+    [Fact]
+    public void Runner_console_poll_cursor_is_owned_by_each_pump_request()
+    {
+        var poll = typeof(IWindowsRunnerServiceManager).GetMethod(nameof(IWindowsRunnerServiceManager.PollConsoleStateAsync));
+        Assert.NotNull(poll);
+
+        Assert.Equal(
+            new[] { typeof(ServerDef), typeof(long), typeof(CancellationToken) },
+            poll.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
     }
 
     [Fact]

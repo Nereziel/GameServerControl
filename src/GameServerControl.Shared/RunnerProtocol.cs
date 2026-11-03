@@ -88,11 +88,15 @@ public enum RunnerCommand
 public sealed record RunnerRequest(
     RunnerCommand Command,
     bool Force = false,
-    string? ConsoleInput = null)
+    string? ConsoleInput = null,
+    long? AfterSequence = null)
 {
     public string? Validate()
     {
         if (!Enum.IsDefined(Command)) return "Unknown runner command.";
+        if (AfterSequence is < 0) return "Console sequence cursor must not be negative.";
+        if (Command != RunnerCommand.ConsoleState && AfterSequence is not null)
+            return "AfterSequence is only valid for ConsoleState.";
         if (Command != RunnerCommand.SendConsoleInput)
             return ConsoleInput is null ? null : "ConsoleInput is only valid for SendConsoleInput.";
 

@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework Condition="'$(OS)' != 'Windows_NT'">net8.0</TargetFramework>
+    <TargetFramework Condition="'$(OS)' == 'Windows_NT'">net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -20,5 +21,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\GameServerControl.Agent\GameServerControl.Agent.csproj" />
     <ProjectReference Include="..\..\src\GameServerControl.Shared\GameServerControl.Shared.csproj" />
+    <Compile Remove="RunnerConsoleDeltaTests.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <ProjectReference Include="..\..\src\GameServerControl.Runner\GameServerControl.Runner.csproj" />
+    <Compile Include="RunnerConsoleDeltaTests.cs" />
   </ItemGroup>
 </Project>

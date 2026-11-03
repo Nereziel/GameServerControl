@@ -32,7 +32,7 @@ public sealed class StatusHub : Hub
 
         if (mode == GameConsoleMode.Stdin)
         {
-            var state = await _local.GetConsoleStateAsync(def, Context.ConnectionAborted);
+            var state = await _local.SubscribeConsoleAsync(def, Context.ConnectionId, Context.ConnectionAborted);
             await Clients.Caller.SendAsync("consoleState", new
             {
                 serverId,
@@ -59,6 +59,12 @@ public sealed class StatusHub : Hub
                 _ => "No live console integration is configured for this game."
             }
         });
+    }
+
+    public override async Task OnDisconnectedAsync(Exception? exception)
+    {
+        _local.UnsubscribeConsoleConnection(Context.ConnectionId);
+        await base.OnDisconnectedAsync(exception);
     }
 
     [Authorize(Policy = "admin")]
