@@ -21,11 +21,11 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        if (args.Contains("--show-token", StringComparer.OrdinalIgnoreCase))
+        if (args.Contains("--copy-token", StringComparer.OrdinalIgnoreCase))
         {
             var root = new DirectoryInfo(AppContext.BaseDirectory).Parent?.FullName
                 ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
-            TrayApplicationContext.ShowAgentToken(root, allowElevation: false);
+            TrayApplicationContext.CopyAgentToken(root, allowElevation: false);
             return;
         }
 
@@ -83,7 +83,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _statusItem = new ToolStripMenuItem("Agent: checking…") { Enabled = false };
         var openItem = new ToolStripMenuItem("Open administration", null, (_, _) => OpenAdministration());
-        var tokenItem = new ToolStripMenuItem("Show Agent API token…", null, (_, _) => ShowAgentToken(_installRoot, allowElevation: true));
+        var tokenItem = new ToolStripMenuItem("Copy Agent API token", null, (_, _) => CopyAgentToken(_installRoot, allowElevation: true));
         var manageTokensItem = new ToolStripMenuItem("Manage API tokens…", null, (_, _) => OpenAdministration(manageTokens: true));
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
 
@@ -182,7 +182,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
 
-    internal static void ShowAgentToken(string installRoot, bool allowElevation)
+    internal static void CopyAgentToken(string installRoot, bool allowElevation)
     {
         string token;
         try { token = ReadBootstrapToken(installRoot); }
@@ -193,7 +193,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "GameServerControl.Tray.exe"),
-                    Arguments = "--show-token",
+                    Arguments = "--copy-token",
                     UseShellExecute = true,
                     Verb = "runas"
                 });
@@ -214,34 +214,17 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        using var dialog = new Form
-        {
-            Text = "Agent API token",
-            StartPosition = FormStartPosition.CenterScreen,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            MaximizeBox = false,
-            MinimizeBox = false,
-            ClientSize = new Size(540, 154)
-        };
-        var field = new TextBox
-        {
-            ReadOnly = true, UseSystemPasswordChar = true,
-            Text = token, Location = new Point(16, 18), Width = 508
-        };
-        var visible = new CheckBox { Text = "Show token", Location = new Point(16, 58), AutoSize = true };
-        visible.CheckedChanged += (_, _) => field.UseSystemPasswordChar = !visible.Checked;
-        var copy = new Button { Text = "Copy", Location = new Point(348, 105), Width = 82 };
-        copy.Click += (_, _) =>
+        try
         {
             Clipboard.SetText(token);
-            MessageBox.Show("Token copied. Clipboard contents may be readable by other local applications.",
+            MessageBox.Show("Agent API token copied to clipboard. Other local applications may read clipboard contents.",
                 "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        };
-        var close = new Button { Text = "Close", Location = new Point(442, 105), Width = 82, DialogResult = DialogResult.OK };
-        dialog.Controls.AddRange([field, visible, copy, close]);
-        dialog.AcceptButton = close;
-        dialog.ShowDialog();
-        field.Clear();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Could not copy Agent API token: " + ex.Message,
+                "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     private void RefreshServiceState()
