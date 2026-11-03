@@ -1,4 +1,5 @@
 using System.Reflection;
+using GameServerControl.Agent.Hyperv;
 using GameServerControl.Shared;
 using Xunit;
 
@@ -79,6 +80,17 @@ public sealed class RunnerProtocolTests
         Assert.Null(valid.Validate());
         Assert.NotNull(negative.Validate());
         Assert.NotNull(wrongCommand.Validate());
+    }
+
+    [Fact]
+    public void Runner_console_poll_cursor_is_owned_by_each_pump_request()
+    {
+        var poll = typeof(IWindowsRunnerServiceManager).GetMethod(nameof(IWindowsRunnerServiceManager.PollConsoleStateAsync));
+        Assert.NotNull(poll);
+
+        Assert.Equal(
+            new[] { typeof(ServerDef), typeof(long), typeof(CancellationToken) },
+            poll.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
     }
 
     [Fact]
