@@ -124,6 +124,38 @@ public sealed class AuthenticationIntegrationTests
         Assert.True(valid.Succeeded);
     }
 
+    [Fact]
+    public async Task Valid_admin_token_does_not_clear_existing_peer_throttle()
+    {
+        using var factory = new AgentTestFactory();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Agent:ApiToken"] = AgentTestFactory.AdminToken,
+                ["Agent:DataDir"] = factory.TempRoot
+            })
+            .Build();
+        var registry = new TokenRegistry(config, loggerFactory.CreateLogger<TokenRegistry>());
+        var peer = IPAddress.Parse("192.0.2.124");
+
+        for (var i = 0; i < 8; i++)
+        {
+            var rejected = await AuthenticateAsync(registry, loggerFactory, peer, "invalid-before-valid-" + i);
+            Assert.False(rejected.Succeeded);
+        }
+
+        var valid = await AuthenticateAsync(registry, loggerFactory, peer, AgentTestFactory.AdminToken);
+        var afterValid = await AuthenticateAsync(registry, loggerFactory, peer, "invalid-after-valid");
+
+        Assert.True(valid.Succeeded);
+        Assert.False(afterValid.Succeeded);
+        Assert.Contains(
+            "authentication temporarily throttled",
+            afterValid.Failure?.Message ?? "",
+            StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task<AuthenticateResult> AuthenticateAsync(
         TokenRegistry registry,
         ILoggerFactory loggerFactory,
