@@ -32,13 +32,6 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var clientKey = ProtectedClientKey();
-        if (clientKey is not null &&
-            _failureThrottle.TryGetRetryAfter(clientKey, DateTimeOffset.UtcNow, out var retryAfter))
-        {
-            Context.Items[ThrottleRetryAfterItem] = retryAfter;
-            return Task.FromResult(AuthenticateResult.Fail("authentication temporarily throttled"));
-        }
-
         string? presented = null;
 
         if (Request.Headers.TryGetValue("Authorization", out var auth))
@@ -56,9 +49,18 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             Request.Query.TryGetValue("access_token", out var q))
             presented = q.ToString();
 
+        var now = DateTimeOffset.UtcNow;
+        var retryAfter = TimeSpan.Zero;
+        var throttled = clientKey is not null && _failureThrottle.TryGetRetryAfter(clientKey, now, out retryAfter);
+
         if (string.IsNullOrEmpty(presented))
         {
-            if (clientKey is not null) _failureThrottle.RecordFailure(clientKey, DateTimeOffset.UtcNow);
+            if (throttled)
+            {
+                Context.Items[ThrottleRetryAfterItem] = retryAfter;
+                return Task.FromResult(AuthenticateResult.Fail("authentication temporarily throttled"));
+            }
+            if (clientKey is not null) _failureThrottle.RecordFailure(clientKey, now);
             return Task.FromResult(AuthenticateResult.NoResult());
         }
 
@@ -87,7 +89,12 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
         var match = _registry.Lookup(presented);
         if (match is null)
         {
-            if (clientKey is not null) _failureThrottle.RecordFailure(clientKey, DateTimeOffset.UtcNow);
+            if (throttled)
+            {
+                Context.Items[ThrottleRetryAfterItem] = retryAfter;
+                return Task.FromResult(AuthenticateResult.Fail("authentication temporarily throttled"));
+            }
+            if (clientKey is not null) _failureThrottle.RecordFailure(clientKey, now);
             return Task.FromResult(AuthenticateResult.Fail("invalid token"));
         }
 
