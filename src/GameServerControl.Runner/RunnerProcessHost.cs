@@ -257,7 +257,7 @@ public sealed class RunnerProcessHost
     {
         lock (_consoleGate)
         {
-            var lines = afterSequence is null
+            var lines = afterSequence is null || afterSequence.Value > _nextSequence
                 ? _consoleLines.ToArray()
                 : _consoleLines.Where(line => line.Sequence > afterSequence.Value).ToArray();
             return (_nextSequence, lines);
