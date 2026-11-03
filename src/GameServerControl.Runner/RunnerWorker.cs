@@ -81,7 +81,7 @@ public sealed class RunnerWorker : BackgroundService
                 if (attempts >= 3)
                 {
                     _logger.LogError("Crash recovery exhausted three attempts. Restart the Runner service to reset recovery attempts.");
-                    // Avoid repeated errors. Explicit StartAsync resets recovery demand.
+                    // Avoid repeated errors until this Runner service is restarted.
                     break;
                 }
 
