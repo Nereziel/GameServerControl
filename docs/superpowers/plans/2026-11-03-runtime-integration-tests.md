@@ -26,6 +26,10 @@
 - Delete failure must leave the server definition intact; successful delete must call deprovision before removal and completion after removal.
 - The Runner request schema must remain incapable of carrying executable/path/argument launch metadata.
 
+## Implementation status
+
+The initial RED run compiled the Agent but failed the integration test project exactly because `Program` was not public and `IWindowsRunnerServiceManager` did not exist. The minimal entry-point/interface seams are now in place and compile; the next gate is the full runtime behavior suite on Windows and Linux.
+
 ---
 
 ### Task 1: Testable Agent entry point and Runner lifecycle interface
@@ -40,10 +44,10 @@
 - Produces: `IWindowsRunnerServiceManager` with `Supports`, `StartAsync`, `FindAsync`, `StopAsync`, `ConsoleStateAsync`, `PollConsoleStateAsync`, `SendConsoleInputAsync`, `KillExtrasAsync`, `GetAutostartAsync`, `SetAutostartAsync`, `DeprovisionAsync`, and `CompleteDeprovision`.
 - Produces: public partial `Program` for `WebApplicationFactory<Program>`.
 
-- [ ] **Step 1: Write the integration test project and compile-only tests that reference `Program` and substitute `IWindowsRunnerServiceManager`.**
-- [ ] **Step 2: Run the tests and verify RED because `Program` is not public and `IWindowsRunnerServiceManager` does not exist.**
-- [ ] **Step 3: Add the interface, map it to the existing singleton manager in DI, switch consumers to the interface, expose `PollConsoleStateAsync`, and add `public partial class Program`.**
-- [ ] **Step 4: Guard first-run token persistence and the periodic refresh loop with `!builder.Environment.IsEnvironment("Testing")`.**
+- [x] **Step 1: Write the integration test project and compile-only tests that reference `Program` and substitute `IWindowsRunnerServiceManager`.**
+- [x] **Step 2: Run the tests and verify RED because `Program` is not public and `IWindowsRunnerServiceManager` does not exist.**
+- [x] **Step 3: Add the interface, map it to the existing singleton manager in DI, switch consumers to the interface, expose `PollConsoleStateAsync`, and add `public partial class Program`.**
+- [x] **Step 4: Guard first-run token persistence and the periodic refresh loop with `!builder.Environment.IsEnvironment("Testing")`.**
 - [ ] **Step 5: Run the tests and verify the host starts without production startup side effects.**
 
 ### Task 2: HTTP authentication, role and health integration tests
