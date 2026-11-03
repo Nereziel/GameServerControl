@@ -62,4 +62,45 @@ public sealed class SignalRIsolationIntegrationTests
             try { await beta.StopAsync(); } catch { }
         }
     }
+
+    [Fact]
+    public async Task Windows_runner_console_polling_stops_after_subscriber_disconnects()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var factory = new AgentTestFactory(alphaUsesStdinProfile: true);
+        factory.FakeRunner.ConsoleStateResponse = new RunnerResponse(
+            true,
+            InputAvailable: true,
+            Console: new RunnerConsoleSnapshot(
+                true,
+                true,
+                "fake stdin console",
+                0,
+                Array.Empty<RunnerConsoleLine>()));
+
+        await using var connection = factory.CreateHubConnection(AgentTestFactory.AdminToken);
+        await connection.StartAsync();
+        await connection.InvokeAsync("SubscribeConsole", "alpha");
+
+        await WaitUntilAsync(() => factory.FakeRunner.PollConsoleCalls >= 2, TimeSpan.FromSeconds(5));
+        await connection.StopAsync();
+
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        var afterDisconnect = factory.FakeRunner.PollConsoleCalls;
+        await Task.Delay(TimeSpan.FromMilliseconds(750));
+
+        Assert.Equal(afterDisconnect, factory.FakeRunner.PollConsoleCalls);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Timed out waiting for the integration-test condition.");
+            await Task.Delay(25);
+        }
+    }
 }
