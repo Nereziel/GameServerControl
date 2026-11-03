@@ -92,8 +92,8 @@ if (manifestType != typeof(object))
 if (requestType != typeof(object) && commandType != typeof(object))
 {
     var properties = requestType.GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(p => p.Name).OrderBy(x => x).ToArray();
-    var expected = new[] { "AfterSequence", "Command", "ConsoleInput", "Force" }.OrderBy(x => x).ToArray();
-    Check(properties.SequenceEqual(expected), "ARCH-01: RunnerRequest may carry only command controls plus the bounded console sequence cursor.");
+    var expected = new[] { "AfterSequence", "Command", "ConsoleGeneration", "ConsoleInput", "Force" }.OrderBy(x => x).ToArray();
+    Check(properties.SequenceEqual(expected), "ARCH-01: RunnerRequest may carry only command controls plus bounded console cursor metadata.");
 
     var ctor = requestType.GetConstructors().SingleOrDefault();
     var validate = requestType.GetMethod("Validate", BindingFlags.Public | BindingFlags.Instance);
@@ -102,10 +102,10 @@ if (requestType != typeof(object) && commandType != typeof(object))
         "ARCH-01: RunnerRequest.Validate() must return string?.");
     if (ctor is not null && validate is not null)
     {
-        object Cmd(string name, bool force = false, string? input = null, long? afterSequence = null)
+        object Cmd(string name, bool force = false, string? input = null, long? afterSequence = null, string? consoleGeneration = null)
         {
             var command = Enum.Parse(commandType, name);
-            return ctor.Invoke([command, force, input, afterSequence]);
+            return ctor.Invoke([command, force, input, afterSequence, consoleGeneration]);
         }
 
         var ping = Cmd("Ping");
@@ -115,6 +115,10 @@ if (requestType != typeof(object) && commandType != typeof(object))
         var validCursor = Cmd("ConsoleState", afterSequence: 12);
         var negativeCursor = Cmd("ConsoleState", afterSequence: -1);
         var wrongCursorCommand = Cmd("Start", afterSequence: 12);
+        var validGeneration = Cmd("ConsoleState", afterSequence: 12, consoleGeneration: "0123456789abcdef0123456789abcdef");
+        var blankGeneration = Cmd("ConsoleState", afterSequence: 12, consoleGeneration: " ");
+        var oversizedGeneration = Cmd("ConsoleState", afterSequence: 12, consoleGeneration: new string('g', 129));
+        var wrongGenerationCommand = Cmd("Start", consoleGeneration: "0123456789abcdef0123456789abcdef");
         Check(validate.Invoke(ping, null) is null, "ARCH-01: Ping request should validate.");
         Check(validate.Invoke(validInput, null) is null, "ARCH-01: single bounded console command should validate.");
         Check(validate.Invoke(newlineInput, null) is string, "ARCH-01: console input containing newline must be rejected.");
@@ -122,6 +126,10 @@ if (requestType != typeof(object) && commandType != typeof(object))
         Check(validate.Invoke(validCursor, null) is null, "ARCH-01: non-negative ConsoleState cursor should validate.");
         Check(validate.Invoke(negativeCursor, null) is string, "ARCH-01: negative ConsoleState cursor must be rejected.");
         Check(validate.Invoke(wrongCursorCommand, null) is string, "ARCH-01: console cursor must not be accepted for non-ConsoleState commands.");
+        Check(validate.Invoke(validGeneration, null) is null, "ARCH-01: bounded ConsoleState generation should validate.");
+        Check(validate.Invoke(blankGeneration, null) is string, "ARCH-01: blank console generation must be rejected.");
+        Check(validate.Invoke(oversizedGeneration, null) is string, "ARCH-01: oversized console generation must be rejected.");
+        Check(validate.Invoke(wrongGenerationCommand, null) is string, "ARCH-01: console generation must not be accepted for non-ConsoleState commands.");
 
         var json = JsonSerializer.Serialize(ping, requestType);
         Check(!json.Contains("Executable", StringComparison.OrdinalIgnoreCase)
