@@ -64,6 +64,80 @@ public sealed class SignalRIsolationIntegrationTests
     }
 
     [Fact]
+    public async Task Windows_runner_console_generation_change_replays_new_generation_from_sequence_one()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var factory = new AgentTestFactory(alphaUsesStdinProfile: true);
+        factory.FakeRunner.ConsoleStateResponse = new RunnerResponse(
+            true,
+            InputAvailable: true,
+            Console: new RunnerConsoleSnapshot(
+                true,
+                true,
+                "old runner",
+                3,
+                new[]
+                {
+                    RunnerLine(1, "old-1"),
+                    RunnerLine(2, "old-2"),
+                    RunnerLine(3, "old-3")
+                },
+                "old-generation"));
+        factory.FakeRunner.PollConsoleResponse = new RunnerResponse(
+            true,
+            InputAvailable: false,
+            Console: new RunnerConsoleSnapshot(
+                true,
+                false,
+                "new runner",
+                5,
+                new[]
+                {
+                    RunnerLine(1, "new-1"),
+                    RunnerLine(2, "new-2"),
+                    RunnerLine(3, "new-3"),
+                    RunnerLine(4, "new-4"),
+                    RunnerLine(5, "new-5")
+                },
+                "new-generation"));
+
+        var received = new List<LogLine>();
+        var gate = new object();
+        await using var connection = factory.CreateHubConnection(AgentTestFactory.AdminToken);
+        connection.On<LogLine>("logLine", line =>
+        {
+            lock (gate) received.Add(line);
+        });
+
+        await connection.StartAsync();
+        try
+        {
+            await connection.InvokeAsync("SubscribeConsole", "alpha");
+            await WaitUntilAsync(() =>
+            {
+                lock (gate) return received.Any(line => line.Text == "new-5");
+            }, TimeSpan.FromSeconds(5));
+
+            string[] newGenerationLines;
+            lock (gate)
+            {
+                newGenerationLines = received
+                    .Where(line => line.Text.StartsWith("new-", StringComparison.Ordinal))
+                    .Select(line => line.Text)
+                    .ToArray();
+            }
+
+            Assert.Equal(new[] { "new-1", "new-2", "new-3", "new-4", "new-5" }, newGenerationLines);
+            Assert.Equal(3, factory.FakeRunner.LastPollAfterSequence);
+        }
+        finally
+        {
+            try { await connection.StopAsync(); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Windows_runner_console_polling_stops_after_subscriber_disconnects()
     {
         if (!OperatingSystem.IsWindows()) return;
@@ -92,6 +166,9 @@ public sealed class SignalRIsolationIntegrationTests
 
         Assert.Equal(afterDisconnect, factory.FakeRunner.PollConsoleCalls);
     }
+
+    private static RunnerConsoleLine RunnerLine(long sequence, string text) =>
+        new(sequence, DateTimeOffset.UnixEpoch.AddSeconds(sequence), "stdout", text);
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan timeout)
     {
