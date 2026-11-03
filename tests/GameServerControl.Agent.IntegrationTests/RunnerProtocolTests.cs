@@ -62,7 +62,23 @@ public sealed class RunnerProtocolTests
             .OrderBy(x => x)
             .ToArray();
 
-        Assert.Equal(new[] { "Command", "ConsoleInput", "Force" }.OrderBy(x => x), names);
+        Assert.Equal(new[] { "AfterSequence", "Command", "ConsoleInput", "Force" }.OrderBy(x => x), names);
+    }
+
+    [Fact]
+    public void Runner_request_console_cursor_is_nonnegative_and_console_state_only()
+    {
+        var property = typeof(RunnerRequest).GetProperty("AfterSequence", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(property);
+
+        var ctor = typeof(RunnerRequest).GetConstructors().Single();
+        var valid = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, 12L });
+        var negative = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, -1L });
+        var wrongCommand = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.Start, false, null, 12L });
+
+        Assert.Null(valid.Validate());
+        Assert.NotNull(negative.Validate());
+        Assert.NotNull(wrongCommand.Validate());
     }
 
     [Fact]
