@@ -77,7 +77,7 @@ public sealed class RunnerConsoleDeltaTests
         var method = typeof(RunnerProcessHost).GetMethod(
             "RecordConsole",
             BindingFlags.Instance | BindingFlags.NonPublic);
-        return Assert.IsType<MethodInfo>(method);
+        return Assert.IsAssignableFrom<MethodInfo>(method);
     }
 
     private static void Record(MethodInfo recordConsole, RunnerProcessHost host, string text)
