@@ -19,7 +19,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\GameServerControl.Agent\GameServerControl.Agent.csproj" />
-    <ProjectReference Include="..\..\src\GameServerControl.Runner\GameServerControl.Runner.csproj" />
     <ProjectReference Include="..\..\src\GameServerControl.Shared\GameServerControl.Shared.csproj" />
+    <Compile Remove="RunnerConsoleDeltaTests.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+    <ProjectReference Include="..\..\src\GameServerControl.Runner\GameServerControl.Runner.csproj" />
+    <Compile Include="RunnerConsoleDeltaTests.cs" />
   </ItemGroup>
 </Project>
