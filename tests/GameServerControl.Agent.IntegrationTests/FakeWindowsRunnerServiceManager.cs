@@ -5,13 +5,18 @@ namespace GameServerControl.Agent.IntegrationTests;
 
 public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManager
 {
+    private int _pollConsoleCalls;
+
     public bool SupportsResult { get; set; } = true;
     public (bool Ok, string Error) DeprovisionResult { get; set; } = (true, "");
     public Func<string, bool>? ServerExists { get; set; }
+    public RunnerResponse ConsoleStateResponse { get; set; } =
+        new(true, Console: new RunnerConsoleSnapshot(false, false, "fake", 0, Array.Empty<RunnerConsoleLine>()));
     public int DeprovisionCalls { get; private set; }
     public int CompleteCalls { get; private set; }
     public bool? DeprovisionObservedServerPresent { get; private set; }
     public bool? CompleteObservedServerPresent { get; private set; }
+    public int PollConsoleCalls => Volatile.Read(ref _pollConsoleCalls);
 
     public bool Supports(ServerDef def) => SupportsResult;
 
@@ -25,10 +30,13 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
         Task.FromResult(new RunnerResponse(true));
 
     public Task<RunnerResponse> ConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
-        Task.FromResult(new RunnerResponse(true, Console: new RunnerConsoleSnapshot(false, false, "fake", 0, Array.Empty<RunnerConsoleLine>())));
+        Task.FromResult(ConsoleStateResponse);
 
-    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
-        ConsoleStateAsync(def, ct);
+    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _pollConsoleCalls);
+        return Task.FromResult(ConsoleStateResponse);
+    }
 
     public Task<RunnerResponse> SendConsoleInputAsync(ServerDef def, string command, CancellationToken ct = default) =>
         Task.FromResult(new RunnerResponse(true));
