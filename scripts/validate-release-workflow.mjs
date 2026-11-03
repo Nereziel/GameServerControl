@@ -8,7 +8,9 @@ function requireToken(token, message) {
 
 requireToken('\n  validate:\n', 'Release workflow must define a validation gate');
 requireToken('needs: prepare', 'Validation gate must use the exact release source resolved by prepare');
-requireToken('node scripts/version.mjs check "${{ needs.prepare.outputs.tag }}"', 'Release gate must require the requested tag to match the repository SemVer source of truth');
+requireToken('node scripts/version.mjs validate-tag "$RELEASE_TAG"', 'Release gate must validate release tag SemVer independently of repository version');
+requireToken('node scripts/version.mjs check', 'Release gate must validate the repository version format');
+requireToken('-p:Version=${{ needs.prepare.outputs.version }}', 'Release packages must inherit their version from the release tag');
 requireToken('node scripts/validate-webui.mjs', 'Release gate must validate Web UI JavaScript');
 requireToken('node scripts/validate-readonly-ui.mjs', 'Release gate must validate ReadOnly UI behavior');
 requireToken('node scripts/validate-global-settings.mjs', 'Release gate must validate global Settings ownership');
