@@ -66,6 +66,8 @@ public sealed class StatusHub : Hub
 
         if (mode == GameConsoleMode.LogOnly)
         {
+            _logTail.Subscribe(serverId, Context.ConnectionId);
+
             var backlogKey = RecentBacklogItemPrefix + serverId;
             if (!Context.Items.ContainsKey(backlogKey))
             {
@@ -80,6 +82,7 @@ public sealed class StatusHub : Hub
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         _local.UnsubscribeConsoleConnection(Context.ConnectionId);
+        _logTail.UnsubscribeConnection(Context.ConnectionId);
         await base.OnDisconnectedAsync(exception);
     }
 
