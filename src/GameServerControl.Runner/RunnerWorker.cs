@@ -69,7 +69,7 @@ public sealed class RunnerWorker : BackgroundService
                 if (state.Pid is not null) continue;
                 if (attempts >= 3)
                 {
-                    _logger.LogError("Crash recovery exhausted three attempts. Start the server manually to retry.");
+                    _logger.LogError("Crash recovery exhausted three attempts. Restart the Runner service to reset recovery attempts.");
                     // Avoid repeated errors. Explicit StartAsync resets recovery demand.
                     break;
                 }
