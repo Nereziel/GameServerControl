@@ -16,6 +16,7 @@ public sealed class RunnerProcessHost
     private readonly object _consoleGate = new();
     private readonly SemaphoreSlim _inputGate = new(1, 1);
     private readonly List<RunnerConsoleLine> _consoleLines = new();
+    private readonly string _consoleGeneration = Guid.NewGuid().ToString("N");
     private int _consoleChars;
     private long _nextSequence;
     private Process? _attachedProcess;
@@ -142,20 +143,20 @@ public sealed class RunnerProcessHost
         }
     }
 
-    public RunnerResponse ConsoleState(long? afterSequence = null)
+    public RunnerResponse ConsoleState(long? afterSequence = null, string? consoleGeneration = null)
     {
-        var snapshot = SnapshotConsole(afterSequence);
+        var snapshot = SnapshotConsole(afterSequence, consoleGeneration);
         if (!_manifest.InteractiveConsole)
             return new RunnerResponse(true, Console: new RunnerConsoleSnapshot(
-                false, false, "This server does not use a stdin console.", snapshot.LastSequence, snapshot.Lines));
+                false, false, "This server does not use a stdin console.", snapshot.LastSequence, snapshot.Lines, _consoleGeneration));
 
         var attached = ResolveAttachedProcess();
         if (attached is null)
             return new RunnerResponse(true, Console: new RunnerConsoleSnapshot(
-                true, false, "No attached console. Restart the server through GameServerControl to attach stdin.", snapshot.LastSequence, snapshot.Lines));
+                true, false, "No attached console. Restart the server through GameServerControl to attach stdin.", snapshot.LastSequence, snapshot.Lines, _consoleGeneration));
 
         return new RunnerResponse(true, InputAvailable: true, Console: new RunnerConsoleSnapshot(
-            true, true, "Interactive console attached.", snapshot.LastSequence, snapshot.Lines));
+            true, true, "Interactive console attached.", snapshot.LastSequence, snapshot.Lines, _consoleGeneration));
     }
 
     public async Task<RunnerResponse> SendConsoleInputAsync(string? input, CancellationToken ct)
@@ -253,11 +254,13 @@ public sealed class RunnerProcessHost
         }
     }
 
-    private (long LastSequence, RunnerConsoleLine[] Lines) SnapshotConsole(long? afterSequence)
+    private (long LastSequence, RunnerConsoleLine[] Lines) SnapshotConsole(long? afterSequence, string? consoleGeneration)
     {
         lock (_consoleGate)
         {
-            var lines = afterSequence is null || afterSequence.Value > _nextSequence
+            var generationMismatch = consoleGeneration is not null
+                                     && !string.Equals(consoleGeneration, _consoleGeneration, StringComparison.Ordinal);
+            var lines = afterSequence is null || generationMismatch || afterSequence.Value > _nextSequence
                 ? _consoleLines.ToArray()
                 : _consoleLines.Where(line => line.Sequence > afterSequence.Value).ToArray();
             return (_nextSequence, lines);
