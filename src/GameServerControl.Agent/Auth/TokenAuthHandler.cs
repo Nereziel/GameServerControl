@@ -70,7 +70,7 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
         if (string.Equals(Request.Path.Value, "/api/health", StringComparison.Ordinal) &&
             UpdateHealthToken.IsValid(AppContext.BaseDirectory, presented))
         {
-            if (clientKey is not null) _failureThrottle.RecordSuccess(clientKey);
+            if (clientKey is not null && !throttled) _failureThrottle.RecordSuccess(clientKey);
             Response.Headers["X-GameServerControl-Version"] = UpdateHealthToken.CurrentVersion;
             Response.Headers["X-GameServerControl-Pid"] = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
             Response.Headers.CacheControl = "no-store";
@@ -98,7 +98,7 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
             return Task.FromResult(AuthenticateResult.Fail("invalid token"));
         }
 
-        if (clientKey is not null) _failureThrottle.RecordSuccess(clientKey);
+        if (clientKey is not null && !throttled) _failureThrottle.RecordSuccess(clientKey);
 
         var (id, name, role) = match.Value;
         var identity = new ClaimsIdentity(new[]
