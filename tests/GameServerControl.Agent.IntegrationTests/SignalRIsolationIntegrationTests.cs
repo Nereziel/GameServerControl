@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
+using GameServerControl.Agent.Logs;
 using GameServerControl.Shared;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace GameServerControl.Agent.IntegrationTests;
@@ -161,6 +163,62 @@ public sealed class SignalRIsolationIntegrationTests
             {
                 lock (secondGate) return secondReceived.Count(line => line.Text == history) == 1;
             }, TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            try { await first.StopAsync(); } catch { }
+            try { await second.StopAsync(); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task LogOnly_live_tail_survives_other_subscriber_disconnect_and_stops_after_last_disconnect()
+    {
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
+        var firstToken = factory.CreateReadOnlyToken();
+        var secondToken = factory.CreateReadOnlyToken();
+        await using var first = factory.CreateHubConnection(firstToken);
+        await using var second = factory.CreateHubConnection(secondToken);
+        var tail = factory.Services.GetRequiredService<LogTailService>();
+        var firstSentinel = "first-live-" + Guid.NewGuid().ToString("N");
+        var secondSentinel = "second-live-" + Guid.NewGuid().ToString("N");
+        var firstSawFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondSawFirst = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondSawSecond = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        first.On<LogLine>("logLine", line =>
+        {
+            if (line.ServerId == "alpha" && line.Text == firstSentinel)
+                firstSawFirst.TrySetResult(true);
+        });
+        second.On<LogLine>("logLine", line =>
+        {
+            if (line.ServerId != "alpha") return;
+            if (line.Text == firstSentinel) secondSawFirst.TrySetResult(true);
+            if (line.Text == secondSentinel) secondSawSecond.TrySetResult(true);
+        });
+
+        await first.StartAsync();
+        await second.StartAsync();
+        try
+        {
+            await first.InvokeAsync("SubscribeConsole", "alpha");
+            await second.InvokeAsync("SubscribeConsole", "alpha");
+            await WaitUntilAsync(() => tail.IsTailing("alpha"), TimeSpan.FromSeconds(5));
+
+            await File.AppendAllTextAsync(factory.AlphaLogPath, firstSentinel + Environment.NewLine);
+            await firstSawFirst.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            await secondSawFirst.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            await first.StopAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            Assert.True(tail.IsTailing("alpha"), "disconnecting one subscriber stopped the shared live tail");
+
+            await File.AppendAllTextAsync(factory.AlphaLogPath, secondSentinel + Environment.NewLine);
+            await secondSawSecond.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            await second.StopAsync();
+            await WaitUntilAsync(() => !tail.IsTailing("alpha"), TimeSpan.FromSeconds(5));
         }
         finally
         {
