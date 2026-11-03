@@ -35,6 +35,27 @@ for (const [name, block] of [['build-windows', windowsBlock], ['build-linux', li
     throw new Error(`${name} must be gated by prepare + validate.`);
 }
 
+const exactProductVersionFlag = '-p:IncludeSourceRevisionInInformationalVersion=false';
+for (const project of [
+  'src/GameServerControl.Agent',
+  'src/GameServerControl.Runner',
+  'src/GameServerControl.Tray',
+  'src/GameServerControl.Relay'
+]) {
+  const publishMarker = `dotnet publish ${project}`;
+  let offset = 0;
+  let found = false;
+  while ((offset = workflow.indexOf(publishMarker, offset)) >= 0) {
+    found = true;
+    const commandEnd = workflow.indexOf('\n\n', offset);
+    const command = workflow.slice(offset, commandEnd < 0 ? workflow.length : commandEnd);
+    if (!command.includes(exactProductVersionFlag))
+      throw new Error(`${project} release publish must disable source revision in InformationalVersion.`);
+    offset += publishMarker.length;
+  }
+  if (!found) throw new Error(`Release publish missing for ${project}.`);
+}
+
 for (const asset of [
   'GameServerControl-Agent-windows.zip',
   'GameServerControl-Runner-windows.zip',
