@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Collections.Concurrent;
 using System.IO.Pipes;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,7 +12,6 @@ public sealed class WindowsRunnerPipeClient
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(4);
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(12);
-    private readonly ConcurrentDictionary<string, long> _consoleSequences = new(StringComparer.Ordinal);
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = true,
@@ -24,16 +22,7 @@ public sealed class WindowsRunnerPipeClient
         RunnerIdentityInfo identity,
         RunnerRequest request,
         CancellationToken ct = default)
-    {
-        if (request.Command == RunnerCommand.ConsoleState &&
-            request.AfterSequence is null &&
-            _consoleSequences.TryGetValue(identity.PipeName, out var afterSequence))
-        {
-            request = request with { AfterSequence = afterSequence };
-        }
-
-        return (await SendDetailedAsync(identity, request, ct)).Response;
-    }
+        => (await SendDetailedAsync(identity, request, ct)).Response;
 
     internal async Task<RunnerPipeResult> SendDetailedAsync(
         RunnerIdentityInfo identity,
@@ -69,8 +58,6 @@ public sealed class WindowsRunnerPipeClient
             var responseBytes = await ReadFrameAsync(pipe, RunnerProtocolLimits.MaxResponseBytes, operationCts.Token);
             var response = JsonSerializer.Deserialize<RunnerResponse>(responseBytes, _json)
                            ?? new RunnerResponse(false, "Runner returned an empty response.");
-            if (request.Command == RunnerCommand.ConsoleState && response.Ok && response.Console is { } console)
-                _consoleSequences[identity.PipeName] = console.LastSequence;
             return new RunnerPipeResult(response, TransportFailure: false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
