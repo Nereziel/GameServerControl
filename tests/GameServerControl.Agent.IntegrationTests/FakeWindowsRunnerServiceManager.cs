@@ -6,6 +6,7 @@ namespace GameServerControl.Agent.IntegrationTests;
 public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManager
 {
     private int _pollConsoleCalls;
+    private long _lastPollAfterSequence = -1;
 
     public bool SupportsResult { get; set; } = true;
     public (bool Ok, string Error) DeprovisionResult { get; set; } = (true, "");
@@ -17,6 +18,7 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
     public bool? DeprovisionObservedServerPresent { get; private set; }
     public bool? CompleteObservedServerPresent { get; private set; }
     public int PollConsoleCalls => Volatile.Read(ref _pollConsoleCalls);
+    public long LastPollAfterSequence => Interlocked.Read(ref _lastPollAfterSequence);
 
     public bool Supports(ServerDef def) => SupportsResult;
 
@@ -32,8 +34,9 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
     public Task<RunnerResponse> ConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
         Task.FromResult(ConsoleStateResponse);
 
-    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, CancellationToken ct = default)
+    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, long afterSequence, CancellationToken ct = default)
     {
+        Interlocked.Exchange(ref _lastPollAfterSequence, afterSequence);
         Interlocked.Increment(ref _pollConsoleCalls);
         return Task.FromResult(ConsoleStateResponse);
     }
