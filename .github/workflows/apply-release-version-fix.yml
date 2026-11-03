@@ -23,14 +23,15 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
           path = Path('.github/workflows/release.yml')
           text = path.read_text()
-          needle = '          -p:InformationalVersion=${{ needs.prepare.outputs.version }}\n'
-          replacement = needle + '          -p:IncludeSourceRevisionInInformationalVersion=false\n'
-          count = text.count(needle)
-          if count != 5:
-              raise SystemExit(f'expected 5 release publish commands, found {count}')
-          path.write_text(text.replace(needle, replacement))
+          pattern = r'(?m)^(          -p:InformationalVersion=.*)$'
+          matches = re.findall(pattern, text)
+          if len(matches) != 5:
+              raise SystemExit(f'expected 5 release publish commands, found {len(matches)}')
+          replacement = r'\1\n          -p:IncludeSourceRevisionInInformationalVersion=false'
+          path.write_text(re.sub(pattern, replacement, text))
           PY
           node scripts/validate-release-workflow.mjs
 
