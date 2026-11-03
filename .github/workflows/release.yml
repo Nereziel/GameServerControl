@@ -1,6 +1,6 @@
 name: Release
 
-# Builds self-contained Windows + Linux Agent/Web releases, the Linux VPS Relay,
+# Builds self-contained Windows Agent/Runner + Linux Agent/Web releases, the Linux VPS Relay,
 # and the optional Windows tray helper. One-line installers fetch these assets
 # from /releases/latest.
 on:
@@ -108,6 +108,11 @@ jobs:
       - name: Validate audit SEC-03 through SEC-06
         run: node scripts/validate-audit-sec03-sec06.mjs
 
+      - name: Validate ARCH-01 Runner isolation
+        run: |
+          node scripts/validate-arch01-runner.mjs
+          dotnet run --project tools/GameServerControl.RunnerCheck -c Release
+
       - name: Validate backup safety
         run: dotnet run --project tools/GameServerControl.BackupCheck -c Release
 
@@ -148,7 +153,7 @@ jobs:
           rm -f /tmp/gsc-cloud-release-ci-secrets.json
 
   build-windows:
-    name: Build Windows agent + tray
+    name: Build Windows agent + runner + tray
     runs-on: windows-latest
     needs: [prepare, validate]
     steps:
@@ -174,6 +179,15 @@ jobs:
           -p:InformationalVersion=${{ needs.prepare.outputs.version }}
           -o publish/Agent-windows
 
+      - name: Publish runner (win-x64, self-contained)
+        run: >-
+          dotnet publish src/GameServerControl.Runner -c Release -r win-x64 --self-contained true
+          -p:Version=${{ needs.prepare.outputs.version }}
+          -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
+          -p:FileVersion=${{ needs.prepare.outputs.version }}.0
+          -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -o publish/Runner-windows
+
       - name: Publish tray helper (win-x64, self-contained)
         run: >-
           dotnet publish src/GameServerControl.Tray -c Release -r win-x64 --self-contained true
@@ -189,15 +203,18 @@ jobs:
         run: |
           $expected = '${{ needs.prepare.outputs.version }}'
           $agent = (Get-Item 'publish/Agent-windows/GameServerControl.Agent.exe').VersionInfo.ProductVersion
+          $runner = (Get-Item 'publish/Runner-windows/GameServerControl.Runner.exe').VersionInfo.ProductVersion
           $tray = (Get-Item 'publish/Tray-windows/GameServerControl.Tray.exe').VersionInfo.ProductVersion
           if ($agent -ne $expected) { throw "Agent ProductVersion '$agent' does not match release '$expected'." }
+          if ($runner -ne $expected) { throw "Runner ProductVersion '$runner' does not match release '$expected'." }
           if ($tray -ne $expected) { throw "Tray ProductVersion '$tray' does not match release '$expected'." }
-          Write-Host "Verified Agent + Tray version $expected"
+          Write-Host "Verified Agent + Runner + Tray version $expected"
 
       - name: Zip Windows packages
         shell: pwsh
         run: |
           Compress-Archive -Path publish/Agent-windows/* -DestinationPath GameServerControl-Agent-windows.zip
+          Compress-Archive -Path publish/Runner-windows/* -DestinationPath GameServerControl-Runner-windows.zip
           Compress-Archive -Path publish/Tray-windows/* -DestinationPath GameServerControl-Tray-windows.zip
 
       - name: Upload Windows artifacts
@@ -206,6 +223,7 @@ jobs:
           name: windows-packages
           path: |
             GameServerControl-Agent-windows.zip
+            GameServerControl-Runner-windows.zip
             GameServerControl-Tray-windows.zip
           if-no-files-found: error
 
@@ -310,6 +328,7 @@ jobs:
         run: |
           sha256sum \
             GameServerControl-Agent-windows.zip \
+            GameServerControl-Runner-windows.zip \
             GameServerControl-Tray-windows.zip \
             GameServerControl-Agent-linux.tar.gz \
             GameServerControl-Relay-linux.tar.gz \
@@ -331,6 +350,7 @@ jobs:
           prerelease: false
           files: |
             GameServerControl-Agent-windows.zip
+            GameServerControl-Runner-windows.zip
             GameServerControl-Tray-windows.zip
             GameServerControl-Agent-linux.tar.gz
             GameServerControl-Relay-linux.tar.gz
@@ -340,12 +360,12 @@ jobs:
             GameServerControl-Install-Relay.sh
             SHA256SUMS
           body: |
-            GameServerControl uses Agent + API + Web UI for administration. The optional Linux Relay exposes game ports from a public VPS through Tailscale to the game host. Optional Cloudflare remote management exposes the same Web UI through Cloudflare Access and Tunnel without opening the Agent port to the Internet.
+            GameServerControl uses a privileged Windows Agent for host control and per-server low-privilege Runner services for Windows BareMetal game processes. The optional Linux Relay exposes game ports from a public VPS through Tailscale to the game host. Optional Cloudflare remote management exposes the same Web UI through Cloudflare Access and Tunnel without opening the Agent port to the Internet.
             Releases are self-contained; no preinstalled .NET runtime is required on target hosts.
 
             Install commands:
 
-                # Windows Agent (admin PowerShell)
+                # Windows Agent + Runner (admin PowerShell)
                 # Download GameServerControl-Install-Windows.ps1 and SHA256SUMS from this release,
                 # verify the installer SHA-256, then execute the verified local file:
                 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\GameServerControl-Install-Windows.ps1

@@ -48,6 +48,8 @@ if (!string.IsNullOrWhiteSpace(bindHttps))
 builder.Services.AddSingleton<PowerShellRunner>();
 builder.Services.AddSingleton<HypervService>();
 builder.Services.AddSingleton<GuestProcessService>();
+builder.Services.AddSingleton<WindowsRunnerPipeClient>();
+builder.Services.AddSingleton<WindowsRunnerServiceManager>();
 builder.Services.AddSingleton<LocalProcessService>();
 builder.Services.AddSingleton<ServerRegistry>();
 builder.Services.AddSingleton<ServerStore>();
@@ -211,9 +213,30 @@ api.MapPut("/servers/{id}", (string id, ServerDef def, ServerStore store) =>
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
-api.MapDelete("/servers/{id}", async (string id, ServerStore store, PublicRelayManager relay, CancellationToken ct) =>
+api.MapDelete("/servers/{id}", async (
+    string id,
+    ServerRegistry reg,
+    ServerStore store,
+    WindowsRunnerServiceManager runners,
+    PublicRelayManager relay,
+    CancellationToken ct) =>
 {
-    if (!store.Delete(id)) return Results.NotFound();
+    var def = reg.Get(id);
+    if (def is null) return Results.NotFound();
+
+    if (runners.Supports(def))
+    {
+        var cleanup = await runners.DeprovisionAsync(def, ct);
+        if (!cleanup.Ok)
+            return Results.Json(new { error = cleanup.Error }, statusCode: StatusCodes.Status502BadGateway);
+    }
+
+    if (!store.Delete(id))
+    {
+        runners.CompleteDeprovision(id);
+        return Results.NotFound();
+    }
+    runners.CompleteDeprovision(id);
     await relay.RemoveServerAsync(id, ct);
     return Results.NoContent();
 });
@@ -295,23 +318,23 @@ api.MapPost("/servers/{id}/logs/tail", (string id, LogTailRequest req, ServerReg
 api.MapGet("/servers/{id}/logs/tail", (string id, LogTailService tail) =>
     Results.Ok(new { tailing = tail.IsTailing(id) }));
 
-api.MapGet("/servers/{id}/autostart", async (string id, ServerRegistry reg, LocalProcessService local, CancellationToken ct) =>
+api.MapGet("/servers/{id}/autostart", async (string id, ServerRegistry reg, WindowsRunnerServiceManager runners, CancellationToken ct) =>
 {
     var def = reg.Get(id);
     if (def is null) return Results.NotFound();
-    if (string.IsNullOrWhiteSpace(def.ScheduledTaskName))
+    if (!runners.Supports(def))
         return Results.Ok(new { supported = false, enabled = (bool?)null });
-    var enabled = await local.GetAutostartAsync(def.ScheduledTaskName, ct);
+    var enabled = await runners.GetAutostartAsync(def, ct);
     return Results.Ok(new { supported = true, enabled });
 });
-api.MapPost("/servers/{id}/autostart", async (string id, AutostartRequest req, ServerRegistry reg, LocalProcessService local, CancellationToken ct) =>
+api.MapPost("/servers/{id}/autostart", async (string id, AutostartRequest req, ServerRegistry reg, WindowsRunnerServiceManager runners, CancellationToken ct) =>
 {
     var def = reg.Get(id);
     if (def is null) return Results.NotFound();
-    if (string.IsNullOrWhiteSpace(def.ScheduledTaskName))
-        return Results.BadRequest(new { error = "Server has no ScheduledTaskName set." });
-    var ok = await local.SetAutostartAsync(def.ScheduledTaskName, req.Enabled, ct);
-    return ok ? Results.Ok(new { enabled = req.Enabled }) : Results.StatusCode(502);
+    if (!runners.Supports(def))
+        return Results.BadRequest(new { error = "Autostart is supported for Windows BareMetal Runner servers." });
+    var (ok, error) = await runners.SetAutostartAsync(def, req.Enabled, ct);
+    return ok ? Results.Ok(new { enabled = req.Enabled }) : Results.BadRequest(new { error });
 });
 
 static string ModUnsupportedReason(ServerDef def) => def.SteamAppId switch

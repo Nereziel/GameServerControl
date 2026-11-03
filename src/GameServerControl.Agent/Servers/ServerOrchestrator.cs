@@ -230,37 +230,6 @@ public sealed class ServerOrchestrator
             return new ActionResult(true, $"Already running (pid={pidAlready})", corr);
         }
 
-        if (!string.IsNullOrWhiteSpace(def.ScheduledTaskName) && _local.HasScheduledTaskSupport)
-        {
-            await _local.SetAutostartAsync(def.ScheduledTaskName, true, ct);
-            await LogAsync(def.Id, "orch", $"schtasks /run /tn \"{def.ScheduledTaskName}\" (autostart enabled)");
-            if (!await _local.StartScheduledTaskAsync(def.ScheduledTaskName, ct))
-                return new ActionResult(false, "schtasks /run failed (task may not exist)", corr);
-
-            var deadline = DateTime.UtcNow.AddSeconds(45);
-            int? foundPid = null;
-            while (DateTime.UtcNow < deadline)
-            {
-                ct.ThrowIfCancellationRequested();
-                await Task.Delay(2000, ct);
-                var (ok, p) = await _local.FindProcessAsync(def.GuestExePath, ct);
-                if (ok && p is int pp) { foundPid = pp; break; }
-            }
-            _tracker.Update(def.Id, s => s with
-            {
-                ProcessState = foundPid is null ? ProcessState.Starting : ProcessState.Running,
-                PidInGuest = foundPid,
-                StartedAt = DateTimeOffset.UtcNow,
-                LastError = null
-            });
-            await RefreshStatusAsync(def.Id, ct);
-            return new ActionResult(true,
-                foundPid is null
-                    ? "Scheduled task triggered; process not yet visible (will appear shortly)"
-                    : $"Started via scheduled task (pid={foundPid})",
-                corr);
-        }
-
         await LogAsync(def.Id, "orch", "Launching " + def.GuestExePath);
         var (started, pid, err) = await _local.StartProcessAsync(def.GuestExePath, def.StartArgs, def.GuestWorkingDir, ct);
         if (!started) return new ActionResult(false, "Process launch failed: " + err, corr);
@@ -331,20 +300,13 @@ public sealed class ServerOrchestrator
 
         if (def.HostingMode == HostingMode.BareMetal)
         {
-            if (!string.IsNullOrWhiteSpace(def.ScheduledTaskName) && _local.HasScheduledTaskSupport)
-            {
-                await _local.SetAutostartAsync(def.ScheduledTaskName, false, ct);
-                await LogAsync(id, "orch", $"Disabled + ending scheduled task \"{def.ScheduledTaskName}\"");
-                await _local.EndScheduledTaskAsync(def.ScheduledTaskName, ct);
-            }
-
             var pid = _tracker.Get(id).PidInGuest;
             await _local.StopProcessAsync(def.GuestExePath, pid, force, ct);
 
             if (def.StopProcessNames is { Length: > 0 } extras)
             {
                 await LogAsync(id, "orch", "Killing additional process names: " + string.Join(", ", extras));
-                await _local.KillByNamesAsync(extras, ct);
+                await _local.KillByNamesAsync(def, extras, ct);
             }
 
             _tracker.Update(id, s => s with { ProcessState = ProcessState.NotRunning, PidInGuest = null });

@@ -37,6 +37,7 @@ for (const [name, block] of [['build-windows', windowsBlock], ['build-linux', li
 
 for (const asset of [
   'GameServerControl-Agent-windows.zip',
+  'GameServerControl-Runner-windows.zip',
   'GameServerControl-Tray-windows.zip',
   'GameServerControl-Agent-linux.tar.gz',
   'GameServerControl-Relay-linux.tar.gz',

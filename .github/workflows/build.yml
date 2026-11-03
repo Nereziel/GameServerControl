@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   windows-build:
-    name: Windows agent + web UI + tray
+    name: Windows agent + runner + web UI + tray
     runs-on: windows-latest
 
     steps:
@@ -83,6 +83,9 @@ jobs:
       - name: Publish agent (win-x64, self-contained)
         run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
 
+      - name: Publish runner (win-x64, self-contained)
+        run: dotnet publish src/GameServerControl.Runner -c Release -r win-x64 --self-contained true -o publish/Runner-windows
+
       - name: Publish tray helper (win-x64, self-contained)
         run: dotnet publish src/GameServerControl.Tray -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/Tray-windows
 
@@ -91,6 +94,13 @@ jobs:
         with:
           name: GameServerControl-Agent-windows
           path: publish/Agent-windows
+          if-no-files-found: error
+
+      - name: Upload Windows runner
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: GameServerControl-Runner-windows
+          path: publish/Runner-windows
           if-no-files-found: error
 
       - name: Upload Windows tray helper

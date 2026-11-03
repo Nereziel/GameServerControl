@@ -33,23 +33,49 @@ public sealed class LocalProcessService
     private readonly ILogger<LocalProcessService> _logger;
     private readonly ServerRegistry _registry;
     private readonly IHubContext<StatusHub> _hub;
+    private readonly WindowsRunnerServiceManager _windowsRunner;
     private readonly ConcurrentDictionary<string, ConsoleSession> _consoleSessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, CancellationTokenSource> _runnerConsolePumps = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _firewallStates = new(StringComparer.OrdinalIgnoreCase);
 
     public LocalProcessService(
         ILogger<LocalProcessService> logger,
         ServerRegistry registry,
-        IHubContext<StatusHub> hub)
+        IHubContext<StatusHub> hub,
+        WindowsRunnerServiceManager windowsRunner)
     {
         _logger = logger;
         _registry = registry;
         _hub = hub;
+        _windowsRunner = windowsRunner;
     }
 
     public bool HasScheduledTaskSupport => OperatingSystem.IsWindows();
 
-    public Task<(bool Ok, int? Pid, string Error)> StartProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default)
+    public async Task<(bool Ok, int? Pid, string Error)> StartProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default)
     {
+        var def = FindServerForExe(exePath);
+        if (OperatingSystem.IsWindows())
+        {
+            if (def is null) return (false, null, "Refusing unregistered Windows BareMetal process launch.");
+            if (!SetFirewallState(def, open: true, out var firewallError))
+                return (false, null, "Could not prepare Windows Firewall: " + firewallError);
+
+            var result = await _windowsRunner.StartAsync(def, ct);
+            if (!result.Ok)
+            {
+                SetFirewallState(def, open: false, out _);
+                return (false, null, result.Error ?? "Runner process launch failed.");
+            }
+            return (true, result.Pid, "");
+        }
+
+        return await StartLocalProcessAsync(exePath, args, workingDir, ct);
+    }
+
+    private Task<(bool Ok, int? Pid, string Error)> StartLocalProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default)
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Direct game process launch is disabled on Windows.");
         var def = FindServerForExe(exePath);
         try
         {
@@ -117,8 +143,95 @@ public sealed class LocalProcessService
         _ = RecordAndBroadcastAsync(session, "process", $"[interactive console attached — pid {process.Id}]");
     }
 
-    public LocalConsoleState GetConsoleState(ServerDef def)
+    public async Task<LocalConsoleState> GetConsoleStateAsync(ServerDef def, CancellationToken ct = default)
     {
+        var supported = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
+        if (!supported)
+            return new LocalConsoleState(false, false, "This game profile does not use a stdin console.", Array.Empty<LogLine>());
+        if (def.HostingMode != HostingMode.BareMetal)
+            return new LocalConsoleState(true, false, "Interactive stdin is currently available only for servers running on this machine.", Array.Empty<LogLine>());
+
+        if (OperatingSystem.IsWindows())
+        {
+            var response = await _windowsRunner.ConsoleStateAsync(def, ct);
+            if (!response.Ok)
+                return new LocalConsoleState(true, false, response.Error ?? "Runner console is unavailable.", Array.Empty<LogLine>());
+            var snapshot = response.Console;
+            if (snapshot is null)
+                return new LocalConsoleState(true, false, "Runner returned no console state.", Array.Empty<LogLine>());
+            var lines = snapshot.Lines.Select(line => new LogLine(def.Id, line.At, line.Source, line.Text)).ToArray();
+            if (snapshot.InputAvailable) EnsureRunnerConsolePump(def, snapshot.LastSequence);
+            return new LocalConsoleState(snapshot.Supported, snapshot.InputAvailable, snapshot.Message, lines);
+        }
+
+        return GetLocalConsoleState(def);
+    }
+
+    private void EnsureRunnerConsolePump(ServerDef def, long lastSequence)
+    {
+        var cts = new CancellationTokenSource();
+        if (!_runnerConsolePumps.TryAdd(def.Id, cts))
+        {
+            cts.Dispose();
+            return;
+        }
+
+        _ = Task.Run(() => PumpRunnerConsoleAsync(def, lastSequence, cts), CancellationToken.None);
+    }
+
+    private async Task PumpRunnerConsoleAsync(ServerDef def, long lastSequence, CancellationTokenSource pumpCts)
+    {
+        var ct = pumpCts.Token;
+        var consecutiveFailures = 0;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                var response = await _windowsRunner.PollConsoleStateAsync(def, ct);
+                if (!response.Ok || response.Console is null)
+                {
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= 20) break;
+                    await Task.Delay(500, ct);
+                    continue;
+                }
+
+                consecutiveFailures = 0;
+                var snapshot = response.Console;
+                foreach (var runnerLine in snapshot.Lines
+                             .Where(line => line.Sequence > lastSequence)
+                             .OrderBy(line => line.Sequence))
+                {
+                    var line = new LogLine(def.Id, runnerLine.At, runnerLine.Source, runnerLine.Text);
+                    try
+                    {
+                        await _hub.Clients.Group(StatusHub.ServerGroup(def.Id)).SendAsync("logLine", line, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Runner console SignalR broadcast failed for {ServerId}", def.Id);
+                    }
+                    lastSequence = runnerLine.Sequence;
+                }
+
+                if (!snapshot.InputAvailable) break;
+                await Task.Delay(250, ct);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Runner console pump failed for {ServerId}", def.Id);
+        }
+        finally
+        {
+            if (_runnerConsolePumps.TryRemove(def.Id, out var removed)) removed.Dispose();
+        }
+    }
+
+    private LocalConsoleState GetLocalConsoleState(ServerDef def)
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Direct console attachment is disabled on Windows.");
         var supported = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
         if (!supported)
             return new LocalConsoleState(false, false, "This game profile does not use a stdin console.", Array.Empty<LogLine>());
@@ -141,6 +254,11 @@ public sealed class LocalProcessService
             return (false, "This game profile does not support stdin console input.");
         if (def.HostingMode != HostingMode.BareMetal)
             return (false, "Interactive stdin is not available for Hyper-V guest processes yet.");
+        if (OperatingSystem.IsWindows())
+        {
+            var result = await _windowsRunner.SendConsoleInputAsync(def, command, ct);
+            return (result.Ok, result.Error ?? "");
+        }
         if (!_consoleSessions.TryGetValue(def.Id, out var session) || !session.InputAvailable)
             return (false, "No attached console session. Start or restart this server from GameServerControl first.");
 
@@ -204,8 +322,23 @@ public sealed class LocalProcessService
         return File.Exists(binary) ? binary : configuredExePath;
     }
 
-    public Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default)
+    public async Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default)
     {
+        var def = FindServerForExe(exePath);
+        if (OperatingSystem.IsWindows())
+        {
+            if (def is null) return (false, null);
+            var result = await _windowsRunner.FindAsync(def, ct);
+            if (!result.Ok) return (false, null);
+            SetFirewallState(def, open: result.Pid is not null, out _);
+            return (true, result.Pid);
+        }
+        return await FindLocalProcessAsync(exePath, ct);
+    }
+
+    private Task<(bool Ok, int? Pid)> FindLocalProcessAsync(string exePath, CancellationToken ct = default)
+    {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Direct game process discovery is disabled on Windows.");
         var def = FindServerForExe(exePath);
         var processImage = ResolveProcessImagePath(exePath);
         try
@@ -255,6 +388,14 @@ public sealed class LocalProcessService
         var processImage = ResolveProcessImagePath(exePath);
         try
         {
+            if (OperatingSystem.IsWindows())
+            {
+                if (def is null) return false;
+                var result = await _windowsRunner.StopAsync(def, force, ct);
+                if (result.Ok) SetFirewallState(def, open: false, out _);
+                return result.Ok;
+            }
+
             Process? p = null;
             if (pid is int id)
             {
@@ -450,8 +591,15 @@ public sealed class LocalProcessService
         return ok;
     }
 
-    public Task KillByNamesAsync(IEnumerable<string> exeNames, CancellationToken ct = default)
+    public async Task KillByNamesAsync(ServerDef def, IEnumerable<string> exeNames, CancellationToken ct = default)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            var result = await _windowsRunner.KillExtrasAsync(def, ct);
+            if (!result.Ok) _logger.LogWarning("Runner extra-process cleanup failed for {ServerId}: {Error}", def.Id, result.Error);
+            return;
+        }
+
         foreach (var raw in exeNames.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             var bare = Path.GetFileNameWithoutExtension(raw);
@@ -464,7 +612,6 @@ public sealed class LocalProcessService
             }
             catch (Exception ex) { _logger.LogDebug(ex, "Kill by name {Name} failed", bare); }
         }
-        return Task.CompletedTask;
     }
 
     public async Task<(bool Ok, string Output)> RunCommandAsync(string commandLine, string workingDir, TimeSpan timeout, CancellationToken ct = default)

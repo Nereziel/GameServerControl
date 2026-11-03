@@ -32,7 +32,7 @@ public sealed class StatusHub : Hub
 
         if (mode == GameConsoleMode.Stdin)
         {
-            var state = _local.GetConsoleState(def);
+            var state = await _local.GetConsoleStateAsync(def, Context.ConnectionAborted);
             await Clients.Caller.SendAsync("consoleState", new
             {
                 serverId,
