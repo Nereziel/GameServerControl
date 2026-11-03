@@ -231,7 +231,12 @@ api.MapDelete("/servers/{id}", async (
             return Results.Json(new { error = cleanup.Error }, statusCode: StatusCodes.Status502BadGateway);
     }
 
-    if (!store.Delete(id)) return Results.NotFound();
+    if (!store.Delete(id))
+    {
+        runners.CompleteDeprovision(id);
+        return Results.NotFound();
+    }
+    runners.CompleteDeprovision(id);
     await relay.RemoveServerAsync(id, ct);
     return Results.NoContent();
 });

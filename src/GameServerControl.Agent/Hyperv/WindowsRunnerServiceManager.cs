@@ -16,6 +16,7 @@ public sealed class WindowsRunnerServiceManager
     private readonly ILogger<WindowsRunnerServiceManager> _logger;
     private readonly ConcurrentDictionary<string, string> _provisionedFingerprints = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _provisionGates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _deprovisioning = new(StringComparer.OrdinalIgnoreCase);
 
     public WindowsRunnerServiceManager(WindowsRunnerPipeClient client, ILogger<WindowsRunnerServiceManager> logger)
     {
@@ -87,13 +88,18 @@ public sealed class WindowsRunnerServiceManager
     public async Task<(bool Ok, string Error)> DeprovisionAsync(ServerDef def, CancellationToken ct = default)
     {
         if (!Supports(def)) return (true, "");
+        if (!_deprovisioning.TryAdd(def.Id, 0))
+            return (false, "Runner deprovisioning is already in progress for this server.");
 
         var identity = RunnerIdentity.ForServer(def.Id);
         var serviceAccount = "NT SERVICE\\" + identity.ServiceName;
         var provisionGate = _provisionGates.GetOrAdd(def.Id, _ => new SemaphoreSlim(1, 1));
-        await provisionGate.WaitAsync(ct);
+        var gateAcquired = false;
+        var completed = false;
         try
         {
+            await provisionGate.WaitAsync(ct);
+            gateAcquired = true;
             var query = await RunToolAsync("sc.exe", ["query", identity.ServiceName], ToolTimeout, ct);
             var serviceExists = query.Ok || !query.Output.Contains("1060", StringComparison.OrdinalIgnoreCase);
             if (serviceExists)
@@ -135,13 +141,18 @@ public sealed class WindowsRunnerServiceManager
             }
 
             _provisionedFingerprints.TryRemove(def.Id, out _);
+            completed = true;
             return (true, "");
         }
         finally
         {
-            provisionGate.Release();
+            if (gateAcquired) provisionGate.Release();
+            if (!completed) _deprovisioning.TryRemove(def.Id, out _);
         }
     }
+
+    public void CompleteDeprovision(string serverId)
+        => _deprovisioning.TryRemove(serverId, out _);
 
     private static IEnumerable<string> DeprovisionGrantPaths(ServerDef def)
     {
@@ -197,6 +208,8 @@ public sealed class WindowsRunnerServiceManager
     private async Task<ProvisionResult> EnsureProvisionedAsync(ServerDef def, CancellationToken ct)
     {
         if (!Supports(def)) return ProvisionResult.Fail("Windows Runner is not applicable to this server.");
+        if (_deprovisioning.ContainsKey(def.Id))
+            return ProvisionResult.Fail("Runner deprovisioning is in progress for this server.");
 
         var identity = RunnerIdentity.ForServer(def.Id);
         var fingerprint = ProvisionFingerprint(def);
@@ -208,6 +221,8 @@ public sealed class WindowsRunnerServiceManager
         await provisionGate.WaitAsync(ct);
         try
         {
+            if (_deprovisioning.ContainsKey(def.Id))
+                return ProvisionResult.Fail("Runner deprovisioning is in progress for this server.");
             if (IsProvisionCached(def.Id, fingerprint, manifestPath))
                 return ProvisionResult.Success(identity);
 
