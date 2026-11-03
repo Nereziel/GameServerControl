@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -143,10 +144,11 @@ public sealed class TokenRegistry
         if (!string.IsNullOrEmpty(_legacyToken) && SecretEquals(presented, _legacyToken))
             return ("legacy", "Legacy (appsettings)", TokenRole.Admin);
 
+        var presentedHash = HashToken(presented);
         lock (_gate)
         {
             foreach (var token in _tokens)
-                if (HashMatches(presented, token.TokenHash))
+                if (HashMatches(presentedHash, token.TokenHash))
                     return (token.Id, token.Name, token.Role);
         }
         return null;
@@ -228,12 +230,12 @@ public sealed class TokenRegistry
         catch (FormatException) { return false; }
     }
 
-    private static bool HashMatches(string presented, string storedHash)
+    private static bool HashMatches(string presentedHash, string storedHash)
     {
-        if (!IsValidHash(storedHash)) return false;
-        var presentedHash = SHA256.HashData(Encoding.UTF8.GetBytes(presented));
-        var expectedHash = Convert.FromHexString(storedHash);
-        return CryptographicOperations.FixedTimeEquals(presentedHash, expectedHash);
+        if (presentedHash.Length != 64 || storedHash.Length != 64) return false;
+        return CryptographicOperations.FixedTimeEquals(
+            MemoryMarshal.AsBytes(presentedHash.AsSpan()),
+            MemoryMarshal.AsBytes(storedHash.AsSpan()));
     }
 
     private static bool SecretEquals(string a, string b)
