@@ -86,7 +86,7 @@ switch (command) {
   }
   case 'validate-tag': {
     const tag = process.argv[3] ?? '';
-    if (!/^v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/.test(tag))
+    if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag))
       fail(`Release tag '${tag}' must be stable SemVer in vMAJOR.MINOR.PATCH form.`);
     console.log(`Release tag valid: ${tag}`);
     break;
