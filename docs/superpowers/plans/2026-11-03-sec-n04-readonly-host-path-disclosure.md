@@ -4,7 +4,7 @@
 
 **Goal:** Prevent ReadOnly tokens from learning administrative host filesystem paths while preserving monitoring and safe mod visibility.
 
-**Architecture:** Apply Admin authorization directly to discovery and install-job lookup endpoints. Keep mod listing readable, but construct `ModListResponse` with `ModsFolder = null` unless the authenticated role is Admin. Add runtime and static contracts for both behaviors.
+**Architecture:** Extend the existing centralized ReadOnly GET policy in `RoleEnforcementMiddleware`. Deny discovery and install-job lookup before their handlers execute, while buffering the exact per-server mod-list response and replacing only `modsFolder` with null. Admin requests continue through unchanged. Add runtime and static contracts for both behaviors.
 
 **Tech Stack:** .NET 8, ASP.NET Core minimal APIs, xUnit integration tests, GitHub Actions validation scripts.
 
@@ -20,7 +20,7 @@
 
 ## Review Focus
 
-- Authorization must run before nonexistent install-job lookup, producing 403 for ReadOnly rather than 404.
+- ReadOnly denial must happen before nonexistent install-job lookup, producing 403 rather than 404.
 - Admin callers must retain discovery and install-job behavior.
 - ReadOnly mod listing must redact only the absolute folder, not the mod list itself.
 - Unsupported mod managers must keep their existing unsupported response behavior.
@@ -54,22 +54,23 @@ Run: `dotnet test tests/GameServerControl.Agent.IntegrationTests/GameServerContr
 
 Expected: the three new ReadOnly assertions fail on current behavior.
 
-### Task 2: Enforce minimal endpoint exposure
+### Task 2: Enforce minimal ReadOnly exposure
 
 **Files:**
-- Modify: `src/GameServerControl.Agent/Program.cs`
+- Modify: `src/GameServerControl.Agent/Auth/RoleEnforcementMiddleware.cs`
 
 **Interfaces:**
-- `GET /api/discover` and `GET /api/servers/install/{jobId}` gain `RequireAuthorization("admin")`.
-- `GET /api/servers/{id}/mods` accepts `HttpContext` and exposes `ModsFolder` only when role claim is Admin.
+- ReadOnly exact `GET /api/discover` and single-segment `GET /api/servers/install/{jobId}` are rejected before `_next`.
+- ReadOnly exact per-server `/mods` response retains normal content except `modsFolder = null`.
+- Admin behavior remains unchanged because these branches run only for ReadOnly GETs.
 
-- [ ] **Step 1: Add Admin policy to discovery and install-job GETs**
+- [ ] **Step 1: Deny discovery and install-job details before handlers**
 
-Keep handlers unchanged; append the existing `admin` policy at endpoint mapping.
+Add exact path checks inside the existing ReadOnly GET block. Keep the install-job matcher scoped to one non-empty path segment after `/api/servers/install/`.
 
 - [ ] **Step 2: Redact ReadOnly mod folder**
 
-When constructing `ModListResponse`, pass `mgr.ModsFolder(def)` only for Admin role; otherwise pass null.
+Use the existing config-redaction response-buffer pattern for exact per-server `/mods`: parse successful JSON, set `modsFolder` to null, and pass through non-success/unrecognized responses unchanged.
 
 - [ ] **Step 3: Run integration tests and verify GREEN**
 
@@ -81,11 +82,11 @@ Expected: full integration project passes with CA1416 promoted to error.
 - Modify: `scripts/validate-security-access.mjs`
 
 **Interfaces:**
-- Static validator requires Admin protection on discovery/install-job lookup and role-aware mod-folder exposure.
+- Static validator requires discovery/install-job ReadOnly denial and explicit mod-folder nulling.
 
 - [ ] **Step 1: Extend the static security contract**
 
-Require the two GET mappings to use the Admin policy and reject an unconditional `mgr.ModsFolder(def)` in the mod-list response.
+Require the exact discovery check, scoped install-job matcher, mod-list response redaction call and `root["modsFolder"] = null` assignment.
 
 - [ ] **Step 2: Run all PR workflows**
 
@@ -93,4 +94,4 @@ Require Build, Runtime integration tests, Version contract, Supply-chain audit c
 
 - [ ] **Step 3: Review final diff**
 
-Confirm changes are limited to endpoint exposure/redaction, security tests/contract and SEC-N04 documentation.
+Confirm changes are limited to ReadOnly GET exposure/redaction, security tests/contract and SEC-N04 documentation.
