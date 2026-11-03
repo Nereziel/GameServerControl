@@ -1,8 +1,7 @@
 <Project>
   <!--
-    Single source of truth for the product's stable SemVer.
-    Use `node scripts/version.mjs bump patch|minor|major` and commit the result before releasing.
-    Release tags must match this version exactly (vMAJOR.MINOR.PATCH).
+    Default version for development builds. Release builds are stamped from the
+    validated Git tag (vMAJOR.MINOR.PATCH), without a separate version bump PR.
   -->
   <PropertyGroup>
     <Version>1.1.4</Version>
