@@ -176,6 +176,10 @@ public sealed class BackupService
         ArchiveCreateResult created;
         try
         {
+            // A pre-update snapshot must include every configured save directory.
+            var saveTargets = GetSaveTargets(def, requireAnyExisting: true);
+            if (saveTargets.Any(target => !Directory.Exists(target.Path)))
+                return new ActionResult(false, "One or more configured save directories are missing.", corr);
             created = await CreateBareMetalArchiveAsync(def, "Pre-update backup",
                 BackupKind.SafetyArchive, requireComplete: true, ct);
         }
