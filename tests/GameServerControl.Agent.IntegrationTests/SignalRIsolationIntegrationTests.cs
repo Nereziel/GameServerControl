@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using GameServerControl.Shared;
 using Microsoft.AspNetCore.SignalR.Client;
 using Xunit;
@@ -11,11 +12,10 @@ public sealed class SignalRIsolationIntegrationTests
     [Fact]
     public async Task Log_tail_reaches_only_the_subscribed_server_group()
     {
-        using var factory = new AgentTestFactory();
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
         var readOnlyToken = factory.CreateReadOnlyToken();
         await using var alpha = factory.CreateHubConnection(readOnlyToken);
         await using var beta = factory.CreateHubConnection(readOnlyToken);
-        using var client = factory.CreateClientWithToken(readOnlyToken);
 
         var liveStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var alphaSentinel = new TaskCompletionSource<LogLine>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -42,9 +42,6 @@ public sealed class SignalRIsolationIntegrationTests
 
         try
         {
-            using var started = await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "start" });
-            Assert.Equal(HttpStatusCode.OK, started.StatusCode);
-
             await liveStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await File.AppendAllTextAsync(factory.AlphaLogPath, sentinel + Environment.NewLine);
 
@@ -57,7 +54,6 @@ public sealed class SignalRIsolationIntegrationTests
         }
         finally
         {
-            try { await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "stop" }); } catch { }
             try { await alpha.StopAsync(); } catch { }
             try { await beta.StopAsync(); } catch { }
         }
@@ -72,7 +68,7 @@ public sealed class SignalRIsolationIntegrationTests
 
         var readOnlyToken = factory.CreateReadOnlyToken();
         await using var connection = factory.CreateHubConnection(readOnlyToken);
-        using var client = factory.CreateClientWithToken(readOnlyToken);
+        using var client = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
         var received = new List<LogLine>();
         var gate = new object();
 
@@ -161,6 +157,50 @@ public sealed class SignalRIsolationIntegrationTests
             {
                 lock (secondGate) return secondReceived.Count(line => line.Text == history) == 1;
             }, TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            try { await first.StopAsync(); } catch { }
+            try { await second.StopAsync(); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task LogOnly_tail_remains_live_until_last_subscriber_disconnects()
+    {
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
+        var readOnlyToken = factory.CreateReadOnlyToken();
+        await using var first = factory.CreateHubConnection(readOnlyToken);
+        await using var second = factory.CreateHubConnection(readOnlyToken);
+        using var adminClient = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+        var sentinel = "remaining-subscriber-" + Guid.NewGuid().ToString("N");
+        var receivedBySecond = new TaskCompletionSource<LogLine>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        second.On<LogLine>("logLine", line =>
+        {
+            if (line.ServerId == "alpha" && line.Text == sentinel)
+                receivedBySecond.TrySetResult(line);
+        });
+
+        await first.StartAsync();
+        await second.StartAsync();
+        try
+        {
+            await first.InvokeAsync("SubscribeConsole", "alpha");
+            await second.InvokeAsync("SubscribeConsole", "alpha");
+
+            await WaitUntilAsync(() => TailIsRunningAsync(adminClient, "alpha"), TimeSpan.FromSeconds(5));
+
+            await first.StopAsync();
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            Assert.True(await TailIsRunningAsync(adminClient, "alpha"));
+
+            await File.AppendAllTextAsync(factory.AlphaLogPath, sentinel + Environment.NewLine);
+            var delivered = await receivedBySecond.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            Assert.Equal(sentinel, delivered.Text);
+
+            await second.StopAsync();
+            await WaitUntilAsync(async () => !await TailIsRunningAsync(adminClient, "alpha"), TimeSpan.FromSeconds(5));
         }
         finally
         {
@@ -273,6 +313,15 @@ public sealed class SignalRIsolationIntegrationTests
         Assert.Equal(afterDisconnect, factory.FakeRunner.PollConsoleCalls);
     }
 
+    private static async Task<bool> TailIsRunningAsync(HttpClient client, string serverId)
+    {
+        using var response = await client.GetAsync($"/api/servers/{Uri.EscapeDataString(serverId)}/logs/tail");
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var json = await JsonDocument.ParseAsync(stream);
+        return json.RootElement.GetProperty("tailing").GetBoolean();
+    }
+
     private static RunnerConsoleLine RunnerLine(long sequence, string text) =>
         new(sequence, DateTimeOffset.UnixEpoch.AddSeconds(sequence), "stdout", text);
 
@@ -280,6 +329,17 @@ public sealed class SignalRIsolationIntegrationTests
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
         while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Timed out waiting for the integration-test condition.");
+            await Task.Delay(25);
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (!await condition())
         {
             if (DateTimeOffset.UtcNow >= deadline)
                 throw new TimeoutException("Timed out waiting for the integration-test condition.");
