@@ -137,6 +137,9 @@ public sealed class SecretProtector
 
     private byte[] GetOrCreateUnixKey()
     {
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Unix secret key protection is available only on non-Windows platforms.");
+
         lock (_keyGate)
         {
             if (_unixKey is not null) return _unixKey;
