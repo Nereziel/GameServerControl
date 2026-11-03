@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 
 const webUiDir = path.resolve('src/GameServerControl.Agent/WebUi');
@@ -32,6 +33,33 @@ function checkInlineScripts(html, tempDir, labelPrefix) {
 }
 
 for (const file of files) check(file);
+
+/* Regression: a childList MutationObserver runs applyAuthUi -> ensureAuthRoleBadge.
+ * Writing the same textContent again schedules another observer callback forever. */
+const authUiSource = fs.readFileSync(path.join(webUiDir, 'server-admin.js'), 'utf8');
+const badgeStart = authUiSource.indexOf('function ensureAuthRoleBadge(){');
+const badgeEnd = authUiSource.indexOf('function delegatedActionNames(', badgeStart);
+if (badgeStart < 0 || badgeEnd < 0) throw new Error('Auth role badge implementation not found');
+const badgeFunction = authUiSource.slice(badgeStart, badgeEnd);
+let textWrites = 0;
+const badge = {
+  _text: '',
+  _title: '',
+  get textContent() { return this._text; },
+  set textContent(value) { textWrites++; this._text = value; },
+  get title() { return this._title; },
+  set title(value) { this._title = value; }
+};
+const dom = {
+  getElementById(id) { return id === 'authRole' ? badge : null; }
+};
+const authContext = { document: dom, AUTH: { name: 'Test', role: 'Admin' } };
+vm.runInNewContext(badgeFunction, authContext);
+for (let i = 0; i < 5; i++) authContext.ensureAuthRoleBadge();
+if (textWrites !== 1) throw new Error(`Auth badge generated ${textWrites} childList mutations on unchanged identity; observer may freeze the UI`);
+authContext.AUTH = { name: 'Test', role: 'ReadOnly' };
+authContext.ensureAuthRoleBadge();
+if (textWrites !== 2) throw new Error('Auth badge did not update after role change');
 
 // The login form must display errors outside #app, which is hidden until connected.
 // Guard against routing login errors only to the control-room notice bar.

@@ -96,8 +96,12 @@ function ensureAuthRoleBadge(){
     if(label)label.insertAdjacentElement('afterend',badge);
   }
   if(!badge)return;
-  badge.textContent=AUTH?.role?`· ${AUTH.role}`:'';
-  badge.title=AUTH?.name?`${AUTH.name} · ${AUTH.role||''}`:String(AUTH?.role||'');
+  // MutationObserver watches childList on the whole page. Replacing the
+  // text node on every callback creates an endless observer microtask loop.
+  const roleText=AUTH?.role?`· ${AUTH.role}`:'';
+  const title=AUTH?.name?`${AUTH.name} · ${AUTH.role||''}`:String(AUTH?.role||'');
+  if(badge.textContent!==roleText)badge.textContent=roleText;
+  if(badge.title!==title)badge.title=title;
 }
 
 function delegatedActionNames(control){
