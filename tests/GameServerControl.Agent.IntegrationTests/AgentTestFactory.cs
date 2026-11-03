@@ -18,7 +18,7 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
 {
     public const string AdminToken = "integration-admin-token-0123456789abcdef";
 
-    public AgentTestFactory(bool alphaUsesStdinProfile = false)
+    public AgentTestFactory(bool alphaUsesStdinProfile = false, bool alphaUsesLogProfile = false)
     {
         TempRoot = Path.Combine(Path.GetTempPath(), "gsc-integration-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TempRoot);
@@ -29,6 +29,9 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
         BetaLogPath = Path.Combine(TempRoot, "beta.log");
         File.WriteAllText(AlphaLogPath, "");
         File.WriteAllText(BetaLogPath, "");
+
+        var alphaSteamAppId = alphaUsesStdinProfile ? "105600" : alphaUsesLogProfile ? "896660" : "";
+        var alphaGameType = alphaUsesStdinProfile || alphaUsesLogProfile ? GameType.SteamGeneric : GameType.Custom;
 
         ServersPath = Path.Combine(TempRoot, "servers.json");
         var doc = new
@@ -42,8 +45,8 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
                     AlphaLogPath,
                     "alpha-rcon-secret",
                     "https://hooks.invalid/alpha-webhook-secret",
-                    alphaUsesStdinProfile ? "105600" : "",
-                    alphaUsesStdinProfile ? GameType.SteamGeneric : GameType.Custom),
+                    alphaSteamAppId,
+                    alphaGameType),
                 MakeServer(
                     "beta",
                     "Beta",

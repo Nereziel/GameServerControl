@@ -1,4 +1,5 @@
 using GameServerControl.Agent.Hyperv;
+using GameServerControl.Agent.Logs;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
 using Microsoft.AspNetCore.Authorization;
@@ -9,15 +10,18 @@ namespace GameServerControl.Agent.Hubs;
 [Authorize]
 public sealed class StatusHub : Hub
 {
+    private const string RecentBacklogItemPrefix = "gsc:log-recent:";
     private readonly ServerRegistry _registry;
     private readonly LocalProcessService _local;
+    private readonly LogTailService _logTail;
 
     public static string ServerGroup(string serverId) => "server:" + serverId;
 
-    public StatusHub(ServerRegistry registry, LocalProcessService local)
+    public StatusHub(ServerRegistry registry, LocalProcessService local, LogTailService logTail)
     {
         _registry = registry;
         _local = local;
+        _logTail = logTail;
     }
 
     public async Task SubscribeConsole(string serverId)
@@ -59,6 +63,18 @@ public sealed class StatusHub : Hub
                 _ => "No live console integration is configured for this game."
             }
         });
+
+        if (mode == GameConsoleMode.LogOnly)
+        {
+            var backlogKey = RecentBacklogItemPrefix + serverId;
+            if (!Context.Items.ContainsKey(backlogKey))
+            {
+                Context.Items[backlogKey] = true;
+                var recent = await _logTail.GetRecentAsync(serverId, 100, Context.ConnectionAborted);
+                foreach (var line in recent)
+                    await Clients.Caller.SendAsync("logLine", line, Context.ConnectionAborted);
+            }
+        }
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

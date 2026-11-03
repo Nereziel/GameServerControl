@@ -47,10 +47,6 @@ public sealed class LogTailService : IDisposable
             return created;
         });
 
-        // A tail loop intentionally starts at EOF so it never floods clients with an
-        // entire historical log. When the UI is opened, send a small bounded backlog
-        // separately so the console is immediately useful even if the server is idle.
-        _ = Task.Run(() => EmitRecentAsync(serverId, path, 100, CancellationToken.None));
         return handle.Cts.IsCancellationRequested == false;
     }
 
@@ -59,6 +55,69 @@ public sealed class LogTailService : IDisposable
         if (!_active.TryRemove(serverId, out var h)) return false;
         try { h.Cts.Cancel(); } catch { /* ignore */ }
         return true;
+    }
+
+    public async Task<LogLine[]> GetRecentAsync(
+        string serverId,
+        int maxLines = 100,
+        CancellationToken ct = default)
+    {
+        var def = _registry.Get(serverId);
+        if (def is null || string.IsNullOrWhiteSpace(def.LogPathInGuest)) return Array.Empty<LogLine>();
+        if (def.HostingMode != HostingMode.BareMetal) return Array.Empty<LogLine>();
+
+        var path = def.LogPathInGuest!;
+        try
+        {
+            if (!File.Exists(path)) return Array.Empty<LogLine>();
+
+            const int maxBytes = 256 * 1024;
+            await using var fs = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete,
+                64 * 1024,
+                useAsync: true);
+
+            var length = fs.Length;
+            var toRead = (int)Math.Min(length, maxBytes);
+            if (toRead <= 0) return Array.Empty<LogLine>();
+
+            fs.Seek(-toRead, SeekOrigin.End);
+            var buffer = new byte[toRead];
+            var total = 0;
+            while (total < toRead)
+            {
+                var n = await fs.ReadAsync(buffer.AsMemory(total, toRead - total), ct);
+                if (n == 0) break;
+                total += n;
+            }
+
+            var text = Encoding.UTF8.GetString(buffer, 0, total).Replace("\r\n", "\n");
+            var lines = text.Split('\n');
+            var skipPartialFirstLine = length > toRead ? 1 : 0;
+            var recent = lines
+                .Skip(skipPartialFirstLine)
+                .Where(line => !string.IsNullOrEmpty(line))
+                .TakeLast(Math.Clamp(maxLines, 1, 500))
+                .ToArray();
+
+            if (recent.Length == 0) return Array.Empty<LogLine>();
+
+            var at = DateTimeOffset.UtcNow;
+            var result = new LogLine[recent.Length + 1];
+            result[0] = new LogLine(serverId, at, "log", $"[recent log — last {recent.Length} lines]");
+            for (var i = 0; i < recent.Length; i++)
+                result[i + 1] = new LogLine(serverId, at, "log", recent[i]);
+            return result;
+        }
+        catch (OperationCanceledException) { return Array.Empty<LogLine>(); }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "recent log read failed for {Path}", path);
+            return Array.Empty<LogLine>();
+        }
     }
 
     private async Task TailLoop(string serverId, string path, CancellationToken ct)
@@ -116,56 +175,6 @@ public sealed class LogTailService : IDisposable
         }
 
         await EmitAsync(serverId, "[live log stopped]");
-    }
-
-    private async Task EmitRecentAsync(string serverId, string path, int maxLines, CancellationToken ct)
-    {
-        try
-        {
-            if (!File.Exists(path)) return;
-
-            const int maxBytes = 256 * 1024;
-            await using var fs = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                64 * 1024,
-                useAsync: true);
-
-            var length = fs.Length;
-            var toRead = (int)Math.Min(length, maxBytes);
-            if (toRead <= 0) return;
-
-            fs.Seek(-toRead, SeekOrigin.End);
-            var buffer = new byte[toRead];
-            var total = 0;
-            while (total < toRead)
-            {
-                var n = await fs.ReadAsync(buffer.AsMemory(total, toRead - total), ct);
-                if (n == 0) break;
-                total += n;
-            }
-
-            var text = Encoding.UTF8.GetString(buffer, 0, total).Replace("\r\n", "\n");
-            var lines = text.Split('\n');
-            var skipPartialFirstLine = length > toRead ? 1 : 0;
-            var recent = lines
-                .Skip(skipPartialFirstLine)
-                .Where(line => !string.IsNullOrEmpty(line))
-                .TakeLast(Math.Clamp(maxLines, 1, 500))
-                .ToArray();
-
-            if (recent.Length == 0) return;
-            await EmitAsync(serverId, $"[recent log — last {recent.Length} lines]");
-            foreach (var line in recent)
-                await EmitAsync(serverId, line);
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "recent log read failed for {Path}", path);
-        }
     }
 
     private async Task EmitAsync(string serverId, string text)
