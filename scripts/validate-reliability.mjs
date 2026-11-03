@@ -15,6 +15,8 @@ assert.match(worker, /MonitorProcessAsync/, 'Runner must monitor game process ex
 assert.match(worker, /attempts >= 3/, 'Crash recovery must be capped');
 assert.match(host, /_restartDesired = false;/, 'Manual stop must disable automatic restart');
 assert.match(host, /public bool RestartDesired => _restartDesired/, 'Recovery must honor stop intent');
+assert.match(host, /_cleanExitObserved/, 'Clean process exits must not trigger crash recovery');
+assert.match(worker, /TimeSpan.FromMinutes\(10\)/, 'Crash retry budget must reset after sustained uptime');
 assert.match(manager, /startMode = enabled \? "auto" : "demand"/, 'Windows service must start after boot when enabled');
 
 assert.match(backup, /CreatePreUpdateAsync/, 'Backups must have a dedicated pre-update path');
