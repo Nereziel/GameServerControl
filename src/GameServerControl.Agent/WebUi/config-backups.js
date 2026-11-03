@@ -385,6 +385,7 @@ async function openLog(id) {
 }
 
 async function openTokens() {
+  PENDING_TOKEN_REPLACEMENT = null;
   openModal('API tokens', '<div id="tokensPane" class="muted">Loading…</div>', `<button class="btn" ${uiAction('closeModal')}>Close</button>`, true);
   await loadTokens();
 }
@@ -432,7 +433,7 @@ let PENDING_TOKEN_REPLACEMENT = null;
 async function replaceToken(oldId, name, role) {
   if (PENDING_TOKEN_REPLACEMENT) return toast('Finish or cancel the pending token replacement first.', 'err');
   if (!confirm('Create a new ' + role + ' token to replace ' + oldId + '? The old token stays valid until you confirm revocation.')) return;
-  const id = 'replacement-' + crypto.randomUUID().slice(0, 12);
+  const id = 'replacement-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
   try {
     const r = await api('/api/tokens', {
       method: 'POST', body: JSON.stringify({ id, name: name + ' (replacement)', role })
