@@ -10,6 +10,9 @@ const agentSurface = program + '\n' + audit;
 function requireToken(source, token, message) {
   if (!source.includes(token)) throw new Error(`${message}: missing ${token}`);
 }
+function rejectToken(source, token, message) {
+  if (source.includes(token)) throw new Error(`${message}: unexpected ${token}`);
+}
 
 requireToken(agentSurface, '/api/auth/me', 'Authenticated identity endpoint is required');
 requireToken(agentSurface, 'TokenAuthHandler.TokenIdClaim', 'Identity endpoint must surface the authenticated token id');
@@ -18,8 +21,10 @@ requireToken(audit, 'IsAuthenticated', 'Identity endpoint must reject unauthenti
 
 requireToken(hub, '[Authorize(Policy = "admin")]', 'Interactive SignalR console input must remain Admin-only');
 requireToken(hub, 'SendConsoleInput', 'Interactive SignalR console input contract is required');
-requireToken(roles, 'IsReadOnlyControlPost', 'ReadOnly API policy must explicitly identify safe control-plane POSTs');
-requireToken(roles, '/logs/tail', 'ReadOnly tokens must be able to start/stop their live-log subscription');
+rejectToken(roles, 'IsReadOnlyControlPost', 'ReadOnly API policy must not bypass normal Admin enforcement for tail control');
+rejectToken(roles, '/logs/tail', 'ReadOnly API policy must not special-case the shared log-tail control endpoint');
+requireToken(hub, '_logTail.Subscribe(serverId, Context.ConnectionId)', 'ReadOnly LogOnly lifecycle must be tied to the authenticated SignalR connection');
+requireToken(hub, '_logTail.UnsubscribeConnection(Context.ConnectionId)', 'SignalR disconnect must release LogOnly tail ownership');
 
 requireToken(audit, 'Agent:CloudGateway:TrustedTokenIds', 'Cloud audit identity must be bound to explicitly trusted Agent token ids');
 requireToken(audit, '_trustedGatewayTokenIds.Contains(tokenId)', 'Cloud audit headers must be tied to the authenticated trusted token id');
