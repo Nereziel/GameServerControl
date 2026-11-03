@@ -7,6 +7,7 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
 {
     private int _pollConsoleCalls;
     private long _lastPollAfterSequence = -1;
+    private string? _lastPollConsoleGeneration;
 
     public bool SupportsResult { get; set; } = true;
     public (bool Ok, string Error) DeprovisionResult { get; set; } = (true, "");
@@ -20,6 +21,7 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
     public bool? CompleteObservedServerPresent { get; private set; }
     public int PollConsoleCalls => Volatile.Read(ref _pollConsoleCalls);
     public long LastPollAfterSequence => Interlocked.Read(ref _lastPollAfterSequence);
+    public string? LastPollConsoleGeneration => _lastPollConsoleGeneration;
 
     public bool Supports(ServerDef def) => SupportsResult;
 
@@ -35,8 +37,9 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
     public Task<RunnerResponse> ConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
         Task.FromResult(ConsoleStateResponse);
 
-    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, long afterSequence, CancellationToken ct = default)
+    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, string? consoleGeneration, long afterSequence, CancellationToken ct = default)
     {
+        _lastPollConsoleGeneration = consoleGeneration;
         Interlocked.Exchange(ref _lastPollAfterSequence, afterSequence);
         Interlocked.Increment(ref _pollConsoleCalls);
         return Task.FromResult(PollConsoleResponse ?? ConsoleStateResponse);
