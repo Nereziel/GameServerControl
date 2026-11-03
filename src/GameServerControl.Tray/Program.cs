@@ -76,7 +76,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _statusItem = new ToolStripMenuItem("Agent: checking…") { Enabled = false };
         var openItem = new ToolStripMenuItem("Open administration", null, (_, _) => OpenAdministration());
         var tokenItem = new ToolStripMenuItem("Show Agent API token…", null, (_, _) => ShowAgentToken());
-        var manageTokensItem = new ToolStripMenuItem("Manage API tokens…", null, (_, _) => OpenAdministration());
+        var manageTokensItem = new ToolStripMenuItem("Manage API tokens…", null, (_, _) => OpenAdministration(manageTokens: true));
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
 
         _startItem = new ToolStripMenuItem("Start Agent", null, (_, _) => RunServiceAction("start"));
@@ -134,11 +134,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         RefreshServiceState();
     }
 
-    private void OpenAdministration()
+    private void OpenAdministration(bool manageTokens = false)
     {
         try
         {
-            Process.Start(new ProcessStartInfo(_adminUrl) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(manageTokens ? _adminUrl + "?manageTokens=1" : _adminUrl) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
