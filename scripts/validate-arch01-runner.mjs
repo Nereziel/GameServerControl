@@ -70,6 +70,8 @@ requireCheck(manager.includes('1690800') && manager.includes('FactoryGame') && m
 requireCheck(manager.includes('SetAutostartAsync') && manager.includes('GetAutostartAsync'), 'Runner manager must own Windows BareMetal autostart state.');
 requireCheck(manager.includes('DeprovisionAsync') && manager.includes('"delete", identity.ServiceName') && manager.includes('"/remove:g"'), 'Deleting a server must stop/delete its Runner and remove that service SID from game/save ACLs.');
 requireCheck(/MapDelete\("\/servers\/\{id\}"[\s\S]{0,900}?runners\.DeprovisionAsync\(def, ct\)[\s\S]{0,500}?store\.Delete\(id\)/m.test(program), 'Server deletion must deprovision the Runner before deleting the server definition.');
+requireCheck(manager.includes('_deprovisioning') && /EnsureProvisionedAsync[\s\S]{0,900}?_deprovisioning\.ContainsKey\(def\.Id\)/m.test(manager), 'Runner provisioning must stay blocked while server deletion is between cleanup and definition removal.');
+requireCheck(manager.includes('CompleteDeprovision') && /store\.Delete\(id\)[\s\S]{0,300}?runners\.CompleteDeprovision\(id\)/m.test(program), 'Server deletion must release its deprovision tombstone only after the definition is removed.');
 
 requireCheck(build.includes('GameServerControl.Runner'), 'Build workflow must build/publish the Windows Runner.');
 requireCheck(release.includes('GameServerControl.Runner'), 'Release workflow must publish the Windows Runner.');
