@@ -11,8 +11,10 @@ namespace GameServerControl.Agent.Auth;
 public sealed class RoleEnforcementMiddleware
 {
     private const string ServerPrefix = "/api/servers/";
+    private const string InstallJobPrefix = "/api/servers/install/";
     private const string ConfigSuffix = "/config";
     private const string FileContentSuffix = "/files/content";
+    private const string ModsSuffix = "/mods";
     private readonly RequestDelegate _next;
 
     public RoleEnforcementMiddleware(RequestDelegate next) { _next = next; }
@@ -34,6 +36,14 @@ public sealed class RoleEnforcementMiddleware
                 return;
             }
 
+            if (string.Equals(p, "/api/discover", StringComparison.OrdinalIgnoreCase)
+                || IsInstallJobEndpoint(p))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await ctx.Response.WriteAsync("Host discovery and install job details require an Admin token.");
+                return;
+            }
+
             if (IsServerEndpoint(p, FileContentSuffix))
             {
                 ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
@@ -44,6 +54,12 @@ public sealed class RoleEnforcementMiddleware
             if (IsServerEndpoint(p, ConfigSuffix))
             {
                 await InvokeWithRedactedConfigAsync(ctx);
+                return;
+            }
+
+            if (IsServerEndpoint(p, ModsSuffix))
+            {
+                await InvokeWithRedactedModsAsync(ctx);
                 return;
             }
         }
@@ -101,6 +117,40 @@ public sealed class RoleEnforcementMiddleware
         }
     }
 
+    private async Task InvokeWithRedactedModsAsync(HttpContext ctx)
+    {
+        var originalBody = ctx.Response.Body;
+        await using var buffer = new MemoryStream();
+        ctx.Response.Body = buffer;
+        try
+        {
+            await _next(ctx);
+            buffer.Position = 0;
+
+            if (ctx.Response.StatusCode is >= 200 and < 300)
+            {
+                using var reader = new StreamReader(buffer, leaveOpen: true);
+                var json = await reader.ReadToEndAsync(ctx.RequestAborted);
+                if (TryRedactModsFolder(json, out var redacted))
+                {
+                    ctx.Response.Body = originalBody;
+                    ctx.Response.ContentLength = null;
+                    await ctx.Response.WriteAsync(redacted, ctx.RequestAborted);
+                    return;
+                }
+            }
+
+            buffer.Position = 0;
+            ctx.Response.Body = originalBody;
+            ctx.Response.ContentLength = null;
+            await buffer.CopyToAsync(originalBody, ctx.RequestAborted);
+        }
+        finally
+        {
+            ctx.Response.Body = originalBody;
+        }
+    }
+
     private static bool TryRedactPasswordValues(string json, out string redacted)
     {
         redacted = json;
@@ -135,10 +185,30 @@ public sealed class RoleEnforcementMiddleware
         return true;
     }
 
+    private static bool TryRedactModsFolder(string json, out string redacted)
+    {
+        redacted = json;
+        JsonNode? node;
+        try { node = JsonNode.Parse(json); }
+        catch { return false; }
+        if (node is not JsonObject root || !root.ContainsKey("modsFolder")) return false;
+
+        root["modsFolder"] = null;
+        redacted = root.ToJsonString();
+        return true;
+    }
+
     private static string NormalizePath(string path)
     {
         if (path.Length <= 1) return path;
         return path.TrimEnd('/');
+    }
+
+    private static bool IsInstallJobEndpoint(string path)
+    {
+        if (!path.StartsWith(InstallJobPrefix, StringComparison.OrdinalIgnoreCase)) return false;
+        var jobId = path[InstallJobPrefix.Length..];
+        return jobId.Length > 0 && !jobId.Contains('/');
     }
 
     private static bool IsServerEndpoint(string path, string suffix)
