@@ -7,6 +7,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+concurrency:
+  group: build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -140,6 +144,29 @@ jobs:
 
       - name: Validate Web UI JavaScript
         run: node scripts/validate-webui.mjs
+
+      # These contracts used to run in five separate PR workflows.
+      # Keep coverage here without creating duplicate check suites.
+      - name: Validate repository SemVer
+        run: node scripts/version.mjs check
+
+      - name: Validate Runner architecture contract
+        run: node scripts/validate-arch01-runner.mjs
+
+      - name: Validate Runner protocol behavior
+        run: dotnet run --project tools/GameServerControl.RunnerCheck -c Release
+
+      - name: Validate update-health contract
+        run: node scripts/validate-update-health.mjs
+
+      - name: Validate SignalR performance contract
+        run: node scripts/validate-perf01-perf02.mjs
+
+      - name: Validate retention behavior
+        run: dotnet run --project tools/GameServerControl.PerformanceCheck -c Release
+
+      - name: Validate supply-chain contract
+        run: node scripts/validate-audit-supply-chain.mjs
 
       - name: Validate release workflow gate
         run: node scripts/validate-release-workflow.mjs

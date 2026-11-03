@@ -1,0 +1,48 @@
+name: Clean old PR workflow runs
+
+# Manual only. No token is supplied by the operator.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Preview only (uncheck to delete eligible runs)'
+        required: true
+        type: boolean
+        default: true
+      older_than_hours:
+        description: 'Delete successful PR runs older than N hours'
+        required: true
+        type: number
+        default: 24
+      keep_per_workflow:
+        description: 'Always retain the most recent N runs per workflow'
+        required: true
+        type: number
+        default: 5
+      max_deletions:
+        description: 'Maximum deletions per execution (1–1000)'
+        required: true
+        type: number
+        default: 400
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    name: Review or clean previous PR runs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Preview / clean successful PR workflow runs
+        run: node scripts/cleanup-workflow-runs.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          OLDER_THAN_HOURS: ${{ inputs.older_than_hours }}
+          KEEP_PER_WORKFLOW: ${{ inputs.keep_per_workflow }}
+          MAX_DELETIONS: ${{ inputs.max_deletions }}
