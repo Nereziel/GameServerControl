@@ -49,6 +49,7 @@ public sealed class RunnerWorker : BackgroundService
     private async Task MonitorProcessAsync(CancellationToken ct)
     {
         var attempts = 0;
+        var lastRecoveryAttempt = DateTimeOffset.MinValue;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -66,7 +67,17 @@ public sealed class RunnerWorker : BackgroundService
                     _logger.LogWarning("Crash recovery deferred: process status is unknown: {Error}", state.Error);
                     continue;
                 }
-                if (state.Pid is not null) continue;
+                if (state.Pid is not null)
+                {
+                    // Allow future recoveries after a sustained healthy run.
+                    if (lastRecoveryAttempt != DateTimeOffset.MinValue &&
+                        DateTimeOffset.UtcNow - lastRecoveryAttempt > TimeSpan.FromMinutes(10))
+                    {
+                        attempts = 0;
+                        lastRecoveryAttempt = DateTimeOffset.MinValue;
+                    }
+                    continue;
+                }
                 if (attempts >= 3)
                 {
                     _logger.LogError("Crash recovery exhausted three attempts. Restart the Runner service to reset recovery attempts.");
@@ -75,6 +86,7 @@ public sealed class RunnerWorker : BackgroundService
                 }
 
                 attempts++;
+                lastRecoveryAttempt = DateTimeOffset.UtcNow;
                 _logger.LogWarning("Unexpected server exit detected; recovery attempt {Attempt}/3.", attempts);
                 await Task.Delay(TimeSpan.FromSeconds(attempts * 10), ct);
                 if (!_processHost.RestartDesired) continue;
