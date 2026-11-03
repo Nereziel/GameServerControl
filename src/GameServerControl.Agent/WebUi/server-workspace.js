@@ -575,17 +575,7 @@ async function renderServerConsole(def, body) {
   });
 
   await connection.invoke('SubscribeConsole', [def.id]);
-  if (readOnly) {
-    await api(`/api/servers/${encodeURIComponent(def.id)}/logs/tail`, { method: 'POST', body: JSON.stringify({ action: 'start' }) });
-    SERVER_WORKSPACE.console = {
-      close() {
-        connection.close();
-        api(`/api/servers/${encodeURIComponent(def.id)}/logs/tail`, { method: 'POST', body: JSON.stringify({ action: 'stop' }) }).catch(() => {});
-      }
-    };
-  } else {
-    SERVER_WORKSPACE.console = connection;
-  }
+  SERVER_WORKSPACE.console = connection;
 }
 
 async function serverWorkspaceSendConsole(id) {
