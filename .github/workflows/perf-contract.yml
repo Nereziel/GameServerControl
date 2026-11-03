@@ -1,10 +1,7 @@
 name: PERF-01 + PERF-02 contract
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
