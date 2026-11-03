@@ -12,11 +12,10 @@ public sealed class SignalRIsolationIntegrationTests
     [Fact]
     public async Task Log_tail_reaches_only_the_subscribed_server_group()
     {
-        using var factory = new AgentTestFactory();
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
         var readOnlyToken = factory.CreateReadOnlyToken();
         await using var alpha = factory.CreateHubConnection(readOnlyToken);
         await using var beta = factory.CreateHubConnection(readOnlyToken);
-        using var client = factory.CreateClientWithToken(readOnlyToken);
 
         var liveStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var alphaSentinel = new TaskCompletionSource<LogLine>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -43,9 +42,6 @@ public sealed class SignalRIsolationIntegrationTests
 
         try
         {
-            using var started = await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "start" });
-            Assert.Equal(HttpStatusCode.OK, started.StatusCode);
-
             await liveStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await File.AppendAllTextAsync(factory.AlphaLogPath, sentinel + Environment.NewLine);
 
@@ -58,7 +54,6 @@ public sealed class SignalRIsolationIntegrationTests
         }
         finally
         {
-            try { await client.PostAsJsonAsync("/api/servers/alpha/logs/tail", new { action = "stop" }); } catch { }
             try { await alpha.StopAsync(); } catch { }
             try { await beta.StopAsync(); } catch { }
         }
@@ -73,7 +68,7 @@ public sealed class SignalRIsolationIntegrationTests
 
         var readOnlyToken = factory.CreateReadOnlyToken();
         await using var connection = factory.CreateHubConnection(readOnlyToken);
-        using var client = factory.CreateClientWithToken(readOnlyToken);
+        using var client = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
         var received = new List<LogLine>();
         var gate = new object();
 
@@ -194,9 +189,7 @@ public sealed class SignalRIsolationIntegrationTests
             await first.InvokeAsync("SubscribeConsole", "alpha");
             await second.InvokeAsync("SubscribeConsole", "alpha");
 
-            await WaitUntilAsync(
-                () => TailIsRunningAsync(adminClient, "alpha").GetAwaiter().GetResult(),
-                TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(() => TailIsRunningAsync(adminClient, "alpha"), TimeSpan.FromSeconds(5));
 
             await first.StopAsync();
             await Task.Delay(TimeSpan.FromMilliseconds(300));
@@ -207,9 +200,7 @@ public sealed class SignalRIsolationIntegrationTests
             Assert.Equal(sentinel, delivered.Text);
 
             await second.StopAsync();
-            await WaitUntilAsync(
-                () => !TailIsRunningAsync(adminClient, "alpha").GetAwaiter().GetResult(),
-                TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(async () => !await TailIsRunningAsync(adminClient, "alpha"), TimeSpan.FromSeconds(5));
         }
         finally
         {
@@ -338,6 +329,17 @@ public sealed class SignalRIsolationIntegrationTests
     {
         var deadline = DateTimeOffset.UtcNow + timeout;
         while (!condition())
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+                throw new TimeoutException("Timed out waiting for the integration-test condition.");
+            await Task.Delay(25);
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<Task<bool>> condition, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (!await condition())
         {
             if (DateTimeOffset.UtcNow >= deadline)
                 throw new TimeoutException("Timed out waiting for the integration-test condition.");
