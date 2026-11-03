@@ -66,6 +66,9 @@ public sealed class StatusHub : Hub
 
         if (mode == GameConsoleMode.LogOnly)
         {
+            if (!_logTail.Subscribe(serverId, Context.ConnectionId))
+                throw new HubException("Could not start live log for this server.");
+
             var backlogKey = RecentBacklogItemPrefix + serverId;
             if (!Context.Items.ContainsKey(backlogKey))
             {
@@ -79,6 +82,7 @@ public sealed class StatusHub : Hub
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
+        _logTail.UnsubscribeConnection(Context.ConnectionId);
         _local.UnsubscribeConsoleConnection(Context.ConnectionId);
         await base.OnDisconnectedAsync(exception);
     }
