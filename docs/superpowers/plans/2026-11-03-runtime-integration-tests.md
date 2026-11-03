@@ -4,7 +4,7 @@
 
 **Goal:** Add runtime integration coverage for Agent authentication/roles/health, SignalR server isolation, Runner protocol behavior, and Runner deprovision/delete lifecycle.
 
-**Architecture:** Use `WebApplicationFactory<Program>` against the real Agent entry point. Add only a `Testing` startup guard and an `IWindowsRunnerServiceManager` testability seam; replace that interface with an in-memory fake in integration tests while all HTTP middleware/endpoints and SignalR remain production wiring.
+**Architecture:** Use `WebApplicationFactory<Program>` against the real Agent entry point and keep normal startup behavior active. Add only a conventional public `Program` entry-point seam and an `IWindowsRunnerServiceManager` abstraction so tests can replace real Windows host mutations while exercising production middleware/endpoints/SignalR wiring.
 
 **Tech Stack:** .NET 8, ASP.NET Core `WebApplicationFactory`, TestServer, xUnit, SignalR .NET client.
 
@@ -15,12 +15,12 @@
 - Work only in `Nereziel/GameServerControl`.
 - Do not touch real Windows SCM, firewall, Scheduled Tasks or ACLs from integration tests.
 - Test data lives under a unique temporary directory and is cleaned up.
-- Production environments retain first-run token generation and the periodic status/relay loop unchanged.
+- First-run token handling and the periodic status/relay loop remain active in the integration host exactly as in production.
 - Existing ARCH/BUG/PERF/supply-chain contracts remain enabled.
 
 ## Review Focus
 
-- `Testing` environment must not silently alter normal production startup.
+- Test configuration must not create a special production startup mode.
 - SignalR tests must prove a beta subscriber never receives an alpha sentinel, not merely that alpha receives it.
 - ReadOnly authorization must be tested through the real middleware, including allowed GET and denied mutation.
 - Delete failure must leave the server definition intact; successful delete must call deprovision before removal and completion after removal.
@@ -28,7 +28,7 @@
 
 ## Implementation status
 
-The initial RED run compiled the Agent but failed the integration test project exactly because `Program` was not public and `IWindowsRunnerServiceManager` did not exist. The minimal entry-point/interface seams are now in place and compile; the next gate is the full runtime behavior suite on Windows and Linux.
+The initial RED run compiled the Agent but failed the integration project because `Program` was not public and `IWindowsRunnerServiceManager` did not exist. After adding those seams, the first runtime suite exposed a real cross-platform Runner validation defect: Linux did not treat `\\` as a separator when validating Windows process-name fields. The production validation now rejects both separator styles. The full 17-test runtime suite subsequently passed on both Ubuntu and Windows. A self-review then removed an unnecessary `Testing`-environment startup bypass; the runtime suite also passed with the normal production startup path active.
 
 ---
 
@@ -40,82 +40,67 @@ The initial RED run compiled the Agent but failed the integration test project e
 - Modify: `src/GameServerControl.Agent/Hyperv/LocalProcessService.cs`
 - Modify: `src/GameServerControl.Agent/Program.cs`
 
-**Interfaces:**
-- Produces: `IWindowsRunnerServiceManager` with `Supports`, `StartAsync`, `FindAsync`, `StopAsync`, `ConsoleStateAsync`, `PollConsoleStateAsync`, `SendConsoleInputAsync`, `KillExtrasAsync`, `GetAutostartAsync`, `SetAutostartAsync`, `DeprovisionAsync`, and `CompleteDeprovision`.
-- Produces: public partial `Program` for `WebApplicationFactory<Program>`.
-
-- [x] **Step 1: Write the integration test project and compile-only tests that reference `Program` and substitute `IWindowsRunnerServiceManager`.**
-- [x] **Step 2: Run the tests and verify RED because `Program` is not public and `IWindowsRunnerServiceManager` does not exist.**
-- [x] **Step 3: Add the interface, map it to the existing singleton manager in DI, switch consumers to the interface, expose `PollConsoleStateAsync`, and add `public partial class Program`.**
-- [x] **Step 4: Guard first-run token persistence and the periodic refresh loop with `!builder.Environment.IsEnvironment("Testing")`.**
-- [ ] **Step 5: Run the tests and verify the host starts without production startup side effects.**
+- [x] Write tests that reference `Program` and substitute `IWindowsRunnerServiceManager`.
+- [x] Verify RED on inaccessible `Program` / missing Runner interface.
+- [x] Add the interface, map it to the existing singleton manager, switch required consumers, expose `PollConsoleStateAsync`, and add `public partial class Program`.
+- [x] Keep first-run and background refresh startup behavior active; contain host mutations through temp configuration and the fake Runner.
+- [x] Verify the integration host runs the runtime suite successfully.
 
 ### Task 2: HTTP authentication, role and health integration tests
 
 **Files:**
-- Create: `tests/GameServerControl.Agent.IntegrationTests/GameServerControl.Agent.IntegrationTests.csproj`
-- Create: `tests/GameServerControl.Agent.IntegrationTests/AgentTestFactory.cs`
-- Create: `tests/GameServerControl.Agent.IntegrationTests/AuthenticationIntegrationTests.cs`
-- Create: `tests/GameServerControl.Agent.IntegrationTests/TestCollection.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/AgentTestFactory.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/AuthenticationIntegrationTests.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/TestCollection.cs`
 
-**Interfaces:**
-- `AgentTestFactory.CreateClientWithToken(string token)` returns a TestServer-backed `HttpClient`.
-- `AgentTestFactory.CreateReadOnlyToken()` creates a managed ReadOnly token through the real `TokenRegistry`.
-
-- [ ] **Step 1: Test unauthenticated `/api/health` -> 401 and Admin bearer `/api/health` -> 200 with `ok=true`.**
-- [ ] **Step 2: Test `/api/health?access_token=<admin>` -> 401 while header authentication succeeds.**
-- [ ] **Step 3: Test ReadOnly GET `/api/servers` -> 200 and does not expose seeded RCON/webhook plaintext.**
-- [ ] **Step 4: Test ReadOnly POST `/api/servers/reload` -> 403 and Admin POST -> 200.**
-- [ ] **Step 5: Run the test class and verify GREEN.**
+- [x] Unauthenticated `/api/health` -> 401; Admin bearer -> 200 with `ok=true`.
+- [x] `/api/health?access_token=<admin>` -> 401 while header authentication succeeds.
+- [x] ReadOnly GET `/api/servers` -> 200 without seeded RCON/webhook plaintext.
+- [x] ReadOnly POST `/api/servers/reload` -> 403; Admin POST -> 200.
+- [x] Verify the tests pass through the real middleware pipeline.
 
 ### Task 3: Runtime SignalR server-group isolation
 
 **Files:**
-- Create: `tests/GameServerControl.Agent.IntegrationTests/SignalRIsolationIntegrationTests.cs`
-- Modify: `tests/GameServerControl.Agent.IntegrationTests/AgentTestFactory.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/SignalRIsolationIntegrationTests.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/AgentTestFactory.cs`
 
-**Interfaces:**
-- `AgentTestFactory.CreateHubConnection(string token)` returns a LongPolling TestServer `HubConnection`.
-- Seeded servers `alpha` and `beta` have separate temporary log files.
-
-- [ ] **Step 1: Connect two authenticated hub clients and call `SubscribeConsole("alpha")` / `SubscribeConsole("beta")`.**
-- [ ] **Step 2: Start alpha log tail through `POST /api/servers/alpha/logs/tail`.**
-- [ ] **Step 3: Append a unique sentinel to alpha's log and assert alpha receives that `logLine` within 5 seconds.**
-- [ ] **Step 4: Keep beta listening through a bounded timeout and assert it never receives the alpha sentinel.**
-- [ ] **Step 5: Stop the tail/connections in `finally` and verify the test is GREEN on TestServer LongPolling.**
+- [x] Connect two authenticated TestServer LongPolling clients and subscribe to alpha/beta independently.
+- [x] Start alpha tail through the real API.
+- [x] Append a unique alpha sentinel and verify alpha receives it.
+- [x] Verify beta does not receive the alpha sentinel within a bounded observation window.
+- [x] Stop the tail and connections in cleanup.
 
 ### Task 4: Typed Runner protocol behavior tests
 
 **Files:**
-- Create: `tests/GameServerControl.Agent.IntegrationTests/RunnerProtocolTests.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/RunnerProtocolTests.cs`
+- `src/GameServerControl.Shared/RunnerProtocol.cs`
 
-- [ ] **Step 1: Assert deterministic identity for `alpha`, distinct identity for `beta`, and no raw path separators/`..` from a hostile server ID.**
-- [ ] **Step 2: Assert rooted Windows manifest paths validate while relative executable/working paths and path-valued stop process names fail.**
-- [ ] **Step 3: Assert `RunnerRequest` public properties are exactly `Command`, `Force`, `ConsoleInput`; non-console commands reject `ConsoleInput`.**
-- [ ] **Step 4: Assert console input accepts one bounded command and rejects blank, newline and >4096-character input.**
-- [ ] **Step 5: Run the test class and verify GREEN.**
+- [x] Assert deterministic/distinct/path-safe Runner identities.
+- [x] Assert rooted Windows manifest paths validate and relative paths fail.
+- [x] Assert path-valued stop-process names fail for both `/` and `\\` separators; fix the cross-platform validation defect found by RED testing.
+- [x] Assert the Runner request public schema contains only `Command`, `Force`, `ConsoleInput` and cannot carry launch metadata.
+- [x] Assert bounded single-line console input validation.
 
 ### Task 5: Runner deprovision/delete lifecycle integration tests
 
 **Files:**
-- Create: `tests/GameServerControl.Agent.IntegrationTests/FakeWindowsRunnerServiceManager.cs`
-- Create: `tests/GameServerControl.Agent.IntegrationTests/ServerDeleteIntegrationTests.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/FakeWindowsRunnerServiceManager.cs`
+- `tests/GameServerControl.Agent.IntegrationTests/ServerDeleteIntegrationTests.cs`
 
-**Interfaces:**
-- Fake implements `IWindowsRunnerServiceManager` and records `DeprovisionObservedServerPresent`, `DeprovisionCalls`, `CompleteCalls`; configurable `DeprovisionResult`.
-
-- [ ] **Step 1: Successful delete: assert fake sees the definition during deprovision, response is 204, registry no longer contains it, and `CompleteDeprovision` was called once afterward.**
-- [ ] **Step 2: Failed deprovision: return `(false, "blocked")`, assert response 502, definition still exists, and completion was not called.**
-- [ ] **Step 3: Run the lifecycle tests and verify GREEN.**
+- [x] Successful delete observes definition present during deprovision, returns 204, removes definition, then completes deprovision.
+- [x] Failed deprovision returns 502, preserves definition, and does not call completion.
+- [x] Verify both paths through the real DELETE endpoint.
 
 ### Task 6: Solution and CI integration
 
 **Files:**
 - Modify: `GameServerControl.sln`
-- Modify: `.github/workflows/build.yml`
+- Create: `.github/workflows/runtime-integration.yml`
 
-- [ ] **Step 1: Add the integration test project to the solution.**
-- [ ] **Step 2: Add `dotnet test tests/GameServerControl.Agent.IntegrationTests/GameServerControl.Agent.IntegrationTests.csproj -c Release --no-restore` to Windows Build after the Release build.**
-- [ ] **Step 3: On Linux, restore the integration test project, then run the same Release test command after the Agent build.**
-- [ ] **Step 4: Run full Windows/Linux Build CI plus ARCH-01, BUG-02, PERF and supply-chain contracts.**
-- [ ] **Step 5: Review changed files for test-only helpers, accidental production behavior changes and temporary workflows before marking the PR ready.**
+- [x] Add the integration test project to the solution so normal solution builds compile it.
+- [x] Add a dedicated Ubuntu/Windows `Runtime integration tests` matrix workflow running the full Release test suite.
+- [x] Keep runtime execution out of the existing Build jobs to avoid duplicate four-way execution while retaining normal Windows/Linux build/publish coverage.
+- [ ] Run final Windows/Linux Build CI plus runtime integration, ARCH-01, BUG-02, PERF and supply-chain contracts on the final normal-authored HEAD.
+- [ ] Review final changed files for temporary helpers, accidental production behavior changes and review feedback before marking PR ready.
