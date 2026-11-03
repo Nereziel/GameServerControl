@@ -6,6 +6,8 @@ using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Hyperv;
 
+internal readonly record struct RunnerPipeResult(RunnerResponse Response, bool TransportFailure);
+
 public sealed class WindowsRunnerPipeClient
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(4);
@@ -19,13 +21,22 @@ public sealed class WindowsRunnerPipeClient
         RunnerIdentityInfo identity,
         RunnerRequest request,
         CancellationToken ct = default)
+        => (await SendDetailedAsync(identity, request, ct)).Response;
+
+    internal async Task<RunnerPipeResult> SendDetailedAsync(
+        RunnerIdentityInfo identity,
+        RunnerRequest request,
+        CancellationToken ct = default)
     {
         var validation = request.Validate();
-        if (validation is not null) return new RunnerResponse(false, validation);
+        if (validation is not null)
+            return new RunnerPipeResult(new RunnerResponse(false, validation), TransportFailure: false);
 
         var payload = JsonSerializer.SerializeToUtf8Bytes(request, _json);
         if (payload.Length > RunnerProtocolLimits.MaxRequestBytes)
-            return new RunnerResponse(false, "Runner request exceeded the protocol limit.");
+            return new RunnerPipeResult(
+                new RunnerResponse(false, "Runner request exceeded the protocol limit."),
+                TransportFailure: false);
 
         try
         {
@@ -41,16 +52,21 @@ public sealed class WindowsRunnerPipeClient
 
             await WriteFrameAsync(pipe, payload, ct);
             var responseBytes = await ReadFrameAsync(pipe, RunnerProtocolLimits.MaxResponseBytes, ct);
-            return JsonSerializer.Deserialize<RunnerResponse>(responseBytes, _json)
-                   ?? new RunnerResponse(false, "Runner returned an empty response.");
+            var response = JsonSerializer.Deserialize<RunnerResponse>(responseBytes, _json)
+                           ?? new RunnerResponse(false, "Runner returned an empty response.");
+            return new RunnerPipeResult(response, TransportFailure: false);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            return new RunnerResponse(false, "Runner pipe connection timed out.");
+            return new RunnerPipeResult(
+                new RunnerResponse(false, "Runner pipe connection timed out."),
+                TransportFailure: true);
         }
         catch (Exception ex)
         {
-            return new RunnerResponse(false, "Runner IPC failed: " + ex.Message);
+            return new RunnerPipeResult(
+                new RunnerResponse(false, "Runner IPC failed: " + ex.Message),
+                TransportFailure: true);
         }
     }
 

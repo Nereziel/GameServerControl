@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Xml.Linq;
 using GameServerControl.Shared;
@@ -11,6 +14,8 @@ public sealed class WindowsRunnerServiceManager
     private static readonly JsonSerializerOptions ManifestJson = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly WindowsRunnerPipeClient _client;
     private readonly ILogger<WindowsRunnerServiceManager> _logger;
+    private readonly ConcurrentDictionary<string, string> _provisionedFingerprints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _provisionGates = new(StringComparer.OrdinalIgnoreCase);
 
     public WindowsRunnerServiceManager(WindowsRunnerPipeClient client, ILogger<WindowsRunnerServiceManager> logger)
     {
@@ -83,8 +88,6 @@ public sealed class WindowsRunnerServiceManager
     {
         var provision = await EnsureProvisionedAsync(def, ct);
         if (!provision.Ok) return new RunnerResponse(false, provision.Error);
-        var started = await EnsureRunnerServiceRunningAsync(provision.Identity, ct);
-        if (!started.Ok) return new RunnerResponse(false, started.Error);
         return await SendWithRetryAsync(provision.Identity, request, ct);
     }
 
@@ -93,28 +96,55 @@ public sealed class WindowsRunnerServiceManager
         RunnerResponse last = new(false, "Runner did not respond.");
         for (var attempt = 0; attempt < 3; attempt++)
         {
-            last = await _client.SendAsync(identity, request, ct);
-            if (last.Ok || !last.Error?.Contains("IPC", StringComparison.OrdinalIgnoreCase) == true) return last;
+            var send = await _client.SendDetailedAsync(identity, request, ct);
+            last = send.Response;
+            if (!IsTransportFailure(send)) return last;
+
+            if (attempt == 0)
+            {
+                var started = await EnsureRunnerServiceRunningAsync(identity, ct);
+                if (!started.Ok) return new RunnerResponse(false, started.Error);
+            }
+            else if (attempt == 1)
+            {
+                await StopRunnerServiceAsync(identity, ct);
+                var restarted = await EnsureRunnerServiceRunningAsync(identity, ct);
+                if (!restarted.Ok) return new RunnerResponse(false, restarted.Error);
+            }
+
             if (attempt < 2) await Task.Delay(250, ct);
         }
         return last;
     }
+
+    private static bool IsTransportFailure(RunnerPipeResult result) => result.TransportFailure;
 
     private async Task<ProvisionResult> EnsureProvisionedAsync(ServerDef def, CancellationToken ct)
     {
         if (!Supports(def)) return ProvisionResult.Fail("Windows Runner is not applicable to this server.");
 
         var identity = RunnerIdentity.ForServer(def.Id);
-        var runnerExe = RunnerExecutablePath();
-        if (!File.Exists(runnerExe))
-            return ProvisionResult.Fail($"Runner executable is missing: {runnerExe}");
-        if (string.IsNullOrWhiteSpace(def.GuestWorkingDir) || !Directory.Exists(def.GuestWorkingDir))
-            return ProvisionResult.Fail("Server working directory does not exist.");
-
-        Directory.CreateDirectory(StateRoot());
-        var stateDirectory = StateDirectory(identity);
-        Directory.CreateDirectory(stateDirectory);
+        var fingerprint = ProvisionFingerprint(def);
         var manifestPath = ManifestPath(identity);
+        if (IsProvisionCached(def.Id, fingerprint, manifestPath))
+            return ProvisionResult.Success(identity);
+
+        var provisionGate = _provisionGates.GetOrAdd(def.Id, _ => new SemaphoreSlim(1, 1));
+        await provisionGate.WaitAsync(ct);
+        try
+        {
+            if (IsProvisionCached(def.Id, fingerprint, manifestPath))
+                return ProvisionResult.Success(identity);
+
+            var runnerExe = RunnerExecutablePath();
+            if (!File.Exists(runnerExe))
+                return ProvisionResult.Fail($"Runner executable is missing: {runnerExe}");
+            if (string.IsNullOrWhiteSpace(def.GuestWorkingDir) || !Directory.Exists(def.GuestWorkingDir))
+                return ProvisionResult.Fail("Server working directory does not exist.");
+
+            Directory.CreateDirectory(StateRoot());
+            var stateDirectory = StateDirectory(identity);
+            Directory.CreateDirectory(stateDirectory);
 
         var existingManifest = await ReadManifestAsync(manifestPath, ct);
         var autoStart = existingManifest?.AutoStart ?? false;
@@ -176,10 +206,40 @@ public sealed class WindowsRunnerServiceManager
             if (!migrated.Ok) return ProvisionResult.Fail(migrated.Error);
         }
 
-        var compatibility = await EnsureSatisfactoryCompatibilityAsync(def, identity, manifest, ct);
-        if (!compatibility.Ok) return ProvisionResult.Fail(compatibility.Error);
+            var compatibility = await EnsureSatisfactoryCompatibilityAsync(def, identity, manifest, ct);
+            if (!compatibility.Ok) return ProvisionResult.Fail(compatibility.Error);
 
-        return ProvisionResult.Success(identity);
+            _provisionedFingerprints[def.Id] = fingerprint;
+            return ProvisionResult.Success(identity);
+        }
+        finally
+        {
+            provisionGate.Release();
+        }
+    }
+
+    private bool IsProvisionCached(string serverId, string fingerprint, string manifestPath)
+        => _provisionedFingerprints.TryGetValue(serverId, out var cached)
+           && string.Equals(cached, fingerprint, StringComparison.Ordinal)
+           && File.Exists(manifestPath)
+           && File.Exists(RunnerExecutablePath());
+
+    private static string ProvisionFingerprint(ServerDef def)
+    {
+        var interactive = GameProfiles.FindFor(def)?.Capabilities.ConsoleMode == GameConsoleMode.Stdin;
+        var payload = JsonSerializer.Serialize(new
+        {
+            def.Id,
+            def.GuestExePath,
+            def.GuestWorkingDir,
+            StartArgs = def.StartArgs ?? Array.Empty<string>(),
+            def.SteamAppId,
+            StopProcessNames = def.StopProcessNames ?? Array.Empty<string>(),
+            SaveDirs = def.SaveDirs ?? Array.Empty<string>(),
+            def.ScheduledTaskName,
+            Interactive = interactive
+        });
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
     }
 
     private async Task<(bool Ok, string Error)> ReconcileAclsAsync(
