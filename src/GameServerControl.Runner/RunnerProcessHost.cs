@@ -142,19 +142,20 @@ public sealed class RunnerProcessHost
         }
     }
 
-    public RunnerResponse ConsoleState()
+    public RunnerResponse ConsoleState(long? afterSequence = null)
     {
+        var snapshot = SnapshotConsole(afterSequence);
         if (!_manifest.InteractiveConsole)
             return new RunnerResponse(true, Console: new RunnerConsoleSnapshot(
-                false, false, "This server does not use a stdin console.", LastSequence(), SnapshotConsole()));
+                false, false, "This server does not use a stdin console.", snapshot.LastSequence, snapshot.Lines));
 
         var attached = ResolveAttachedProcess();
         if (attached is null)
             return new RunnerResponse(true, Console: new RunnerConsoleSnapshot(
-                true, false, "No attached console. Restart the server through GameServerControl to attach stdin.", LastSequence(), SnapshotConsole()));
+                true, false, "No attached console. Restart the server through GameServerControl to attach stdin.", snapshot.LastSequence, snapshot.Lines));
 
         return new RunnerResponse(true, InputAvailable: true, Console: new RunnerConsoleSnapshot(
-            true, true, "Interactive console attached.", LastSequence(), SnapshotConsole()));
+            true, true, "Interactive console attached.", snapshot.LastSequence, snapshot.Lines));
     }
 
     public async Task<RunnerResponse> SendConsoleInputAsync(string? input, CancellationToken ct)
@@ -252,14 +253,15 @@ public sealed class RunnerProcessHost
         }
     }
 
-    private RunnerConsoleLine[] SnapshotConsole()
+    private (long LastSequence, RunnerConsoleLine[] Lines) SnapshotConsole(long? afterSequence)
     {
-        lock (_consoleGate) return _consoleLines.ToArray();
-    }
-
-    private long LastSequence()
-    {
-        lock (_consoleGate) return _nextSequence;
+        lock (_consoleGate)
+        {
+            var lines = afterSequence is null
+                ? _consoleLines.ToArray()
+                : _consoleLines.Where(line => line.Sequence > afterSequence.Value).ToArray();
+            return (_nextSequence, lines);
+        }
     }
 
     private static async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout, CancellationToken ct)
