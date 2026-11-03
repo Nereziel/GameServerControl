@@ -1,5 +1,7 @@
 from pathlib import Path
 
+# One-shot transform for the integration-test seam; the workflow removes this file after success.
+
 
 def replace_once(path: str, old: str, new: str) -> None:
     p = Path(path)
