@@ -28,4 +28,4 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Run runtime integration tests
-        run: dotnet test tests/GameServerControl.Agent.IntegrationTests/GameServerControl.Agent.IntegrationTests.csproj -c Release
+        run: dotnet test tests/GameServerControl.Agent.IntegrationTests/GameServerControl.Agent.IntegrationTests.csproj -c Release -p:WarningsAsErrors=CA1416
