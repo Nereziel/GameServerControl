@@ -32,10 +32,15 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           INPUT_TAG: ${{ github.event.inputs.tag }}
           REPOSITORY: ${{ github.repository }}
+          SOURCE_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            if [ "$SOURCE_REF" != "refs/heads/main" ]; then
+              echo "::error::Manual releases must run from main."
+              exit 1
+            fi
             tag="$INPUT_TAG"
             if git ls-remote --exit-code --tags "https://github.com/${REPOSITORY}.git" "refs/tags/${tag}" >/dev/null 2>&1; then
               echo "::error::Tag ${tag} already exists. Choose a new version; manual releases are built from current main."
@@ -45,7 +50,7 @@ jobs:
             tag="${GITHUB_REF#refs/tags/}"
           fi
 
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          if [[ ! "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Release tag must look like v1.1.2."
             exit 1
           fi
@@ -65,8 +70,12 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.ref }}
 
-      - name: Validate release SemVer
-        run: node scripts/version.mjs check "${{ needs.prepare.outputs.tag }}"
+      - name: Validate release tag and repository version format
+        env:
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          node scripts/version.mjs check
+          node scripts/version.mjs validate-tag "$RELEASE_TAG"
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
