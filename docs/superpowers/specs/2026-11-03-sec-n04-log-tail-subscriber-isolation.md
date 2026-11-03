@@ -16,7 +16,7 @@ The current Web UI exercises this global behavior directly: every LogOnly consol
 - Each SignalR connection/server pair is registered at most once.
 - Disconnecting one LogOnly subscriber must not stop the live tail while another subscriber to that server remains connected.
 - When the last SignalR subscriber leaves, a subscriber-owned tail may stop so it does not become an orphan background loop.
-- Existing ReadOnly HTTP `POST /api/servers/{id}/logs/tail` compatibility remains, but ReadOnly `start` and `stop` are side-effect free: they may report current tail state but must not create, cancel, or claim manual ownership of a tail.
+- Existing ReadOnly HTTP `POST /api/servers/{id}/logs/tail` compatibility remains, but ReadOnly calls are side-effect free: they may report current tail state but must not create, cancel, or claim manual ownership of a tail.
 - The same HTTP endpoint remains fully functional for Admin tokens as backward-compatible explicit global lifecycle control.
 - An Admin-started manual tail must not be stopped merely because the last SignalR subscriber disconnects.
 - An explicit Admin `stop` remains a global administrative override and may stop the current tail even if subscribers are connected.
@@ -28,11 +28,11 @@ The current Web UI exercises this global behavior directly: every LogOnly consol
 
 Move automatic live-tail ownership into the singleton `LogTailService`. Track subscriber connection IDs per server plus whether a tail was explicitly requested through the Admin HTTP API. `StatusHub.SubscribeConsole` registers LogOnly subscribers and `OnDisconnectedAsync` unregisters the connection. The first subscriber ensures a tail exists; the last subscriber cancels it only when no manual Admin start owns the tail.
 
-Keep the existing ReadOnly control-plane exception and Web UI calls for compatibility, but make the endpoint role-aware: ReadOnly calls validate the requested action and return current tail state without invoking `Start` or `Stop`; Admin calls retain current global semantics. This avoids coupling HTTP requests to SignalR connection identity and avoids breaking existing browser/client behavior.
+Keep the existing ReadOnly control-plane route and Web UI calls for compatibility, but intercept matching ReadOnly POSTs in `RoleEnforcementMiddleware` and return current tail state without invoking the mutating endpoint. Admin calls continue through to the existing endpoint and retain current global semantics. This avoids coupling HTTP requests to SignalR connection identity and avoids breaking existing browser/client behavior.
 
 ## Ruling
 
-The initial design proposed returning 403 for ReadOnly log-tail POSTs and removing the Web UI HTTP calls. During implementation review, a compatibility-preserving path was found: keep those calls side-effect free for ReadOnly while SignalR owns the actual automatic lifecycle. This fixes the cross-client availability problem with a smaller surface change and preserves existing clients. The authorization boundary remains safe because ReadOnly calls no longer mutate shared state.
+The initial design proposed returning 403 for ReadOnly log-tail POSTs and removing the Web UI HTTP calls. During implementation review, a compatibility-preserving path was found: keep those calls side-effect free for ReadOnly while SignalR owns the actual automatic lifecycle. This fixes the cross-client availability problem with a smaller surface change and preserves existing clients. The authorization boundary remains safe because ReadOnly calls no longer reach `Start` or `Stop`.
 
 ## Verification
 
