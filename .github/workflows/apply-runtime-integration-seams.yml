@@ -1,0 +1,46 @@
+name: Apply runtime integration seams
+
+on:
+  push:
+    branches: [test/runtime-integration]
+    paths:
+      - 'scripts/apply-runtime-integration-seams.py'
+      - '.github/workflows/apply-runtime-integration-seams.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: test/runtime-integration
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Apply seams and verify compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-runtime-integration-seams.py
+          dotnet build tests/GameServerControl.Agent.IntegrationTests/GameServerControl.Agent.IntegrationTests.csproj -c Release
+          git diff --check
+
+      - name: Commit seams and self-clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm scripts/apply-runtime-integration-seams.py .github/workflows/apply-runtime-integration-seams.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/GameServerControl.Agent/Program.cs \
+                  src/GameServerControl.Agent/Hyperv/LocalProcessService.cs \
+                  src/GameServerControl.Agent/Hyperv/WindowsRunnerServiceManager.cs
+          git commit -m 'refactor: expose runtime integration seams'
+          git push origin HEAD:test/runtime-integration
