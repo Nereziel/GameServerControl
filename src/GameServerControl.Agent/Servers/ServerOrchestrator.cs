@@ -530,7 +530,7 @@ public sealed class ServerOrchestrator
         // Never modify installed game files without first preserving all configured
         // save data. Operator can restore this named snapshot if SteamCMD fails.
         var preUpdate = await _backups.CreatePreUpdateAsync(id, ct);
-        if (!preUpdate.Ok)
+        if (!preUpdate.Success)
             return new ActionResult(false,
                 "Update cancelled: pre-update backup failed: " + preUpdate.Message, corr);
         await LogAsync(id, "backup", preUpdate.Message);
