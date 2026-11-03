@@ -79,17 +79,6 @@ function Assert-ReleaseAssetHash {
     }
 }
 
-function Set-AgentDirectoryAcl {
-    param([Parameter(Mandatory = $true)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return }
-
-    # Stable well-known SIDs avoid localized account-name issues. The managed service runs
-    # as LocalSystem, so these correspond to SYSTEM:(OI)(CI)F and
-    # BUILTIN\Administrators:(OI)(CI)F and are inherited by secret state files.
-    $aclOutput = & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' /T /C 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Failed to restrict Agent directory ACL: $($aclOutput -join ' | ')" }
-}
-
 function Set-RunnerDirectoryAcl {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return }
@@ -251,12 +240,6 @@ if ($runningRunnerServiceNames.Count -gt 0) {
     Write-Ok "Stopped $($runningRunnerServiceNames.Count) Runner service(s)."
 }
 
-if (Test-Path -LiteralPath $agentDir) {
-    Write-Step 'Restricting existing Agent state before upgrade'
-    Set-AgentDirectoryAcl -Path $agentDir
-    Write-Ok 'Existing Agent directory restricted to SYSTEM and local Administrators.'
-}
-
 Write-Step "Installing Agent to $agentDir"
 $preserve = @('appsettings.json', 'servers.json', 'tokens.json', 'public-relay.json')
 $backupDir = Join-Path $tmpRoot 'preserved'
@@ -276,7 +259,7 @@ if (Test-Path $agentDir) {
     $hadPreviousAgent = $true
 }
 New-Item -ItemType Directory -Force -Path $agentDir | Out-Null
-Set-AgentDirectoryAcl -Path $agentDir
+# Let the new Agent directory inherit the parent directory ACL; do not rewrite its ACL.
 Expand-Archive -Path $agentZip -DestinationPath $agentDir -Force
 foreach ($f in $preserve) {
     $src = Join-Path $backupDir $f
@@ -350,10 +333,6 @@ try {
     $cfgObj | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $appSettings -Encoding UTF8
     Write-Ok 'Configured Agent:SteamCmdPath and Agent:Repo.'
 } catch { throw "Failed to update $appSettings : $_" }
-
-Write-Step 'Restricting installed Agent state permissions'
-Set-AgentDirectoryAcl -Path $agentDir
-Write-Ok 'Agent directory restricted to SYSTEM and local Administrators.'
 
 function Invoke-Sc {
     param([string[]]$ScArgs, [string]$Label)
@@ -490,8 +469,6 @@ $expectedVersion = if ($tag.StartsWith('v', [StringComparison]::OrdinalIgnoreCas
 $healthUrl = Get-LocalAgentHealthUrl -Bind ([string]$cfgObj.Agent.Bind)
 $updateHealthTokenPath = Join-Path $agentDir '.update-health-token'
 $updateHealthToken = New-UpdateHealthToken -Path $updateHealthTokenPath
-Set-AgentDirectoryAcl -Path $agentDir
-Write-Skip 'Prepared restricted health-only update credential.'
 
 Write-Step "Starting $svcName"
 try {
