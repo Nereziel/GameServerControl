@@ -51,7 +51,10 @@ public sealed class RoleEnforcementMiddleware
             }
         }
 
-        var isWrite = ctx.Request.Method is "POST" or "PUT" or "DELETE" or "PATCH";
+        var isWrite = HttpMethods.IsPost(ctx.Request.Method)
+            || HttpMethods.IsPut(ctx.Request.Method)
+            || HttpMethods.IsDelete(ctx.Request.Method)
+            || HttpMethods.IsPatch(ctx.Request.Method);
         if (!isWrite || !p.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) || IsReadOnlyControlPost(ctx))
         {
             await _next(ctx);
