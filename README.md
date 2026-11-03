@@ -42,9 +42,20 @@ The built-in web dashboard is served by the Agent itself. For remote/public acce
 - Linux VPS: optional `GameServerControl.Relay` for exposing game ports from a public VPS through Tailscale to a GameServerControl Agent host.
 - Release artifacts are self-contained and do not require a preinstalled .NET runtime.
 
-## Windows install
+## Windows install / update
 
-Run PowerShell as Administrator. Download `GameServerControl-Install-Windows.ps1` and `SHA256SUMS` from the **same GitHub release**, verify the installer against the release manifest, then execute the verified local file:
+Open **PowerShell as Administrator**. Install or upgrade directly to the latest published stable GitHub Release with one command:
+
+```powershell
+irm https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/bootstrap.ps1 | iex
+```
+
+The bootstrap downloads the **release installer and SHA256SUMS from the same stable release**, verifies the installer's SHA-256, then runs the verified local file. It pins the resolved tag so installer assets cannot silently switch versions during installation. Existing Agent configuration is preserved by the installer.
+
+**Trust boundary:** the one-liner executes the small bootstrap directly from the mutable `main` branch via `iex`. The installer is hash-checked, but the bootstrap itself is **not** independently verified by this command. Use the following manual release-file method instead when you require an integrity-checked entry point:
+
+1. Download `GameServerControl-Install-Windows.ps1` and `SHA256SUMS` from the **same GitHub Release**.
+2. Run this in the directory containing both files:
 
 ```powershell
 $line = Get-Content .\SHA256SUMS | Where-Object { $_ -match 'GameServerControl-Install-Windows\.ps1$' } | Select-Object -First 1
@@ -55,7 +66,7 @@ if ($actual -ne $expected) { throw 'Installer SHA-256 mismatch.' }
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\GameServerControl-Install-Windows.ps1
 ```
 
-Do not pipe the mutable `main` branch installer directly into `Invoke-Expression`; release updates are intended to stay bound to a specific release and its SHA-256 manifest.
+Do not run the full mutable `main/deploy/windows/install.ps1` installer through `iex`: the bootstrap above uses release-pinned assets and verifies the actual installer before executing it.
 
 Default locations:
 
