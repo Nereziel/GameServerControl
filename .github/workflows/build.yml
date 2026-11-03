@@ -77,6 +77,9 @@ jobs:
       - name: Restore
         run: dotnet restore
 
+      - name: Validate Agent platform analyzer
+        run: dotnet build src/GameServerControl.Agent -c Release --no-restore -warnaserror:CA1416
+
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
@@ -208,7 +211,7 @@ jobs:
         run: dotnet restore src/GameServerControl.Agent
 
       - name: Build Agent (Release)
-        run: dotnet build src/GameServerControl.Agent -c Release --no-restore
+        run: dotnet build src/GameServerControl.Agent -c Release --no-restore -warnaserror:CA1416
 
       - name: Restore Relay
         run: dotnet restore src/GameServerControl.Relay
