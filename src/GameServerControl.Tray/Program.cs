@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -16,12 +17,20 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        using var mutex = new Mutex(true, @"Local\GameServerControl.Tray", out var createdNew);
-        if (!createdNew) return;
-
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        if (args.Contains("--copy-token", StringComparer.OrdinalIgnoreCase))
+        {
+            var root = new DirectoryInfo(AppContext.BaseDirectory).Parent?.FullName
+                ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+            TrayApplicationContext.CopyAgentToken(root, allowElevation: false);
+            return;
+        }
+
+        using var mutex = new Mutex(true, @"Local\GameServerControl.Tray", out var createdNew);
+        if (!createdNew) return;
 
         var adminUrl = "http://localhost:5099/";
         for (var i = 0; i < args.Length - 1; i++)
@@ -74,6 +83,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _statusItem = new ToolStripMenuItem("Agent: checking…") { Enabled = false };
         var openItem = new ToolStripMenuItem("Open administration", null, (_, _) => OpenAdministration());
+        var tokenItem = new ToolStripMenuItem("Copy Agent API token", null, (_, _) => CopyAgentToken(_installRoot, allowElevation: true));
+        var manageTokensItem = new ToolStripMenuItem("Manage API tokens…", null, (_, _) => OpenAdministration(manageTokens: true));
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
 
         _startItem = new ToolStripMenuItem("Start Agent", null, (_, _) => RunServiceAction("start"));
@@ -91,6 +102,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _statusItem,
             new ToolStripSeparator(),
             openItem,
+            tokenItem,
+            manageTokensItem,
             new ToolStripSeparator(),
             _startItem,
             _stopItem,
@@ -129,15 +142,88 @@ internal sealed class TrayApplicationContext : ApplicationContext
         RefreshServiceState();
     }
 
-    private void OpenAdministration()
+    private void OpenAdministration(bool manageTokens = false)
     {
         try
         {
-            Process.Start(new ProcessStartInfo(_adminUrl) { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo(manageTokens ? _adminUrl + "?manageTokens=1" : _adminUrl) { UseShellExecute = true });
         }
         catch (Exception ex)
         {
             ShowBalloon("Could not open administration", ex.Message, ToolTipIcon.Error);
+        }
+    }
+
+    // Only the local, reversible bootstrap credential can be displayed again.
+    // User-created tokens are stored as one-way hashes and shown on creation only.
+    private static string ReadBootstrapToken(string installRoot)
+    {
+        var configPath = Path.Combine(installRoot, "Agent", "appsettings.json");
+        using var config = JsonDocument.Parse(File.ReadAllText(configPath));
+        if (!config.RootElement.TryGetProperty("Agent", out var agent) ||
+            !agent.TryGetProperty("ApiToken", out var tokenValue))
+            throw new InvalidDataException("Agent:ApiToken is missing from appsettings.json.");
+
+        var stored = tokenValue.GetString();
+        if (string.IsNullOrWhiteSpace(stored))
+            throw new InvalidDataException("The Agent bootstrap token has not been generated yet.");
+        const string prefix = "enc:v1:dpapi:";
+        if (!stored.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            if (stored.StartsWith("enc:v1:", StringComparison.Ordinal))
+                throw new InvalidOperationException("This credential uses a non-Windows encryption format.");
+            return stored;
+        }
+
+        var cipher = Convert.FromBase64String(stored[prefix.Length..]);
+        var entropy = Encoding.UTF8.GetBytes("GameServerControl:Secret:v1");
+        var plaintext = ProtectedData.Unprotect(cipher, entropy, DataProtectionScope.LocalMachine);
+        try { return Encoding.UTF8.GetString(plaintext); }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
+    }
+
+    internal static void CopyAgentToken(string installRoot, bool allowElevation)
+    {
+        string token;
+        try { token = ReadBootstrapToken(installRoot); }
+        catch (UnauthorizedAccessException) when (allowElevation)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "GameServerControl.Tray.exe"),
+                    Arguments = "--copy-token",
+                    UseShellExecute = true,
+                    Verb = "runas"
+                });
+            }
+            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) { }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not request administrator access: " + ex.Message,
+                    "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            return;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Could not read the locally installed Agent token. " +
+                "Verify the Agent installation and file permissions.\n\n" + ex.Message,
+                "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(token);
+            MessageBox.Show("Agent API token copied to clipboard. Other local applications may read clipboard contents.",
+                "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Could not copy Agent API token: " + ex.Message,
+                "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
 

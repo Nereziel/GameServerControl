@@ -118,6 +118,7 @@ async function login(){
     clearTimeout(timeout);
     sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
     await boot();
+    if(new URLSearchParams(location.search).has("manageTokens"))openTokens();
   }catch(e){
     toast(e.name==='AbortError'?'Connection timed out. Check the Agent URL and service status.':'Connection failed: '+e.message,'err');
   }finally{
@@ -144,7 +145,7 @@ async function init(){
   const token=params.get('token'),url=params.get('url');
   if(token){CFG={url:(url||location.origin).replace(/\/+$/,''),token};sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));history.replaceState({},'',location.pathname+location.hash)}
   else{try{CFG=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')||{url:'',token:''}}catch{CFG={url:'',token:''}}}
-  if(CFG.url&&CFG.token){try{await api('/api/health');await boot();return}catch{sessionStorage.removeItem(CFG_KEY)}}
+  if(CFG.url&&CFG.token){try{await api('/api/health');await boot();if(params.has("manageTokens"))openTokens();return}catch{sessionStorage.removeItem(CFG_KEY)}}
   $('#login').classList.remove('hidden');
   $('#loginUrl').value=location.origin;
 }
