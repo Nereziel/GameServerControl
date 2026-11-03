@@ -91,7 +91,6 @@ builder.Services.AddSingleton<IGameRcon, PalworldRcon>();
 builder.Services.AddSingleton<RconService>();
 builder.Services.AddSingleton<LogTailService>();
 
-if (!builder.Environment.IsEnvironment("Testing"))
 {
     using var startupLoggerFactory = LoggerFactory.Create(b => b.AddConsole());
     var startupLogger = startupLoggerFactory.CreateLogger("FirstRunTokenGenerator");
@@ -566,8 +565,6 @@ api.MapDelete("/tokens/{id}", (string id, TokenRegistry tokens) =>
 
 app.MapHub<StatusHub>("/hubs/status").RequireAuthorization();
 
-if (!builder.Environment.IsEnvironment("Testing"))
-{
 _ = Task.Run(async () =>
 {
     var orch = app.Services.GetRequiredService<ServerOrchestrator>();
@@ -591,7 +588,6 @@ _ = Task.Run(async () =>
         catch (OperationCanceledException) { break; }
     }
 });
-}
 
 app.Run();
 
