@@ -6,11 +6,14 @@ namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// Rejects state-changing API requests from ReadOnly tokens and sanitizes sensitive GET responses.
-/// SignalR negotiation is outside /api and SendConsoleInput is independently Admin-only on the hub.
+/// A narrowly scoped POST used only to start/stop the caller's live-log subscription is treated as
+/// read control-plane traffic. SignalR negotiation is outside /api and SendConsoleInput is
+/// independently Admin-only on the hub.
 /// </summary>
 public sealed class RoleEnforcementMiddleware
 {
     private const string ServerPrefix = "/api/servers/";
+    private const string LogTailSuffix = "/logs/tail";
     private const string ConfigSuffix = "/config";
     private const string FileContentSuffix = "/files/content";
     private readonly RequestDelegate _next;
@@ -52,7 +55,7 @@ public sealed class RoleEnforcementMiddleware
             || HttpMethods.IsPut(ctx.Request.Method)
             || HttpMethods.IsDelete(ctx.Request.Method)
             || HttpMethods.IsPatch(ctx.Request.Method);
-        if (!isWrite || !p.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
+        if (!isWrite || !p.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) || IsReadOnlyControlPost(ctx, p))
         {
             await _next(ctx);
             return;
@@ -148,6 +151,19 @@ public sealed class RoleEnforcementMiddleware
             return false;
 
         var idLength = path.Length - ServerPrefix.Length - suffix.Length;
+        if (idLength <= 0) return false;
+        var serverId = path.Substring(ServerPrefix.Length, idLength).Trim('/');
+        return serverId.Length > 0 && !serverId.Contains('/');
+    }
+
+    private static bool IsReadOnlyControlPost(HttpContext ctx, string path)
+    {
+        if (!HttpMethods.IsPost(ctx.Request.Method)) return false;
+        if (!path.StartsWith(ServerPrefix, StringComparison.OrdinalIgnoreCase)
+            || !path.EndsWith(LogTailSuffix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var idLength = path.Length - ServerPrefix.Length - LogTailSuffix.Length;
         if (idLength <= 0) return false;
         var serverId = path.Substring(ServerPrefix.Length, idLength).Trim('/');
         return serverId.Length > 0 && !serverId.Contains('/');
