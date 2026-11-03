@@ -114,6 +114,7 @@ Optional marketplace/provider keys such as the CurseForge API key are kept serve
 - [ ] Port 5099 is not publicly forwarded.
 - [ ] `appsettings.json`, `servers.json`, `public-relay.json`, `tokens.json` and the Linux `secret-protection.key` have restricted filesystem permissions.
 - [ ] The Linux `secret-protection.key` is included in protected backups needed for host recovery/migration.
+- [ ] On Windows BareMetal, game processes run under per-server `GameServerControlRunner_<hash>` virtual service accounts rather than the LocalSystem Agent identity.
 - [ ] Admin and ReadOnly tokens are assigned appropriately.
 - [ ] Public browser access, if used, is protected by Cloudflare Access or an equivalent authentication layer.
 - [ ] Web UI responses include the restrictive Content Security Policy/security headers.
