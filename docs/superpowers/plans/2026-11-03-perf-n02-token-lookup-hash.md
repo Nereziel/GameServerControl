@@ -4,9 +4,9 @@
 
 **Goal:** Make managed-token lookup hash the presented credential once and eliminate allocations that scale with managed-token count.
 
-**Architecture:** Keep `TokenRegistry` and its persisted schema unchanged. `Lookup` computes one presented SHA-256 digest, then each stored hex digest is decoded into a stack buffer and compared with `CryptographicOperations.FixedTimeEquals`.
+**Architecture:** Keep `TokenRegistry` and its persisted schema unchanged. `Lookup` computes one normalized SHA-256 hex value for the presented credential, then compares it to each normalized stored hash in fixed time over allocation-free UTF-16 byte spans.
 
-**Tech Stack:** .NET 8, ASP.NET Core, xUnit, `System.Security.Cryptography`.
+**Tech Stack:** .NET 8, ASP.NET Core, xUnit, `System.Security.Cryptography`, `System.Runtime.InteropServices`.
 
 **Spec:** `docs/superpowers/specs/2026-11-03-perf-n02-token-lookup-hash.md`
 
@@ -35,7 +35,7 @@
 - Modify: `src/GameServerControl.Agent/Auth/TokenRegistry.cs`
 
 **Interfaces:**
-- Consumes: `TokenRegistry.Lookup(string)` and persisted `TokenHash` hex strings.
+- Consumes: `TokenRegistry.Lookup(string)` and persisted normalized `TokenHash` hex strings.
 - Produces: the same `Lookup` results with allocation cost independent of managed-token count.
 
 - [ ] **Step 1: Write the failing allocation regression**
@@ -50,7 +50,9 @@ Expected: FAIL because current `HashMatches` re-hashes the presented token and a
 
 - [ ] **Step 3: Implement the minimal optimization**
 
-In `TokenRegistry.Lookup`, compute `SHA256.HashData(Encoding.UTF8.GetBytes(presented))` once after the legacy-token check. Change `HashMatches` to accept the presented digest, decode each stored hash into `stackalloc byte[32]` via `Convert.TryFromHexString`, and retain `CryptographicOperations.FixedTimeEquals`.
+In `TokenRegistry.Lookup`, call `HashToken(presented)` once after the legacy-token check. Change `HashMatches` to accept that normalized presented hash and compare its fixed-length UTF-16 bytes to the normalized stored hash through `MemoryMarshal.AsBytes` and `CryptographicOperations.FixedTimeEquals`, with no per-token allocations.
+
+Ruling: the originally planned span decode via `Convert.FromHexString` is not available as an allocation-free destination-span API on the repository's .NET 8 target; fixed-time comparison of the already-normalized in-memory hex representation preserves the security property and allocation goal without changing target framework or storage format.
 
 - [ ] **Step 4: Verify GREEN and regression behavior**
 
