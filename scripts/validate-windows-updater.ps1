@@ -31,3 +31,46 @@ foreach ($required in @('SHA256SUMS', 'Get-FileHash', '$env:GSC_VERSION = $tag',
 }
 
 Write-Host 'Generated Windows updater helper syntax/security contract OK.'
+
+# Bootstrap is the only Windows installer entry point intended for "irm ... | iex".
+# It may execute text from main, but must never execute downloaded installer text:
+# installer bytes are pinned to one release and verified before powershell.exe -File.
+$bootstrapPath = 'deploy/windows/bootstrap.ps1'
+$bootstrapSource = Get-Content -LiteralPath $bootstrapPath -Raw
+$bootstrapTokens = $null
+$bootstrapErrors = $null
+$bootstrapAst = [System.Management.Automation.Language.Parser]::ParseInput(
+    $bootstrapSource, [ref]$bootstrapTokens, [ref]$bootstrapErrors)
+if ($bootstrapErrors.Count -gt 0) {
+    throw "Windows bootstrap has PowerShell syntax errors:" + (($bootstrapErrors | ForEach-Object { $_.Message }) -join '; ')
+}
+
+foreach ($required in @(
+    'releases/latest',
+    'releases/tags/$requestedTag',
+    'SHA256SUMS',
+    'GameServerControl-Install-Windows.ps1',
+    'Get-FileHash',
+    'if ($actual -ne $expected)',
+    '$env:GSC_VERSION = $tag',
+    '& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installerPath'
+)) {
+    if (-not $bootstrapSource.Contains($required, [StringComparison]::Ordinal)) {
+        throw "Windows bootstrap is missing a required release-verification step: $required"
+    }
+}
+
+$unsafeCommands = @($bootstrapAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.GetCommandName() -in @('Invoke-Expression', 'iex')
+}, $true))
+if ($unsafeCommands.Count -gt 0) {
+    throw 'Windows bootstrap must execute the verified installer file, never downloaded script text with iex.'
+}
+
+if ($bootstrapSource.Contains('raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/install.ps1')) {
+    throw 'Windows bootstrap must not download a mutable main-branch installer.'
+}
+
+Write-Host 'Windows release-verified one-line bootstrap syntax/security contract OK.'
