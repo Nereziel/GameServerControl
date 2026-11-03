@@ -17,12 +17,20 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        using var mutex = new Mutex(true, @"Local\GameServerControl.Tray", out var createdNew);
-        if (!createdNew) return;
-
         Application.SetHighDpiMode(HighDpiMode.SystemAware);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        if (args.Contains("--show-token", StringComparer.OrdinalIgnoreCase))
+        {
+            var root = new DirectoryInfo(AppContext.BaseDirectory).Parent?.FullName
+                ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
+            TrayApplicationContext.ShowAgentToken(root, allowElevation: false);
+            return;
+        }
+
+        using var mutex = new Mutex(true, @"Local\GameServerControl.Tray", out var createdNew);
+        if (!createdNew) return;
 
         var adminUrl = "http://localhost:5099/";
         for (var i = 0; i < args.Length - 1; i++)
@@ -75,7 +83,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _statusItem = new ToolStripMenuItem("Agent: checking…") { Enabled = false };
         var openItem = new ToolStripMenuItem("Open administration", null, (_, _) => OpenAdministration());
-        var tokenItem = new ToolStripMenuItem("Show Agent API token…", null, (_, _) => ShowAgentToken());
+        var tokenItem = new ToolStripMenuItem("Show Agent API token…", null, (_, _) => ShowAgentToken(_installRoot, allowElevation: true));
         var manageTokensItem = new ToolStripMenuItem("Manage API tokens…", null, (_, _) => OpenAdministration(manageTokens: true));
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
 
@@ -148,9 +156,9 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     // Only the local, reversible bootstrap credential can be displayed again.
     // User-created tokens are stored as one-way hashes and shown on creation only.
-    private string ReadBootstrapToken()
+    private static string ReadBootstrapToken(string installRoot)
     {
-        var configPath = Path.Combine(_installRoot, "Agent", "appsettings.json");
+        var configPath = Path.Combine(installRoot, "Agent", "appsettings.json");
         using var config = JsonDocument.Parse(File.ReadAllText(configPath));
         if (!config.RootElement.TryGetProperty("Agent", out var agent) ||
             !agent.TryGetProperty("ApiToken", out var tokenValue))
@@ -174,10 +182,30 @@ internal sealed class TrayApplicationContext : ApplicationContext
         finally { CryptographicOperations.ZeroMemory(plaintext); }
     }
 
-    private void ShowAgentToken()
+    internal static void ShowAgentToken(string installRoot, bool allowElevation)
     {
         string token;
-        try { token = ReadBootstrapToken(); }
+        try { token = ReadBootstrapToken(installRoot); }
+        catch (UnauthorizedAccessException) when (allowElevation)
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "GameServerControl.Tray.exe"),
+                    Arguments = "--show-token",
+                    UseShellExecute = true,
+                    Verb = "runas"
+                });
+            }
+            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) { }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Could not request administrator access: " + ex.Message,
+                    "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            return;
+        }
         catch (Exception ex)
         {
             MessageBox.Show("Could not read the locally installed Agent token. " +
