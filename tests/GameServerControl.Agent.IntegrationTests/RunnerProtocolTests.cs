@@ -63,7 +63,7 @@ public sealed class RunnerProtocolTests
             .OrderBy(x => x)
             .ToArray();
 
-        Assert.Equal(new[] { "AfterSequence", "Command", "ConsoleInput", "Force" }.OrderBy(x => x), names);
+        Assert.Equal(new[] { "AfterSequence", "Command", "ConsoleGeneration", "ConsoleInput", "Force" }.OrderBy(x => x), names);
     }
 
     [Fact]
@@ -73,13 +73,44 @@ public sealed class RunnerProtocolTests
         Assert.NotNull(property);
 
         var ctor = typeof(RunnerRequest).GetConstructors().Single();
-        var valid = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, 12L });
-        var negative = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, -1L });
-        var wrongCommand = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.Start, false, null, 12L });
+        var parameters = ctor.GetParameters();
+        var validArgs = parameters.Length == 5
+            ? new object?[] { RunnerCommand.ConsoleState, false, null, 12L, null }
+            : new object?[] { RunnerCommand.ConsoleState, false, null, 12L };
+        var negativeArgs = parameters.Length == 5
+            ? new object?[] { RunnerCommand.ConsoleState, false, null, -1L, null }
+            : new object?[] { RunnerCommand.ConsoleState, false, null, -1L };
+        var wrongCommandArgs = parameters.Length == 5
+            ? new object?[] { RunnerCommand.Start, false, null, 12L, null }
+            : new object?[] { RunnerCommand.Start, false, null, 12L };
+
+        var valid = (RunnerRequest)ctor.Invoke(validArgs);
+        var negative = (RunnerRequest)ctor.Invoke(negativeArgs);
+        var wrongCommand = (RunnerRequest)ctor.Invoke(wrongCommandArgs);
 
         Assert.Null(valid.Validate());
         Assert.NotNull(negative.Validate());
         Assert.NotNull(wrongCommand.Validate());
+    }
+
+    [Fact]
+    public void Runner_request_console_generation_is_optional_bounded_and_console_state_only()
+    {
+        var property = typeof(RunnerRequest).GetProperty("ConsoleGeneration", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(property);
+
+        var ctor = typeof(RunnerRequest).GetConstructors().Single();
+        Assert.Equal(5, ctor.GetParameters().Length);
+
+        var valid = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, 12L, "0123456789abcdef0123456789abcdef" });
+        var wrongCommand = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.Start, false, null, null, "0123456789abcdef0123456789abcdef" });
+        var blank = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, 12L, " " });
+        var oversized = (RunnerRequest)ctor.Invoke(new object?[] { RunnerCommand.ConsoleState, false, null, 12L, new string('g', 129) });
+
+        Assert.Null(valid.Validate());
+        Assert.NotNull(wrongCommand.Validate());
+        Assert.NotNull(blank.Validate());
+        Assert.NotNull(oversized.Validate());
     }
 
     [Fact]
@@ -89,7 +120,7 @@ public sealed class RunnerProtocolTests
         Assert.NotNull(poll);
 
         Assert.Equal(
-            new[] { typeof(ServerDef), typeof(long), typeof(CancellationToken) },
+            new[] { typeof(ServerDef), typeof(string), typeof(long), typeof(CancellationToken) },
             poll.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
     }
 

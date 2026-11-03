@@ -11,6 +11,7 @@ public static class RunnerProtocolLimits
     public const int MaxConsoleLines = 400;
     public const int MaxConsoleChars = 200_000;
     public const int MaxConsoleLineChars = 16_384;
+    public const int MaxConsoleGenerationChars = 128;
 }
 
 public sealed record RunnerIdentityInfo(
@@ -89,7 +90,8 @@ public sealed record RunnerRequest(
     RunnerCommand Command,
     bool Force = false,
     string? ConsoleInput = null,
-    long? AfterSequence = null)
+    long? AfterSequence = null,
+    string? ConsoleGeneration = null)
 {
     public string? Validate()
     {
@@ -97,6 +99,15 @@ public sealed record RunnerRequest(
         if (AfterSequence is < 0) return "Console sequence cursor must not be negative.";
         if (Command != RunnerCommand.ConsoleState && AfterSequence is not null)
             return "AfterSequence is only valid for ConsoleState.";
+        if (ConsoleGeneration is not null)
+        {
+            if (Command != RunnerCommand.ConsoleState)
+                return "ConsoleGeneration is only valid for ConsoleState.";
+            if (string.IsNullOrWhiteSpace(ConsoleGeneration))
+                return "Console generation must not be blank.";
+            if (ConsoleGeneration.Length > RunnerProtocolLimits.MaxConsoleGenerationChars)
+                return "Console generation is too long.";
+        }
         if (Command != RunnerCommand.SendConsoleInput)
             return ConsoleInput is null ? null : "ConsoleInput is only valid for SendConsoleInput.";
 
@@ -118,7 +129,8 @@ public sealed record RunnerConsoleSnapshot(
     bool InputAvailable,
     string Message,
     long LastSequence,
-    RunnerConsoleLine[] Lines);
+    RunnerConsoleLine[] Lines,
+    string? Generation = null);
 
 public sealed record RunnerResponse(
     bool Ok,

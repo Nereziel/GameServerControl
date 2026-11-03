@@ -44,10 +44,10 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     public async Task<RunnerResponse> ConsoleStateAsync(ServerDef def, CancellationToken ct = default) =>
         await SendForServerAsync(def, new RunnerRequest(RunnerCommand.ConsoleState), ct);
 
-    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, long afterSequence, CancellationToken ct = default) =>
+    public Task<RunnerResponse> PollConsoleStateAsync(ServerDef def, string? consoleGeneration, long afterSequence, CancellationToken ct = default) =>
         _client.SendAsync(
             RunnerIdentity.ForServer(def.Id),
-            new RunnerRequest(RunnerCommand.ConsoleState, AfterSequence: afterSequence),
+            new RunnerRequest(RunnerCommand.ConsoleState, AfterSequence: afterSequence, ConsoleGeneration: consoleGeneration),
             ct);
 
     public async Task<RunnerResponse> SendConsoleInputAsync(ServerDef def, string command, CancellationToken ct = default) =>

@@ -99,7 +99,7 @@ public sealed class RunnerPipeServer
         RunnerCommand.Start => _processHost.StartAsync(ct),
         RunnerCommand.Find => _processHost.FindAsync(ct),
         RunnerCommand.Stop => _processHost.StopAsync(request.Force, ct),
-        RunnerCommand.ConsoleState => Task.FromResult(_processHost.ConsoleState(request.AfterSequence)),
+        RunnerCommand.ConsoleState => Task.FromResult(_processHost.ConsoleState(request.AfterSequence, request.ConsoleGeneration)),
         RunnerCommand.SendConsoleInput => _processHost.SendConsoleInputAsync(request.ConsoleInput, ct),
         RunnerCommand.KillExtras => _processHost.KillExtrasAsync(ct),
         _ => Task.FromResult(new RunnerResponse(false, "Unknown runner command."))
