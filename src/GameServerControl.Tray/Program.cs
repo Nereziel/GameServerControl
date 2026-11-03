@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -74,6 +75,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _statusItem = new ToolStripMenuItem("Agent: checking…") { Enabled = false };
         var openItem = new ToolStripMenuItem("Open administration", null, (_, _) => OpenAdministration());
+        var tokenItem = new ToolStripMenuItem("Show Agent API token…", null, (_, _) => ShowAgentToken());
+        var manageTokensItem = new ToolStripMenuItem("Manage API tokens…", null, (_, _) => OpenAdministration());
         openItem.Font = new Font(openItem.Font, FontStyle.Bold);
 
         _startItem = new ToolStripMenuItem("Start Agent", null, (_, _) => RunServiceAction("start"));
@@ -91,6 +94,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _statusItem,
             new ToolStripSeparator(),
             openItem,
+            tokenItem,
+            manageTokensItem,
             new ToolStripSeparator(),
             _startItem,
             _stopItem,
@@ -139,6 +144,76 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             ShowBalloon("Could not open administration", ex.Message, ToolTipIcon.Error);
         }
+    }
+
+    // Only the local, reversible bootstrap credential can be displayed again.
+    // User-created tokens are stored as one-way hashes and shown on creation only.
+    private string ReadBootstrapToken()
+    {
+        var configPath = Path.Combine(_installRoot, "Agent", "appsettings.json");
+        using var config = JsonDocument.Parse(File.ReadAllText(configPath));
+        if (!config.RootElement.TryGetProperty("Agent", out var agent) ||
+            !agent.TryGetProperty("ApiToken", out var tokenValue))
+            throw new InvalidDataException("Agent:ApiToken is missing from appsettings.json.");
+
+        var stored = tokenValue.GetString();
+        if (string.IsNullOrWhiteSpace(stored))
+            throw new InvalidDataException("The Agent bootstrap token has not been generated yet.");
+        const string prefix = "enc:v1:dpapi:";
+        if (!stored.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            if (stored.StartsWith("enc:v1:", StringComparison.Ordinal))
+                throw new InvalidOperationException("This credential uses a non-Windows encryption format.");
+            return stored;
+        }
+
+        var cipher = Convert.FromBase64String(stored[prefix.Length..]);
+        var entropy = Encoding.UTF8.GetBytes("GameServerControl:Secret:v1");
+        var plaintext = ProtectedData.Unprotect(cipher, entropy, DataProtectionScope.LocalMachine);
+        try { return Encoding.UTF8.GetString(plaintext); }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
+    }
+
+    private void ShowAgentToken()
+    {
+        string token;
+        try { token = ReadBootstrapToken(); }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Could not read the locally installed Agent token. " +
+                "Verify the Agent installation and file permissions.\n\n" + ex.Message,
+                "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        using var dialog = new Form
+        {
+            Text = "Agent API token",
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ClientSize = new Size(540, 154)
+        };
+        var field = new TextBox
+        {
+            ReadOnly = true, UseSystemPasswordChar = true,
+            Text = token, Location = new Point(16, 18), Width = 508
+        };
+        var visible = new CheckBox { Text = "Show token", Location = new Point(16, 58), AutoSize = true };
+        visible.CheckedChanged += (_, _) => field.UseSystemPasswordChar = !visible.Checked;
+        var copy = new Button { Text = "Copy", Location = new Point(348, 105), Width = 82 };
+        copy.Click += (_, _) =>
+        {
+            Clipboard.SetText(token);
+            MessageBox.Show("Token copied. Clipboard contents may be readable by other local applications.",
+                "GameServerControl", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        };
+        var close = new Button { Text = "Close", Location = new Point(442, 105), Width = 82, DialogResult = DialogResult.OK };
+        dialog.Controls.AddRange([field, visible, copy, close]);
+        dialog.AcceptButton = close;
+        dialog.ShowDialog();
+        field.Clear();
     }
 
     private void RefreshServiceState()
