@@ -249,7 +249,7 @@ public sealed class LocalProcessService
         {
             while (!ct.IsCancellationRequested)
             {
-                var response = await _windowsRunner.PollConsoleStateAsync(def, ct);
+                var response = await _windowsRunner.PollConsoleStateAsync(def, lastSequence, ct);
                 if (!response.Ok || response.Console is null)
                 {
                     consecutiveFailures++;
