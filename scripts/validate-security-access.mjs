@@ -26,6 +26,17 @@ rejectToken(roles, '/logs/tail', 'ReadOnly API policy must not special-case the 
 requireToken(hub, '_logTail.Subscribe(serverId, Context.ConnectionId)', 'ReadOnly LogOnly lifecycle must be tied to the authenticated SignalR connection');
 requireToken(hub, '_logTail.UnsubscribeConnection(Context.ConnectionId)', 'SignalR disconnect must release LogOnly tail ownership');
 
+requireToken(roles, 'string.Equals(p, "/api/discover", StringComparison.OrdinalIgnoreCase)',
+  'ReadOnly host discovery must be blocked before it can reveal filesystem paths');
+requireToken(roles, 'IsInstallJobEndpoint(p)',
+  'ReadOnly install-job details must be blocked before job lookup');
+requireToken(roles, 'private const string InstallJobPrefix = "/api/servers/install/"',
+  'Install-job ReadOnly guard must be scoped to the install progress route');
+requireToken(roles, 'InvokeWithRedactedModsAsync(ctx)',
+  'ReadOnly mod listing must pass through response redaction');
+requireToken(roles, 'root["modsFolder"] = null;',
+  'ReadOnly mod listing must not expose the absolute mods folder');
+
 requireToken(audit, 'Agent:CloudGateway:TrustedTokenIds', 'Cloud audit identity must be bound to explicitly trusted Agent token ids');
 requireToken(audit, '_trustedGatewayTokenIds.Contains(tokenId)', 'Cloud audit headers must be tied to the authenticated trusted token id');
 requireToken(audit, 'TokenAuthHandler.TokenIdClaim', 'Audit entries must record authenticated token ids');
