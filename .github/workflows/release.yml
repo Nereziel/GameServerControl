@@ -177,6 +177,7 @@ jobs:
           -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
           -p:FileVersion=${{ needs.prepare.outputs.version }}.0
           -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -p:IncludeSourceRevisionInInformationalVersion=false
           -o publish/Agent-windows
 
       - name: Publish runner (win-x64, self-contained)
@@ -186,6 +187,7 @@ jobs:
           -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
           -p:FileVersion=${{ needs.prepare.outputs.version }}.0
           -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -p:IncludeSourceRevisionInInformationalVersion=false
           -o publish/Runner-windows
 
       - name: Publish tray helper (win-x64, self-contained)
@@ -196,6 +198,7 @@ jobs:
           -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
           -p:FileVersion=${{ needs.prepare.outputs.version }}.0
           -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -p:IncludeSourceRevisionInInformationalVersion=false
           -o publish/Tray-windows
 
       - name: Verify Windows binary versions
@@ -258,6 +261,7 @@ jobs:
           -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
           -p:FileVersion=${{ needs.prepare.outputs.version }}.0
           -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -p:IncludeSourceRevisionInInformationalVersion=false
           -o publish/Agent-linux
 
       - name: Publish relay (linux-x64, self-contained)
@@ -267,6 +271,7 @@ jobs:
           -p:AssemblyVersion=${{ needs.prepare.outputs.version }}.0
           -p:FileVersion=${{ needs.prepare.outputs.version }}.0
           -p:InformationalVersion=${{ needs.prepare.outputs.version }}
+          -p:IncludeSourceRevisionInInformationalVersion=false
           -o publish/Relay-linux
 
       - name: Stage deploy artifacts
