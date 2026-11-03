@@ -116,6 +116,60 @@ public sealed class SignalRIsolationIntegrationTests
     }
 
     [Fact]
+    public async Task LogOnly_subscription_delivers_recent_backlog_once_per_connection()
+    {
+        using var factory = new AgentTestFactory(alphaUsesLogProfile: true);
+        var history = "caller-history-" + Guid.NewGuid().ToString("N");
+        await File.WriteAllTextAsync(factory.AlphaLogPath, history + Environment.NewLine);
+
+        var readOnlyToken = factory.CreateReadOnlyToken();
+        await using var first = factory.CreateHubConnection(readOnlyToken);
+        await using var second = factory.CreateHubConnection(readOnlyToken);
+        var firstReceived = new List<LogLine>();
+        var secondReceived = new List<LogLine>();
+        var firstGate = new object();
+        var secondGate = new object();
+
+        first.On<LogLine>("logLine", line =>
+        {
+            if (line.ServerId != "alpha") return;
+            lock (firstGate) firstReceived.Add(line);
+        });
+        second.On<LogLine>("logLine", line =>
+        {
+            if (line.ServerId != "alpha") return;
+            lock (secondGate) secondReceived.Add(line);
+        });
+
+        await first.StartAsync();
+        await second.StartAsync();
+        try
+        {
+            await first.InvokeAsync("SubscribeConsole", "alpha");
+            await WaitUntilAsync(() =>
+            {
+                lock (firstGate) return firstReceived.Count(line => line.Text == history) == 1;
+            }, TimeSpan.FromSeconds(5));
+
+            await first.InvokeAsync("SubscribeConsole", "alpha");
+            await Task.Delay(TimeSpan.FromMilliseconds(500));
+            lock (firstGate)
+                Assert.Equal(1, firstReceived.Count(line => line.Text == history));
+
+            await second.InvokeAsync("SubscribeConsole", "alpha");
+            await WaitUntilAsync(() =>
+            {
+                lock (secondGate) return secondReceived.Count(line => line.Text == history) == 1;
+            }, TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            try { await first.StopAsync(); } catch { }
+            try { await second.StopAsync(); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Windows_runner_console_generation_change_replays_new_generation_from_sequence_one()
     {
         if (!OperatingSystem.IsWindows()) return;
