@@ -129,11 +129,27 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 var app = builder.Build();
 
-app.MapGet("/", () =>
+var webUiDirectory = Path.Combine(AppContext.BaseDirectory, "WebUi");
+// Fingerprint the deployed asset bytes, not the assembly version. A rebuilt or
+// updated WebUI always gets a new URL, even when the app version is unchanged.
+using var webUiHasher = System.Security.Cryptography.IncrementalHash.CreateHash(
+    System.Security.Cryptography.HashAlgorithmName.SHA256);
+foreach (var asset in new[] { "styles.css", "core.js", "server-admin.js", "jobs-mods.js", "config-backups.js", "server-workspace.js" })
 {
-    var htmlPath = Path.Combine(AppContext.BaseDirectory, "WebUi", "index.html");
+    var assetPath = Path.Combine(webUiDirectory, asset);
+    if (File.Exists(assetPath))
+        webUiHasher.AppendData(File.ReadAllBytes(assetPath));
+}
+var webUiAssetVersion = Convert.ToHexString(webUiHasher.GetHashAndReset())[..16].ToLowerInvariant();
+
+app.MapGet("/", (HttpContext context) =>
+{
+    context.Response.Headers.CacheControl = "no-store";
+    var htmlPath = Path.Combine(webUiDirectory, "index.html");
     return File.Exists(htmlPath)
-        ? Results.File(htmlPath, "text/html; charset=utf-8")
+        ? Results.Content(
+            File.ReadAllText(htmlPath).Replace("__GSC_ASSET_VERSION__", webUiAssetVersion),
+            "text/html; charset=utf-8")
         : Results.NotFound("WebUi/index.html missing in publish output");
 });
 
