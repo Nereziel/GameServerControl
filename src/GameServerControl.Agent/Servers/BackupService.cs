@@ -383,7 +383,7 @@ public sealed class BackupService
         Directory.CreateDirectory(serverDir);
         var safety = kind == BackupKind.SafetyArchive;
         var baseName = safety
-            ? $"{def.Id}-prerestore-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip"
+            ? $"{def.Id}-{(label == "Pre-update backup" ? "preupdate" : "prerestore")}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip"
             : $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip";
         var zipPath = UniqueArchivePath(serverDir, baseName);
         var createdAt = DateTimeOffset.UtcNow;
