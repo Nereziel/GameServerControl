@@ -20,6 +20,9 @@ public sealed class RunnerProcessHost
     private int _consoleChars;
     private long _nextSequence;
     private Process? _attachedProcess;
+    private volatile bool _restartDesired;
+
+    public bool RestartDesired => _restartDesired;
 
     public RunnerProcessHost(RunnerManifest manifest, ILogger<RunnerProcessHost> logger)
     {
@@ -31,7 +34,11 @@ public sealed class RunnerProcessHost
     {
         var existing = await FindAsync(ct);
         if (!existing.Ok) return existing;
-        if (existing.Pid is not null) return existing;
+        if (existing.Pid is not null)
+        {
+            _restartDesired = true;
+            return existing;
+        }
 
         try
         {
@@ -57,6 +64,7 @@ public sealed class RunnerProcessHost
             var process = Process.Start(psi);
             if (process is null) return new RunnerResponse(false, "Process.Start returned null.");
             if (interactive) AttachConsole(process);
+            _restartDesired = true;
             return new RunnerResponse(true, Pid: process.Id, InputAvailable: interactive);
         }
         catch (Exception ex)
@@ -106,6 +114,8 @@ public sealed class RunnerProcessHost
 
     public async Task<RunnerResponse> StopAsync(bool force, CancellationToken ct)
     {
+        // Operator-initiated stops must never trigger the crash-recovery monitor.
+        _restartDesired = false;
         var process = ResolveAttachedProcess();
         if (process is null)
         {
