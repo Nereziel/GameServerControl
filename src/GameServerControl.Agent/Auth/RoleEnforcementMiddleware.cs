@@ -24,7 +24,7 @@ public sealed class RoleEnforcementMiddleware
     {
         GameServerControl.Agent.Security.WebSecurityHeadersMiddleware.Apply(ctx.Response.Headers);
 
-        var p = ctx.Request.Path.Value ?? "";
+        var p = NormalizePath(ctx.Request.Path.Value ?? "");
         var roleClaim = ctx.User?.FindFirst(TokenAuthHandler.RoleClaim)?.Value;
         var isReadOnly = string.Equals(roleClaim, nameof(TokenRole.ReadOnly), StringComparison.OrdinalIgnoreCase);
 
@@ -55,7 +55,7 @@ public sealed class RoleEnforcementMiddleware
             || HttpMethods.IsPut(ctx.Request.Method)
             || HttpMethods.IsDelete(ctx.Request.Method)
             || HttpMethods.IsPatch(ctx.Request.Method);
-        if (!isWrite || !p.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) || IsReadOnlyControlPost(ctx))
+        if (!isWrite || !p.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) || IsReadOnlyControlPost(ctx, p))
         {
             await _next(ctx);
             return;
@@ -138,6 +138,12 @@ public sealed class RoleEnforcementMiddleware
         return true;
     }
 
+    private static string NormalizePath(string path)
+    {
+        if (path.Length <= 1) return path;
+        return path.TrimEnd('/');
+    }
+
     private static bool IsServerEndpoint(string path, string suffix)
     {
         if (!path.StartsWith(ServerPrefix, StringComparison.OrdinalIgnoreCase)
@@ -150,10 +156,9 @@ public sealed class RoleEnforcementMiddleware
         return serverId.Length > 0 && !serverId.Contains('/');
     }
 
-    private static bool IsReadOnlyControlPost(HttpContext ctx)
+    private static bool IsReadOnlyControlPost(HttpContext ctx, string path)
     {
         if (!HttpMethods.IsPost(ctx.Request.Method)) return false;
-        var path = ctx.Request.Path.Value ?? "";
         if (!path.StartsWith(ServerPrefix, StringComparison.OrdinalIgnoreCase)
             || !path.EndsWith(LogTailSuffix, StringComparison.OrdinalIgnoreCase))
             return false;
