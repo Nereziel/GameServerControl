@@ -66,6 +66,22 @@ public sealed class AuthenticationIntegrationTests
     }
 
     [Fact]
+    public async Task ReadOnly_trailing_slash_server_list_does_not_expose_plaintext_secrets()
+    {
+        using var factory = new AgentTestFactory();
+        var token = factory.CreateReadOnlyToken();
+        using var client = factory.CreateClientWithToken(token);
+
+        using var response = await client.GetAsync("/api/servers/");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("alpha", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("alpha-rcon-secret", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("alpha-webhook-secret", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ReadOnly_cannot_reload_servers_but_admin_can()
     {
         using var factory = new AgentTestFactory();
