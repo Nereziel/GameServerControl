@@ -92,8 +92,8 @@ if (manifestType != typeof(object))
 if (requestType != typeof(object) && commandType != typeof(object))
 {
     var properties = requestType.GetProperties(BindingFlags.Public | BindingFlags.Instance).Select(p => p.Name).OrderBy(x => x).ToArray();
-    var expected = new[] { "Command", "ConsoleInput", "Force" }.OrderBy(x => x).ToArray();
-    Check(properties.SequenceEqual(expected), "ARCH-01: RunnerRequest must not carry executable, path, argument, server-id or arbitrary command fields.");
+    var expected = new[] { "AfterSequence", "Command", "ConsoleInput", "Force" }.OrderBy(x => x).ToArray();
+    Check(properties.SequenceEqual(expected), "ARCH-01: RunnerRequest may carry only command controls plus the bounded console sequence cursor.");
 
     var ctor = requestType.GetConstructors().SingleOrDefault();
     var validate = requestType.GetMethod("Validate", BindingFlags.Public | BindingFlags.Instance);
@@ -102,20 +102,26 @@ if (requestType != typeof(object) && commandType != typeof(object))
         "ARCH-01: RunnerRequest.Validate() must return string?.");
     if (ctor is not null && validate is not null)
     {
-        object Cmd(string name, bool force = false, string? input = null)
+        object Cmd(string name, bool force = false, string? input = null, long? afterSequence = null)
         {
             var command = Enum.Parse(commandType, name);
-            return ctor.Invoke([command, force, input]);
+            return ctor.Invoke([command, force, input, afterSequence]);
         }
 
         var ping = Cmd("Ping");
         var validInput = Cmd("SendConsoleInput", input: "save");
         var newlineInput = Cmd("SendConsoleInput", input: "save\nquit");
         var oversizedInput = Cmd("SendConsoleInput", input: new string('x', 4097));
+        var validCursor = Cmd("ConsoleState", afterSequence: 12);
+        var negativeCursor = Cmd("ConsoleState", afterSequence: -1);
+        var wrongCursorCommand = Cmd("Start", afterSequence: 12);
         Check(validate.Invoke(ping, null) is null, "ARCH-01: Ping request should validate.");
         Check(validate.Invoke(validInput, null) is null, "ARCH-01: single bounded console command should validate.");
         Check(validate.Invoke(newlineInput, null) is string, "ARCH-01: console input containing newline must be rejected.");
         Check(validate.Invoke(oversizedInput, null) is string, "ARCH-01: console input over 4096 characters must be rejected.");
+        Check(validate.Invoke(validCursor, null) is null, "ARCH-01: non-negative ConsoleState cursor should validate.");
+        Check(validate.Invoke(negativeCursor, null) is string, "ARCH-01: negative ConsoleState cursor must be rejected.");
+        Check(validate.Invoke(wrongCursorCommand, null) is string, "ARCH-01: console cursor must not be accepted for non-ConsoleState commands.");
 
         var json = JsonSerializer.Serialize(ping, requestType);
         Check(!json.Contains("Executable", StringComparison.OrdinalIgnoreCase)
