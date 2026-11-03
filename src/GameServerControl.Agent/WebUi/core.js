@@ -102,11 +102,29 @@ async function loadProfiles(){
   if(!GAMES.length)throw new Error('Agent returned no installable game profiles.');
 }
 
+let LOGIN_PENDING=false;
 async function login(){
+  if(LOGIN_PENDING)return;
   const url=$('#loginUrl').value.trim().replace(/\/+$/,'');const token=$('#loginToken').value.trim();
   if(!url||!token)return toast('Agent URL and token are required.','err');
+  const button=$('#loginConnectBtn');
+  LOGIN_PENDING=true;
+  if(button){button.disabled=true;button.textContent='Connecting…'}
   CFG={url,token};
-  try{await api('/api/health');sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));await boot()}catch(e){toast('Connection failed: '+e.message,'err')}
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),12000);
+  try{
+    await api('/api/health',{signal:controller.signal});
+    clearTimeout(timeout);
+    sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
+    await boot();
+  }catch(e){
+    toast(e.name==='AbortError'?'Connection timed out. Check the Agent URL and service status.':'Connection failed: '+e.message,'err');
+  }finally{
+    clearTimeout(timeout);
+    LOGIN_PENDING=false;
+    if(button){button.disabled=false;button.textContent='Connect'}
+  }
 }
 function logout(){sessionStorage.removeItem(CFG_KEY);location.reload()}
 
@@ -357,7 +375,13 @@ function setNotice(msg,kind='info',persistent=false,title=null){
   clearNotice();n.className='noticebar '+(kind||'info');text.textContent=msg||'';head.textContent=title||(kind==='err'?'Error':kind==='ok'?'Done':'Status');n.classList.remove('hidden');
   if(!persistent)GSCUX.noticeTimer=setTimeout(clearNotice,kind==='err'?9000:5000);
 }
-toast=function(msg,kind=''){setNotice(msg,kind==='err'?'err':kind==='ok'?'ok':'info',false)};
+// The notice bar lives inside #app, so it is hidden while the login form is open.
+// Keep the floating toast available for login validation and connection errors.
+const showLoginToast=toast;
+toast=function(msg,kind=''){
+  if(!$('#login')?.classList.contains('hidden'))return showLoginToast(msg,kind);
+  setNotice(msg,kind==='err'?'err':kind==='ok'?'ok':'info',false);
+};
 
 boot=async function(){
   if(GSCUX.booted)return;GSCUX.booted=true;

@@ -33,6 +33,21 @@ function checkInlineScripts(html, tempDir, labelPrefix) {
 
 for (const file of files) check(file);
 
+// The login form must display errors outside #app, which is hidden until connected.
+// Guard against routing login errors only to the control-room notice bar.
+const coreSource = fs.readFileSync(path.join(webUiDir, 'core.js'), 'utf8');
+for (const required of [
+  'const showLoginToast=toast;',
+  "if(!$('#login')?.classList.contains('hidden'))return showLoginToast(msg,kind);",
+  'const timeout=setTimeout(()=>controller.abort(),12000);',
+  "button.textContent='Connecting…'",
+  "button.textContent='Connect'"
+]) {
+  if (!coreSource.includes(required)) {
+    throw new Error(`Web UI login feedback regression: missing ${required}`);
+  }
+}
+
 const htmlPath = path.join(webUiDir, 'index.html');
 const html = fs.readFileSync(htmlPath, 'utf8');
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gsc-webui-'));
