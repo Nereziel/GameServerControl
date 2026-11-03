@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using GameServerControl.Agent.Hubs;
 using GameServerControl.Agent.Servers;
@@ -17,7 +16,9 @@ public sealed class LogTailService : IDisposable
     private readonly IHubContext<StatusHub> _hub;
     private readonly ServerRegistry _registry;
     private readonly ILogger<LogTailService> _logger;
-    private readonly ConcurrentDictionary<string, TailHandle> _active = new();
+    private readonly object _gate = new();
+    private readonly Dictionary<string, TailHandle> _active = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, HashSet<string>> _serversByConnection = new(StringComparer.Ordinal);
 
     public LogTailService(IHubContext<StatusHub> hub, ServerRegistry registry, ILogger<LogTailService> logger)
     {
@@ -26,35 +27,78 @@ public sealed class LogTailService : IDisposable
         _logger = logger;
     }
 
-    public bool IsTailing(string serverId) => _active.ContainsKey(serverId);
+    public bool IsTailing(string serverId)
+    {
+        lock (_gate)
+            return _active.TryGetValue(serverId, out var handle) && !handle.Cts.IsCancellationRequested;
+    }
 
     public bool Start(string serverId)
     {
-        var def = _registry.Get(serverId);
-        if (def is null || string.IsNullOrWhiteSpace(def.LogPathInGuest)) return false;
-        if (def.HostingMode != HostingMode.BareMetal)
+        if (!TryGetTailPath(serverId, out var path)) return false;
+
+        lock (_gate)
         {
-            _logger.LogWarning("Log tail not yet supported for HostingMode={Mode}", def.HostingMode);
-            return false;
+            var handle = EnsureTailLocked(serverId, path);
+            handle.ManualRequested = true;
+            return !handle.Cts.IsCancellationRequested;
         }
-
-        var path = def.LogPathInGuest!;
-        var handle = _active.GetOrAdd(serverId, _ =>
-        {
-            var cts = new CancellationTokenSource();
-            var created = new TailHandle(cts);
-            created.Task = Task.Run(() => TailLoop(serverId, path, cts.Token));
-            return created;
-        });
-
-        return handle.Cts.IsCancellationRequested == false;
     }
 
     public bool Stop(string serverId)
     {
-        if (!_active.TryRemove(serverId, out var h)) return false;
-        try { h.Cts.Cancel(); } catch { /* ignore */ }
+        TailHandle? handle;
+        lock (_gate)
+        {
+            if (!_active.Remove(serverId, out handle)) return false;
+        }
+
+        Cancel(handle);
         return true;
+    }
+
+    public bool Subscribe(string serverId, string connectionId)
+    {
+        if (string.IsNullOrWhiteSpace(connectionId)) return false;
+        if (!TryGetTailPath(serverId, out var path)) return false;
+
+        lock (_gate)
+        {
+            var handle = EnsureTailLocked(serverId, path);
+            handle.Subscribers.Add(connectionId);
+
+            if (!_serversByConnection.TryGetValue(connectionId, out var servers))
+            {
+                servers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                _serversByConnection[connectionId] = servers;
+            }
+            servers.Add(serverId);
+            return true;
+        }
+    }
+
+    public void UnsubscribeConnection(string connectionId)
+    {
+        if (string.IsNullOrWhiteSpace(connectionId)) return;
+
+        List<TailHandle>? toCancel = null;
+        lock (_gate)
+        {
+            if (!_serversByConnection.Remove(connectionId, out var servers)) return;
+
+            foreach (var serverId in servers)
+            {
+                if (!_active.TryGetValue(serverId, out var handle)) continue;
+                handle.Subscribers.Remove(connectionId);
+                if (handle.Subscribers.Count != 0 || handle.ManualRequested) continue;
+
+                _active.Remove(serverId);
+                (toCancel ??= new List<TailHandle>()).Add(handle);
+            }
+        }
+
+        if (toCancel is null) return;
+        foreach (var handle in toCancel) Cancel(handle);
     }
 
     public async Task<LogLine[]> GetRecentAsync(
@@ -118,6 +162,38 @@ public sealed class LogTailService : IDisposable
             _logger.LogDebug(ex, "recent log read failed for {Path}", path);
             return Array.Empty<LogLine>();
         }
+    }
+
+    private bool TryGetTailPath(string serverId, out string path)
+    {
+        path = "";
+        var def = _registry.Get(serverId);
+        if (def is null || string.IsNullOrWhiteSpace(def.LogPathInGuest)) return false;
+        if (def.HostingMode != HostingMode.BareMetal)
+        {
+            _logger.LogWarning("Log tail not yet supported for HostingMode={Mode}", def.HostingMode);
+            return false;
+        }
+
+        path = def.LogPathInGuest!;
+        return true;
+    }
+
+    private TailHandle EnsureTailLocked(string serverId, string path)
+    {
+        if (_active.TryGetValue(serverId, out var existing) && !existing.Cts.IsCancellationRequested)
+            return existing;
+
+        var cts = new CancellationTokenSource();
+        var created = new TailHandle(cts);
+        _active[serverId] = created;
+        created.Task = Task.Run(() => TailLoop(serverId, path, cts.Token));
+        return created;
+    }
+
+    private static void Cancel(TailHandle handle)
+    {
+        try { handle.Cts.Cancel(); } catch { /* ignore */ }
     }
 
     private async Task TailLoop(string serverId, string path, CancellationToken ct)
@@ -186,7 +262,15 @@ public sealed class LogTailService : IDisposable
 
     public void Dispose()
     {
-        foreach (var kv in _active.ToArray()) Stop(kv.Key);
+        TailHandle[] handles;
+        lock (_gate)
+        {
+            handles = _active.Values.ToArray();
+            _active.Clear();
+            _serversByConnection.Clear();
+        }
+
+        foreach (var handle in handles) Cancel(handle);
     }
 
     private sealed class TailHandle
@@ -194,5 +278,7 @@ public sealed class LogTailService : IDisposable
         public TailHandle(CancellationTokenSource cts) { Cts = cts; }
         public CancellationTokenSource Cts { get; }
         public Task? Task { get; set; }
+        public bool ManualRequested { get; set; }
+        public HashSet<string> Subscribers { get; } = new(StringComparer.Ordinal);
     }
 }
