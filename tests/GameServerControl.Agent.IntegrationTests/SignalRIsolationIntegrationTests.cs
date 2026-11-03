@@ -17,7 +17,7 @@ public sealed class SignalRIsolationIntegrationTests
         var readOnlyToken = factory.CreateReadOnlyToken();
         await using var alpha = factory.CreateHubConnection(readOnlyToken);
         await using var beta = factory.CreateHubConnection(readOnlyToken);
-        using var client = factory.CreateClientWithToken(readOnlyToken);
+        using var client = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
 
         var liveStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var alphaSentinel = new TaskCompletionSource<LogLine>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -74,7 +74,7 @@ public sealed class SignalRIsolationIntegrationTests
 
         var readOnlyToken = factory.CreateReadOnlyToken();
         await using var connection = factory.CreateHubConnection(readOnlyToken);
-        using var client = factory.CreateClientWithToken(readOnlyToken);
+        using var client = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
         var received = new List<LogLine>();
         var gate = new object();
 
