@@ -50,6 +50,7 @@ builder.Services.AddSingleton<HypervService>();
 builder.Services.AddSingleton<GuestProcessService>();
 builder.Services.AddSingleton<WindowsRunnerPipeClient>();
 builder.Services.AddSingleton<WindowsRunnerServiceManager>();
+builder.Services.AddSingleton<IWindowsRunnerServiceManager>(sp => sp.GetRequiredService<WindowsRunnerServiceManager>());
 builder.Services.AddSingleton<LocalProcessService>();
 builder.Services.AddSingleton<ServerRegistry>();
 builder.Services.AddSingleton<ServerStore>();
@@ -90,6 +91,7 @@ builder.Services.AddSingleton<IGameRcon, PalworldRcon>();
 builder.Services.AddSingleton<RconService>();
 builder.Services.AddSingleton<LogTailService>();
 
+if (!builder.Environment.IsEnvironment("Testing"))
 {
     using var startupLoggerFactory = LoggerFactory.Create(b => b.AddConsole());
     var startupLogger = startupLoggerFactory.CreateLogger("FirstRunTokenGenerator");
@@ -217,7 +219,7 @@ api.MapDelete("/servers/{id}", async (
     string id,
     ServerRegistry reg,
     ServerStore store,
-    WindowsRunnerServiceManager runners,
+    IWindowsRunnerServiceManager runners,
     PublicRelayManager relay,
     CancellationToken ct) =>
 {
@@ -318,7 +320,7 @@ api.MapPost("/servers/{id}/logs/tail", (string id, LogTailRequest req, ServerReg
 api.MapGet("/servers/{id}/logs/tail", (string id, LogTailService tail) =>
     Results.Ok(new { tailing = tail.IsTailing(id) }));
 
-api.MapGet("/servers/{id}/autostart", async (string id, ServerRegistry reg, WindowsRunnerServiceManager runners, CancellationToken ct) =>
+api.MapGet("/servers/{id}/autostart", async (string id, ServerRegistry reg, IWindowsRunnerServiceManager runners, CancellationToken ct) =>
 {
     var def = reg.Get(id);
     if (def is null) return Results.NotFound();
@@ -327,7 +329,7 @@ api.MapGet("/servers/{id}/autostart", async (string id, ServerRegistry reg, Wind
     var enabled = await runners.GetAutostartAsync(def, ct);
     return Results.Ok(new { supported = true, enabled });
 });
-api.MapPost("/servers/{id}/autostart", async (string id, AutostartRequest req, ServerRegistry reg, WindowsRunnerServiceManager runners, CancellationToken ct) =>
+api.MapPost("/servers/{id}/autostart", async (string id, AutostartRequest req, ServerRegistry reg, IWindowsRunnerServiceManager runners, CancellationToken ct) =>
 {
     var def = reg.Get(id);
     if (def is null) return Results.NotFound();
@@ -564,6 +566,8 @@ api.MapDelete("/tokens/{id}", (string id, TokenRegistry tokens) =>
 
 app.MapHub<StatusHub>("/hubs/status").RequireAuthorization();
 
+if (!builder.Environment.IsEnvironment("Testing"))
+{
 _ = Task.Run(async () =>
 {
     var orch = app.Services.GetRequiredService<ServerOrchestrator>();
@@ -587,8 +591,11 @@ _ = Task.Run(async () =>
         catch (OperationCanceledException) { break; }
     }
 });
+}
 
 app.Run();
+
+public partial class Program { }
 
 public record RconCommandRequest(RconStandardCommand Command, string? Payload);
 public record AutostartRequest(bool Enabled);

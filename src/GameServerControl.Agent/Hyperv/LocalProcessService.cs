@@ -33,7 +33,7 @@ public sealed class LocalProcessService
     private readonly ILogger<LocalProcessService> _logger;
     private readonly ServerRegistry _registry;
     private readonly IHubContext<StatusHub> _hub;
-    private readonly WindowsRunnerServiceManager _windowsRunner;
+    private readonly IWindowsRunnerServiceManager _windowsRunner;
     private readonly ConcurrentDictionary<string, ConsoleSession> _consoleSessions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _runnerConsolePumps = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _firewallStates = new(StringComparer.OrdinalIgnoreCase);
@@ -42,7 +42,7 @@ public sealed class LocalProcessService
         ILogger<LocalProcessService> logger,
         ServerRegistry registry,
         IHubContext<StatusHub> hub,
-        WindowsRunnerServiceManager windowsRunner)
+        IWindowsRunnerServiceManager windowsRunner)
     {
         _logger = logger;
         _registry = registry;
