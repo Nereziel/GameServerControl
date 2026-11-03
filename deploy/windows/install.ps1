@@ -620,7 +620,7 @@ IconIndex=0
     }
 
     Write-Step 'API token access'
-    Write-Ok 'Open the tray menu > Show Agent API token to view/copy the local token.'
+    Write-Ok 'Open the tray menu > Copy Agent API token to copy the local token without displaying it.'
     Write-Ok 'Open the tray menu > Manage API tokens to create, replace or revoke additional tokens.'
     Write-Skip 'API tokens are not written to installer logs or console output.'
 }
