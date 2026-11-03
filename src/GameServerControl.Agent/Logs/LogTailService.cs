@@ -30,31 +30,57 @@ public sealed class LogTailService : IDisposable
 
     public bool Start(string serverId)
     {
-        var def = _registry.Get(serverId);
-        if (def is null || string.IsNullOrWhiteSpace(def.LogPathInGuest)) return false;
-        if (def.HostingMode != HostingMode.BareMetal)
+        if (!TryResolveTailPath(serverId, out var path)) return false;
+        return EnsureActive(serverId, path, handle => handle.ManualStart = true);
+    }
+
+    public bool Subscribe(string serverId, string connectionId)
+    {
+        if (string.IsNullOrWhiteSpace(connectionId)) return false;
+        if (!TryResolveTailPath(serverId, out var path)) return false;
+        return EnsureActive(serverId, path, handle => handle.Subscribers.Add(connectionId));
+    }
+
+    public void UnsubscribeConnection(string connectionId)
+    {
+        if (string.IsNullOrWhiteSpace(connectionId)) return;
+
+        foreach (var entry in _active.ToArray())
         {
-            _logger.LogWarning("Log tail not yet supported for HostingMode={Mode}", def.HostingMode);
-            return false;
+            var handle = entry.Value;
+            var cancel = false;
+            lock (handle.Gate)
+            {
+                if (!_active.TryGetValue(entry.Key, out var current) || !ReferenceEquals(current, handle))
+                    continue;
+                if (!handle.Subscribers.Remove(connectionId))
+                    continue;
+                if (handle.Subscribers.Count != 0 || handle.ManualStart)
+                    continue;
+
+                if (_active.TryRemove(entry.Key, out var removed) && ReferenceEquals(removed, handle))
+                    cancel = true;
+            }
+
+            if (cancel) Cancel(handle);
         }
-
-        var path = def.LogPathInGuest!;
-        var handle = _active.GetOrAdd(serverId, _ =>
-        {
-            var cts = new CancellationTokenSource();
-            var created = new TailHandle(cts);
-            created.Task = Task.Run(() => TailLoop(serverId, path, cts.Token));
-            return created;
-        });
-
-        return handle.Cts.IsCancellationRequested == false;
     }
 
     public bool Stop(string serverId)
     {
-        if (!_active.TryRemove(serverId, out var h)) return false;
-        try { h.Cts.Cancel(); } catch { /* ignore */ }
-        return true;
+        if (!_active.TryGetValue(serverId, out var handle)) return false;
+
+        var removed = false;
+        lock (handle.Gate)
+        {
+            if (!_active.TryGetValue(serverId, out var current) || !ReferenceEquals(current, handle))
+                return false;
+            if (_active.TryRemove(serverId, out var removedHandle) && ReferenceEquals(removedHandle, handle))
+                removed = true;
+        }
+
+        if (removed) Cancel(handle);
+        return removed;
     }
 
     public async Task<LogLine[]> GetRecentAsync(
@@ -118,6 +144,56 @@ public sealed class LogTailService : IDisposable
             _logger.LogDebug(ex, "recent log read failed for {Path}", path);
             return Array.Empty<LogLine>();
         }
+    }
+
+    private bool TryResolveTailPath(string serverId, out string path)
+    {
+        path = "";
+        var def = _registry.Get(serverId);
+        if (def is null || string.IsNullOrWhiteSpace(def.LogPathInGuest)) return false;
+        if (def.HostingMode != HostingMode.BareMetal)
+        {
+            _logger.LogWarning("Log tail not yet supported for HostingMode={Mode}", def.HostingMode);
+            return false;
+        }
+
+        path = def.LogPathInGuest!;
+        return true;
+    }
+
+    private bool EnsureActive(string serverId, string path, Action<TailHandle> register)
+    {
+        while (true)
+        {
+            var handle = GetOrAddHandle(serverId);
+            lock (handle.Gate)
+            {
+                if (handle.Cts.IsCancellationRequested
+                    || !_active.TryGetValue(serverId, out var current)
+                    || !ReferenceEquals(current, handle))
+                    continue;
+
+                register(handle);
+                handle.Task ??= Task.Run(() => TailLoop(serverId, path, handle.Cts.Token));
+                return true;
+            }
+        }
+    }
+
+    private TailHandle GetOrAddHandle(string serverId)
+    {
+        if (_active.TryGetValue(serverId, out var existing)) return existing;
+
+        var candidate = new TailHandle(new CancellationTokenSource());
+        var handle = _active.GetOrAdd(serverId, candidate);
+        if (!ReferenceEquals(handle, candidate))
+            candidate.Cts.Dispose();
+        return handle;
+    }
+
+    private static void Cancel(TailHandle handle)
+    {
+        try { handle.Cts.Cancel(); } catch { /* ignore */ }
     }
 
     private async Task TailLoop(string serverId, string path, CancellationToken ct)
@@ -192,7 +268,10 @@ public sealed class LogTailService : IDisposable
     private sealed class TailHandle
     {
         public TailHandle(CancellationTokenSource cts) { Cts = cts; }
+        public object Gate { get; } = new();
         public CancellationTokenSource Cts { get; }
+        public HashSet<string> Subscribers { get; } = new(StringComparer.Ordinal);
+        public bool ManualStart { get; set; }
         public Task? Task { get; set; }
     }
 }
