@@ -394,7 +394,7 @@ async function loadTokens() {
   if (!pane) return;
   try {
     const list = await api('/api/tokens');
-    pane.innerHTML = `<div class="callout info">Tokens authorize Agent API access. Raw token values are shown only once when created.</div><div class="section">Existing tokens</div>${list.length ? list.map(t => `<div class="job"><div class="jobtop"><div class="grow"><div class="jobname">${esc(t.name)}</div><div class="jobphase">${esc(t.id)} · ${esc(t.role)} · ${esc(t.token || '')}</div></div><button class="btn danger" ${uiAction('deleteToken',[t.id])}>Delete</button></div></div>`).join('') : '<div class="muted">No secondary tokens.</div>'}<div class="section">Create token</div><div class="formgrid three"><div class="field"><label>ID</label><input id="tokId" placeholder="laptop"></div><div class="field"><label>Name</label><input id="tokName" placeholder="Laptop admin"></div><div class="field"><label>Role</label><select id="tokRole"><option>Admin</option><option>ReadOnly</option></select></div></div><button class="btn primary" ${uiAction('createToken')}>Create token</button><div id="newTokenBox"></div>`;
+    pane.innerHTML = `<div class="callout info">Tokens authorize Agent API access. Raw token values are shown only once when created.</div><div class="section">Existing tokens</div>${list.length ? list.map(t => `<div class="job"><div class="jobtop"><div class="grow"><div class="jobname">${esc(t.name)}</div><div class="jobphase">${esc(t.id)} · ${esc(t.role)} · ${esc(t.token || '')}</div></div><button class="btn" ${uiAction('replaceToken',[t.id,t.name,t.role])}>Replace</button><button class="btn danger" ${uiAction('deleteToken',[t.id])}>Delete</button></div></div>`).join('') : '<div class="muted">No secondary tokens.</div>'}<div class="section">Create token</div><div class="formgrid three"><div class="field"><label>ID</label><input id="tokId" placeholder="laptop"></div><div class="field"><label>Name</label><input id="tokName" placeholder="Laptop admin"></div><div class="field"><label>Role</label><select id="tokRole"><option>Admin</option><option>ReadOnly</option></select></div></div><button class="btn primary" ${uiAction('createToken')}>Create token</button><div id="newTokenBox"></div>`;
   } catch (e) {
     pane.innerHTML = `<div class="empty">${esc(e.message)}<br><br>This action requires an Admin token.</div>`;
   }
@@ -425,6 +425,39 @@ async function copyNewToken() {
   if (!value) return;
   try { await navigator.clipboard.writeText(value); toast('Token copied.', 'ok'); }
   catch (e) { toast('Could not copy token: ' + e.message, 'err'); }
+}
+
+// Rotate a managed token in two steps so the new credential is copied before revocation.
+let PENDING_TOKEN_REPLACEMENT = null;
+async function replaceToken(oldId, name, role) {
+  if (PENDING_TOKEN_REPLACEMENT) return toast('Finish or cancel the pending token replacement first.', 'err');
+  if (!confirm('Create a new ' + role + ' token to replace ' + oldId + '? The old token stays valid until you confirm revocation.')) return;
+  const id = 'replacement-' + crypto.randomUUID().slice(0, 12);
+  try {
+    const r = await api('/api/tokens', {
+      method: 'POST', body: JSON.stringify({ id, name: name + ' (replacement)', role })
+    });
+    PENDING_TOKEN_REPLACEMENT = { oldId, id };
+    await loadTokens();
+    const box = $('#newTokenBox');
+    if (box) {
+      box.innerHTML = `<div class="callout info"><b>New token created. Copy and save it before revoking the old token.</b><div class="consolebar"><input id="rawNewToken" class="input mono" readonly value="${esc(r.token || '')}"><button class="btn" ${uiAction('copyNewToken')}>Copy</button></div><button class="btn danger" ${uiAction('finishTokenReplacement')}>I've saved it — revoke old token</button><button class="btn" ${uiAction('cancelTokenReplacement')}>Keep both</button></div>`;
+    }
+  } catch (e) { toast('Token replacement failed: ' + e.message, 'err'); }
+}
+async function finishTokenReplacement() {
+  const pending = PENDING_TOKEN_REPLACEMENT;
+  if (!pending || !confirm('Revoke the old token ' + pending.oldId + '? Existing sessions using it will lose access.')) return;
+  try {
+    await api('/api/tokens/' + encodeURIComponent(pending.oldId), { method: 'DELETE' });
+    PENDING_TOKEN_REPLACEMENT = null;
+    await loadTokens();
+    toast('Old token revoked. The replacement is now active.', 'ok');
+  } catch (e) { toast('Old token revocation failed: ' + e.message, 'err'); }
+}
+function cancelTokenReplacement() {
+  PENDING_TOKEN_REPLACEMENT = null;
+  loadTokens();
 }
 
 async function deleteToken(id) {
