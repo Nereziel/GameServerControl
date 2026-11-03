@@ -120,7 +120,7 @@ public sealed class RunnerProtocolTests
         Assert.NotNull(poll);
 
         Assert.Equal(
-            new[] { typeof(ServerDef), typeof(long), typeof(CancellationToken) },
+            new[] { typeof(ServerDef), typeof(string), typeof(long), typeof(CancellationToken) },
             poll.GetParameters().Select(parameter => parameter.ParameterType).ToArray());
     }
 
