@@ -31,6 +31,23 @@ public sealed class RoleEnforcementMiddlewareTests
     }
 
     [Fact]
+    public async Task ReadOnly_log_tail_control_post_is_forbidden()
+    {
+        var nextCalled = false;
+        var middleware = new RoleEnforcementMiddleware(_ =>
+        {
+            nextCalled = true;
+            return Task.CompletedTask;
+        });
+        var context = CreateReadOnlyContext(HttpMethods.Post, "/api/servers/alpha/logs/tail");
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.False(nextCalled);
+    }
+
+    [Fact]
     public async Task ReadOnly_trailing_slash_raw_file_content_is_forbidden()
     {
         var nextCalled = false;
