@@ -19,9 +19,9 @@ Remove per-token hashing and avoid per-token temporary hash allocations during m
 
 ## Approaches
 
-### Chosen: hash once and compare with stack-backed decoded hashes
+### Chosen: hash once and compare normalized hex in fixed time
 
-Compute the presented digest once after the legacy-token check. For each managed token, decode its validated 64-character hex digest into a 32-byte stack buffer and use `CryptographicOperations.FixedTimeEquals`. This removes repeated SHA-256 work and per-token byte-array allocations while keeping the stored representation unchanged.
+Compute the presented SHA-256 hash once after the legacy-token check and normalize it to the same lowercase 64-character hex representation already used in memory. Compare that fixed-length UTF-16 hex value to each validated stored hash with `CryptographicOperations.FixedTimeEquals` over `MemoryMarshal.AsBytes` spans. This removes repeated SHA-256 work and per-token byte-array allocations while keeping the stored representation unchanged and remaining compatible with .NET 8.
 
 ### Rejected: build an in-memory dictionary keyed by token hash
 
@@ -29,7 +29,7 @@ This would make lookup O(1), but dictionary lookup is not constant-time with res
 
 ### Rejected: cache decoded hashes beside persisted records
 
-This also removes per-token decoding allocations, but requires a parallel runtime model or cache lifecycle. The stack-buffer approach is smaller and sufficient for PERF-N02.
+This removes per-token decoding allocations, but requires a parallel runtime model or cache lifecycle. Fixed-time comparison of the already-normalized in-memory hex strings is smaller and sufficient for PERF-N02.
 
 ## Verification
 
