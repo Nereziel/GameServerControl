@@ -87,35 +87,8 @@ jobs:
       - name: Build (Release)
         run: dotnet build -c Release --no-restore
 
-      - name: Publish agent (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r win-x64 --self-contained true -o publish/Agent-windows
-
-      - name: Publish runner (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Runner -c Release -r win-x64 --self-contained true -o publish/Runner-windows
-
-      - name: Publish tray helper (win-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Tray -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/Tray-windows
-
-      - name: Upload Windows agent
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Agent-windows
-          path: publish/Agent-windows
-          if-no-files-found: error
-
-      - name: Upload Windows runner
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Runner-windows
-          path: publish/Runner-windows
-          if-no-files-found: error
-
-      - name: Upload Windows tray helper
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Tray-windows
-          path: publish/Tray-windows
-          if-no-files-found: error
+      # Release workflow is the only place that produces distributable packages.
+      # PR/main validation only needs compiled binaries.
 
   linux-build:
     name: Linux agent + web UI + relay
@@ -249,35 +222,5 @@ jobs:
       - name: Build Relay (Release)
         run: dotnet build src/GameServerControl.Relay -c Release --no-restore
 
-      - name: Publish agent (linux-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Agent -c Release -r linux-x64 --self-contained true -o publish/Agent-linux
-
-      - name: Publish relay (linux-x64, self-contained)
-        run: dotnet publish src/GameServerControl.Relay -c Release -r linux-x64 --self-contained true -o publish/Relay-linux
-
-      - name: Stage deploy artifacts
-        run: |
-          cp deploy/linux/gameservercontrol-agent.service publish/Agent-linux/
-          cp deploy/linux/install.sh publish/Agent-linux/
-          chmod +x publish/Agent-linux/install.sh
-          chmod +x publish/Agent-linux/GameServerControl.Agent
-          cp deploy/relay/gameservercontrol-relay.service publish/Relay-linux/
-          cp deploy/relay/install.sh publish/Relay-linux/
-          cp deploy/relay/install-from-release.sh publish/Relay-linux/
-          cp deploy/relay/ufw-reconcile.sh publish/Relay-linux/
-          chmod +x publish/Relay-linux/install.sh publish/Relay-linux/install-from-release.sh
-          chmod +x publish/Relay-linux/GameServerControl.Relay
-
-      - name: Upload Linux agent
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Agent-linux
-          path: publish/Agent-linux
-          if-no-files-found: error
-
-      - name: Upload Linux relay
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: GameServerControl-Relay-linux
-          path: publish/Relay-linux
-          if-no-files-found: error
+      # Do not re-publish self-contained binaries or upload artifacts on each PR.
+      # Release workflow already performs packaging and artifact checks.

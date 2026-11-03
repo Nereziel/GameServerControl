@@ -84,6 +84,13 @@ switch (command) {
     console.log(`Version contract OK: ${source.version}`);
     break;
   }
+  case 'validate-tag': {
+    const tag = process.argv[3] ?? '';
+    if (!/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(tag))
+      fail(`Release tag '${tag}' must be stable SemVer in vMAJOR.MINOR.PATCH form.`);
+    console.log(`Release tag valid: ${tag}`);
+    break;
+  }
   case 'current':
     console.log(source.version);
     break;
@@ -94,5 +101,5 @@ switch (command) {
     console.log(bumpVersion(source, process.argv[3]));
     break;
   default:
-    fail(`Unknown command '${command}'. Use check, current, tag, or bump.`);
+    fail(`Unknown command '${command}'. Use check, validate-tag, current, tag, or bump.`);
 }
