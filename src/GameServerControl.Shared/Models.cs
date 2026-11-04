@@ -82,7 +82,8 @@ public record ServerDef(
     string[]? StopProcessNames = null,                  // extra .exe leaf names to kill on Stop (in addition to GuestExePath's leaf)
     string? DiscordWebhookUrl = null,                   // optional: POST lifecycle events (start/stop/crash/backup/update) here
     NetworkPort[]? NetworkPorts = null,                 // reserved/listening ports for collision detection and future port-based firewall rules
-    int? BackupRetention = null                         // per-server normal-backup retention override; null uses Agent default
+    int? BackupRetention = null,                        // per-server normal-backup retention override; null uses Agent default
+    bool DiscordAlertsOnly = false                     // when true, send only failure/crash warnings
 );
 
 public record ServerStatus(
