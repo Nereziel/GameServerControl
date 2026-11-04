@@ -22,6 +22,7 @@ public sealed class ServerOrchestrator
     private readonly StatusTracker _tracker;
     private readonly IHubContext<StatusHub> _hub;
     private readonly DiscordNotifier _discord;
+    private readonly ServerDiagnostics _diagnostics;
     private readonly SteamCmdManager _steamCmd;
     private readonly DragonwildsConfig _dragonwildsConfig;
     private readonly BackupService _backups;
@@ -36,6 +37,7 @@ public sealed class ServerOrchestrator
         StatusTracker tracker,
         IHubContext<StatusHub> hub,
         DiscordNotifier discord,
+        ServerDiagnostics diagnostics,
         SteamCmdManager steamCmd,
         DragonwildsConfig dragonwildsConfig,
         BackupService backups,
@@ -49,6 +51,7 @@ public sealed class ServerOrchestrator
         _tracker = tracker;
         _hub = hub;
         _discord = discord;
+        _diagnostics = diagnostics;
         _steamCmd = steamCmd;
         _dragonwildsConfig = dragonwildsConfig;
         _backups = backups;
@@ -149,6 +152,10 @@ public sealed class ServerOrchestrator
             PidInGuest = pid,
             CpuPercent = cpuPct,
             MemoryMB = memMB,
+            LastError = prevState == ProcessState.Running && procState == ProcessState.NotRunning
+                ? "Unexpected process exit detected; check the game logs."
+                : prevState == ProcessState.NotRunning && procState == ProcessState.Running
+                    ? null : cur.LastError,
             Metadata = metadata
         });
         await BroadcastAsync(status);
@@ -156,13 +163,18 @@ public sealed class ServerOrchestrator
         if (prevState == ProcessState.Running && procState == ProcessState.NotRunning)
         {
             var wasStop = _stopRequested.TryRemove(id, out _);
-            if (!wasStop && _discord.IsConfigured(def))
+            if (!wasStop)
             {
-                _ = _discord.SendAsync(def, DiscordNotifier.Kind.Down,
-                    "💥 Server crashed",
-                    $"{def.Name} went from Running to NotRunning without a stop request.", CancellationToken.None);
+                _diagnostics.Record(id, "UnexpectedStop", "Error",
+                    "Process stopped without an Agent stop request. Cause unknown; review game logs.");
+                _ = _discord.SendAsync(def, DiscordNotifier.Kind.Warn,
+                    "Server stopped unexpectedly",
+                    "Process exited without a stop request. Check WebUI Diagnostics.", CancellationToken.None);
             }
         }
+        if (prevState == ProcessState.NotRunning && procState == ProcessState.Running)
+            _diagnostics.Record(id, "RecoveryObserved", "Success",
+                "Process running again. The Agent cannot independently verify who restarted it.");
         return status;
     }
 
@@ -226,6 +238,11 @@ public sealed class ServerOrchestrator
     private ActionResult StartFailure(string id, string correlation, string message)
     {
         _tracker.Update(id, status => status with { LastError = message });
+        _diagnostics.Record(id, "Start", "Error", "Server start failed. Review the Last error field.");
+        var server = _registry.Get(id);
+        if (server is not null)
+            _ = _discord.SendAsync(server, DiscordNotifier.Kind.Warn,
+                "Server start failed", "Check WebUI Diagnostics for details.", CancellationToken.None);
         _logger.LogWarning("Server start failed for {ServerId}: {Message}", id, message);
         return new ActionResult(false, message, correlation);
     }
@@ -259,6 +276,7 @@ public sealed class ServerOrchestrator
 
         _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pid, StartedAt = DateTimeOffset.UtcNow, LastError = null });
         await RefreshStatusAsync(def.Id, ct);
+        _diagnostics.Record(def.Id, "Start", "Success", "Server started via Agent.");
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Up, "▶ Server started", $"{def.Name} is up (pid={pid}).", ct);
         return new ActionResult(true, $"Started (pid={pid})", corr);
     }
@@ -337,6 +355,8 @@ public sealed class ServerOrchestrator
 
             _tracker.Update(id, s => s with { ProcessState = ProcessState.NotRunning, PidInGuest = null });
             await RefreshStatusAsync(id, ct);
+            _stopRequested.TryRemove(id, out _);
+            _diagnostics.Record(id, "Stop", "Info", "Server stopped by operator.");
             _ = _discord.SendAsync(def, DiscordNotifier.Kind.Down, "■ Server stopped", $"{def.Name} stopped via dashboard.", ct);
             return new ActionResult(true, "Stopped", corr);
         }
@@ -357,12 +377,15 @@ public sealed class ServerOrchestrator
 
         _tracker.Update(id, s => s with { ProcessState = ProcessState.NotRunning, PidInGuest = null });
         await RefreshStatusAsync(id, ct);
+        _stopRequested.TryRemove(id, out _);
+        _diagnostics.Record(id, "Stop", "Info", "Server stopped by operator.");
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Down, "■ Server stopped", $"{def.Name} stopped via dashboard.", ct);
         return new ActionResult(true, "Stopped", corr);
     }
 
     public async Task<ActionResult> RestartAsync(string id, CancellationToken ct = default)
     {
+        _diagnostics.Record(id, "ManualRestart", "Info", "Dashboard/API restart requested.");
         var stop = await StopAsync(id, stopVm: false, force: false, ct);
         if (!stop.Success) return stop;
         await Task.Delay(2000, ct);
