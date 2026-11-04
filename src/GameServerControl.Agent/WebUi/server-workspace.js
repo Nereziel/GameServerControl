@@ -109,7 +109,7 @@ function serverWorkspaceTabs(def) {
   const caps = profileFor(def)?.caps || {};
   const tabs = [];
   if (caps.console) tabs.push(['console', 'Console']);
-  tabs.push(['overview', 'Overview']);
+  tabs.push(['overview', 'Overview'], ['diagnostics', 'Diagnostics']);
   if (caps.config) tabs.push(['config', 'Configuration']);
   if (caps.players) tabs.push(['players', 'Players']);
   if (caps.mods) tabs.push(['mods', 'Mods']);
@@ -208,6 +208,7 @@ async function renderServerWorkspaceTab(def, tab) {
   try {
     if (tab === 'console') await renderServerConsole(def, body);
     else if (tab === 'overview') renderServerOverview(def, body);
+    else if (tab === 'diagnostics') await renderServerDiagnostics(def, body);
     else if (tab === 'config') await renderServerConfig(def, body);
     else if (tab === 'players') await renderServerPlayers(def, body);
     else if (tab === 'mods') renderServerMods(def, body);
@@ -226,6 +227,28 @@ function renderServerOverview(def, body) {
   const ports = effectiveNetworkPorts(def);
   const metadata = Object.entries(status.metadata || {}).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('');
   body.innerHTML = `<div class="sw-metrics"><div class="sw-metric"><span>CPU</span><b id="swCpu">${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></div><div class="sw-metric"><span>RAM</span><b id="swRam">${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></div><div class="sw-metric"><span>PID</span><b id="swPid">${status.pidInGuest ?? '—'}</b></div><div class="sw-metric"><span>Last backup</span><b>${status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : '—'}</b></div></div><div class="sw-info"><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Save folders</div><div class="mono">${(def.saveDirs || []).map(esc).join('<br>') || '—'}</div><div>Network</div><div>${ports.length ? ports.map(formatNetworkPort).map(esc).join('<br>') : 'No reserved ports'}</div>${metadata}</div>`;
+}
+
+function serverDiagnosticTime(at) {
+  if (!at) return '—';
+  const time = new Date(at);
+  return Number.isFinite(time.getTime()) ? time.toLocaleString() : '—';
+}
+
+async function renderServerDiagnostics(def, body) {
+  const result = await api(`/api/servers/${encodeURIComponent(def.id)}/diagnostics`);
+  const d = result.diagnostics || {}, status = result.status || {};
+  const operations = Object.entries(d.operations || {}).map(([kind, op]) =>
+    `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(kind)} · ${esc(op.state || 'Unknown')}</div><div class="sw-row-meta">${esc(serverDiagnosticTime(op.finishedAt || op.startedAt))} · ${esc(op.message || '')}</div></div></div>`
+  ).join('') || '<div class="sw-empty">No backup, update or restore operation observed in this Agent session.</div>';
+  const events = (d.events || []).map(event =>
+    `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(event.kind)} · ${esc(event.severity)}</div><div class="sw-row-meta">${esc(serverDiagnosticTime(event.at))} · ${esc(event.message || '')}</div></div></div>`
+  ).join('') || '<div class="sw-empty">No events recorded in this Agent session.</div>';
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Server diagnostics</b><div class="tiny muted">Agent-observed events only. Recovery source may not be identifiable.</div></div><div class="spacer"></div><button class="btn" ${uiAction('serverWorkspaceRefreshTab',['diagnostics'])}>Refresh</button></div>
+    <div class="sw-info"><div>Process</div><div>${esc(status.processState || 'Unknown')}</div><div>Last started</div><div>${esc(serverDiagnosticTime(status.startedAt))}</div><div>Last unexpected stop</div><div>${esc(serverDiagnosticTime(d.lastUnexpectedStopAt))}</div><div>Last recovery observed</div><div>${esc(serverDiagnosticTime(d.lastRecoveryObservedAt))}</div><div>Last manual restart</div><div>${esc(serverDiagnosticTime(d.lastManualRestartAt))}</div><div>Last backup</div><div>${esc(serverDiagnosticTime(status.lastBackupAt))}</div><div>Last error</div><div>${esc(status.lastError || '—')}</div></div>
+    <div class="sw-section"><h3>Backup, update and restore</h3>${operations}</div>
+    <div class="sw-section"><h3>Recent events</h3>${events}</div>
+    <div class="tiny muted">${esc(result.note || '')} For persistent crash details, inspect the game and Agent logs.</div>`;
 }
 
 async function renderServerConfig(def, body) {
@@ -423,8 +446,56 @@ window.serverWorkspaceClearSchedule = serverWorkspaceClearSchedule;
 
 function renderServerSettings(def, body) {
   const profile = profileFor(def);
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Server settings</b><div class="tiny muted">Profile-aware defaults first; raw launch fields stay under Advanced.</div></div><div class="spacer"></div><button class="btn" ${uiAction('openEdit',[def.id])}>Edit advanced settings</button></div><div class="sw-info"><div>Profile</div><div>${esc(profile?.label || 'Custom')}</div><div>Run on</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Steam App ID</div><div>${esc(def.steamAppId || '—')}</div><div>Log file</div><div class="mono">${esc(def.logPathInGuest || '—')}</div></div><div class="section">Maintenance</div><div class="sw-toolbar"><button class="btn" ${uiAction('action',[def.id,'update'])}>Update server</button>${profile?.caps?.config ? `<button class="btn" ${uiAction('action',[def.id,'apply'])}>Apply config</button>` : ''}<div class="spacer"></div><button class="btn danger" ${uiAction('deleteServer',[def.id])}>Delete / remove server</button></div>`;
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Server settings</b><div class="tiny muted">Profile-aware defaults first; raw launch fields stay under Advanced.</div></div><div class="spacer"></div><button class="btn" ${uiAction('openEdit',[def.id])}>Edit advanced settings</button></div><div class="sw-info"><div>Profile</div><div>${esc(profile?.label || 'Custom')}</div><div>Run on</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Steam App ID</div><div>${esc(def.steamAppId || '—')}</div><div>Log file</div><div class="mono">${esc(def.logPathInGuest || '—')}</div></div><div class="section">Maintenance</div><div class="sw-toolbar"><button class="btn" ${uiAction('action',[def.id,'update'])}>Update server</button>${profile?.caps?.config ? `<button class="btn" ${uiAction('action',[def.id,'apply'])}>Apply config</button>` : ''}<div class="spacer"></div><button class="btn danger" ${uiAction('deleteServer',[def.id])}>Delete / remove server</button> 
+  <div class="sw-section"><h3>Discord notifications</h3><div id="swDiscordStatus" class="tiny muted">Loading notification settings…</div><div class="field"><label>Discord webhook (HTTPS)</label><input id="swDiscordUrl" type="password" class="mono" autocomplete="new-password" placeholder="Paste a new URL to set or replace; blank keeps current"><div class="help">The webhook is optional. Its URL is never shown in this settings panel.</div></div><div class="checkrow"><input id="swDiscordAlertsOnly" type="checkbox"><label for="swDiscordAlertsOnly">Only failures and unexpected stops (no routine start/stop/success messages)</label></div><div class="sw-toolbar"><button class="btn primary" ${uiAction('serverWorkspaceSaveNotifications',[def.id])}>Save notifications</button><button class="btn" ${uiAction('serverWorkspaceSendTestNotification',[def.id])}>Send test</button><button class="btn danger" ${uiAction('serverWorkspaceClearNotifications',[def.id])}>Disable</button></div><div class="tiny muted">Discord webhooks only send alerts. Remote commands require a separate secured Discord bot.</div></div></div>`;
+  serverWorkspaceLoadNotifications(def.id);
 }
+
+async function serverWorkspaceLoadNotifications(id) {
+  const status = $('#swDiscordStatus');
+  if (!status) return;
+  try {
+    const data = await api(`/api/servers/${encodeURIComponent(id)}/notifications`);
+    if (!$('#swDiscordStatus')) return;
+    status.textContent = data.configured ? 'Discord webhook configured.' : 'Disabled — no webhook configured.';
+    const only = $('#swDiscordAlertsOnly');
+    if (only) only.checked = !!data.alertsOnly;
+  } catch (e) {
+    status.textContent = 'Unable to load Discord settings: ' + e.message;
+  }
+}
+async function serverWorkspaceSaveNotifications(id) {
+  try {
+    const webhookUrl = $('#swDiscordUrl')?.value.trim() || null;
+    const alertsOnly = !!$('#swDiscordAlertsOnly')?.checked;
+    await api(`/api/servers/${encodeURIComponent(id)}/notifications`, {
+      method: 'PUT', body: JSON.stringify({ webhookUrl, alertsOnly })
+    });
+    if ($('#swDiscordUrl')) $('#swDiscordUrl').value = '';
+    toast('Discord notification settings saved.', 'ok');
+    await serverWorkspaceLoadNotifications(id);
+  } catch (e) { toast('Discord settings failed: ' + e.message, 'err'); }
+}
+async function serverWorkspaceSendTestNotification(id) {
+  try {
+    await api(`/api/servers/${encodeURIComponent(id)}/notifications/test`, {method:'POST'});
+    toast('Discord test notification sent.', 'ok');
+  } catch (e) { toast('Discord test failed: ' + e.message, 'err'); }
+}
+async function serverWorkspaceClearNotifications(id) {
+  if (!confirm('Disable Discord notifications for this server?')) return;
+  try {
+    await api(`/api/servers/${encodeURIComponent(id)}/notifications`, {
+      method: 'PUT', body: JSON.stringify({ disable: true })
+    });
+    if ($('#swDiscordUrl')) $('#swDiscordUrl').value = '';
+    toast('Discord notifications disabled.', 'ok');
+    await serverWorkspaceLoadNotifications(id);
+  } catch (e) { toast('Discord settings failed: ' + e.message, 'err'); }
+}
+window.serverWorkspaceSaveNotifications = serverWorkspaceSaveNotifications;
+window.serverWorkspaceSendTestNotification = serverWorkspaceSendTestNotification;
+window.serverWorkspaceClearNotifications = serverWorkspaceClearNotifications;
 
 function serverWorkspaceRefreshTab(tab = SERVER_WORKSPACE.tab) {
   const def = SERVERS.find(x => x.id === SERVER_WORKSPACE.serverId);
