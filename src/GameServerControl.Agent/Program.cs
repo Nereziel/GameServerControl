@@ -56,6 +56,7 @@ builder.Services.AddSingleton<ServerRegistry>();
 builder.Services.AddSingleton<ServerStore>();
 builder.Services.AddSingleton<PublicRelayManager>();
 builder.Services.AddSingleton<StatusTracker>();
+builder.Services.AddSingleton<ServerDiagnostics>();
 builder.Services.AddSingleton<ServerOrchestrator>();
 builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
@@ -490,13 +491,19 @@ api.MapPost("/servers/{id}/restart", async (string id, ServerOrchestrator orch, 
     }
     return Results.Ok(result);
 });
-api.MapPost("/servers/{id}/backup", async (string id, BackupService backups, CancellationToken ct) => Results.Ok(await backups.CreateAsync(id, ct)));
-api.MapPost("/servers/{id}/update", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.UpdateAsync(id, ct)));
+api.MapPost("/servers/{id}/backup", async (string id, BackupService backups,
+    ServerDiagnostics diagnostics, ServerRegistry reg, DiscordNotifier discord, CancellationToken ct) =>
+    Results.Ok(await diagnostics.TrackAsync(id, "Backup", () => backups.CreateAsync(id, ct), reg.Get(id), discord, ct)));
+api.MapPost("/servers/{id}/update", async (string id, ServerOrchestrator orch,
+    ServerDiagnostics diagnostics, ServerRegistry reg, DiscordNotifier discord, CancellationToken ct) =>
+    Results.Ok(await diagnostics.TrackAsync(id, "Update", () => orch.UpdateAsync(id, ct), reg.Get(id), discord, ct)));
 api.MapPost("/servers/{id}/apply", async (string id, ServerOrchestrator orch, CancellationToken ct) => Results.Ok(await orch.ApplyConfigAsync(id, ct)));
 
-api.MapPost("/servers/{id}/backups", async (string id, BackupCreateRequest req, BackupService backups, CancellationToken ct) =>
+api.MapPost("/servers/{id}/backups", async (string id, BackupCreateRequest req, BackupService backups,
+    ServerDiagnostics diagnostics, ServerRegistry reg, DiscordNotifier discord, CancellationToken ct) =>
 {
-    try { return Results.Ok(await backups.CreateAsync(id, req.Label, ct)); }
+    try { return Results.Ok(await diagnostics.TrackAsync(id, "Backup",
+        () => backups.CreateAsync(id, req.Label, ct), reg.Get(id), discord, ct)); }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (InvalidOperationException ex) { return Results.BadRequest(new { error = ex.Message }); }
     catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { error = ex.Message }); }
@@ -517,8 +524,10 @@ api.MapGet("/servers/{id}/backups", async (string id, BackupService backups, Can
     try { return Results.Ok(await backups.ListAsync(id, ct)); }
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
-api.MapPost("/servers/{id}/backups/{name}/restore", async (string id, string name, BackupService backups, CancellationToken ct) =>
-    Results.Ok(await backups.RestoreAsync(id, name, ct))).RequireAuthorization("admin");
+api.MapPost("/servers/{id}/backups/{name}/restore", async (string id, string name, BackupService backups,
+    ServerDiagnostics diagnostics, ServerRegistry reg, DiscordNotifier discord, CancellationToken ct) =>
+    Results.Ok(await diagnostics.TrackAsync(id, "Restore",
+        () => backups.RestoreAsync(id, name, ct), reg.Get(id), discord, ct))).RequireAuthorization("admin");
 api.MapDelete("/servers/{id}/backups/{name}", async (string id, string name, BackupService backups, CancellationToken ct) =>
 {
     try { return await backups.DeleteAsync(id, name, ct) ? Results.NoContent() : Results.NotFound(); }
@@ -556,7 +565,7 @@ api.MapPost("/discord/test", async (DiscordWebhookTestRequest req, DiscordNotifi
     {
         return Results.BadRequest(new { ok = false, error = ex.Message });
     }
-});
+}).RequireAuthorization("admin");
 
 api.MapGet("/tokens", (TokenRegistry tokens, HttpContext ctx) =>
 {
