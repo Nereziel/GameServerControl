@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using GameServerControl.Agent.Networking;
+using GameServerControl.Agent.Notifications;
 using GameServerControl.Agent.Security;
 using GameServerControl.Shared;
 
@@ -102,6 +103,8 @@ public sealed class ServerStore
             throw new ArgumentException("Id must be lowercase letters, digits, and hyphens (e.g. 'valheim-2').");
         if (string.IsNullOrWhiteSpace(def.Name))
             throw new ArgumentException("Name is required.");
+        if (!string.IsNullOrWhiteSpace(def.DiscordWebhookUrl) && !DiscordNotifier.IsValidWebhookUrl(def.DiscordWebhookUrl))
+            throw new ArgumentException("Discord webhook must be an HTTPS discord.com/api/webhooks URL.");
 
         var profile = GameProfiles.FindFor(def);
         if (def.HostingMode == HostingMode.Vm && profile is not null && !profile.Capabilities.HyperV)
