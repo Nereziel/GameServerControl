@@ -34,6 +34,48 @@ function checkInlineScripts(html, tempDir, labelPrefix) {
 
 for (const file of files) check(file);
 
+// Control room redesign must preserve existing IDs, delegated action wiring and
+// accessible mobile navigation. Keep all workspace CSS in the fingerprinted stylesheet.
+const htmlForUi = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
+const cssForUi = fs.readFileSync(path.join(webUiDir, 'styles.css'), 'utf8');
+const workspaceForUi = fs.readFileSync(path.join(webUiDir, 'server-workspace.js'), 'utf8');
+const coreForUi = fs.readFileSync(path.join(webUiDir, 'core.js'), 'utf8');
+const installsForUi = fs.readFileSync(path.join(webUiDir, 'jobs-mods.js'), 'utf8');
+for (const id of [
+  'appSidebar', 'mobileNavToggle', 'navScrim', 'pageHeading', 'pageEyebrow',
+  'tabServers', 'tabInstalls', 'agentLabel', 'createServerBtn',
+  'discoverBtn', 'addExistingBtn', 'refreshBtn', 'logoutBtn', 'tokensBtn',
+  'serverSearchInput', 'serverListTools', 'serversView', 'installsView',
+  'serverDashboardStats'
+].filter(id => id !== 'serverDashboardStats')) {
+  if (!htmlForUi.includes(`id="${id}"`))
+    throw new Error(`Responsive WebUI shell is missing existing control ${id}`);
+}
+for (const token of [
+  'sidebar-nav', 'server-filter', 'data-server-filter', 'aria-expanded="false"',
+  'role="status"', 'aria-label="Primary navigation"'
+]) {
+  if (!htmlForUi.includes(token))
+    throw new Error(`Responsive WebUI markup is missing ${token}`);
+}
+for (const token of [
+  '.app-frame', '.app-sidebar', '.sw-server-grid', '.sw-overview-grid',
+  '@media(max-width:860px)', '@media(max-width:600px)',
+  '@media(prefers-reduced-motion:reduce)', ':focus-visible',
+  '.fse-layout', '.sw-terminal'
+]) {
+  if (!cssForUi.includes(token)) throw new Error(`Responsive stylesheet missing ${token}`);
+}
+if (workspaceForUi.includes("createElement('style')"))
+  throw new Error('Workspace style injection must not bypass the versioned stylesheet.');
+for (const token of ['bindServerDashboardFilters', 'serverWorkspaceSetTab',
+  'uiAction(\'openServerPage\'', 'setWorkspaceHeading']) {
+  if (!workspaceForUi.includes(token))
+    throw new Error(`Server workspace lost responsive navigation: ${token}`);
+}
+if (!coreForUi.includes('closeMobileNavigation') || !installsForUi.includes("querySelector('.sidebar-nav')"))
+  throw new Error('Sidebar interactions or Settings navigation are not wired correctly.');
+
 // HTML must be revalidated, while JS/CSS URLs change with the deployed asset bytes.
 const indexHtml = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
 const programSource = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Program.cs'), 'utf8');
