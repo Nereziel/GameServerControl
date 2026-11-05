@@ -26,6 +26,12 @@
       <span class="brand-mark" aria-hidden="true">G</span>
       <div><div class="brand">GameServer<span>Control</span></div><div class="brand-caption">SERVER OPERATIONS</div></div>
     </div>
+    <div class="sidebar-section-label">COMPUTERS</div>
+    <div class="sidebar-host-picker">
+      <label for="hostSwitch">ACTIVE HOST</label>
+      <select id="hostSwitch" aria-label="Select a physical computer"><option value="all">All computers</option><option value="local">This computer</option></select>
+      <button id="manageHostsBtn" class="sidebar-host-manage" type="button">+ Connect computer</button>
+    </div>
     <div class="sidebar-section-label">WORKSPACE</div>
     <nav class="tabs sidebar-nav" aria-label="Main navigation">
       <button id="tabServers" class="tab active" type="button"><span class="nav-icon" aria-hidden="true">▦</span><span>Servers</span></button>
