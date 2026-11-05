@@ -18,7 +18,7 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
 {
     public const string AdminToken = "integration-admin-token-0123456789abcdef";
 
-    public AgentTestFactory(bool alphaUsesStdinProfile = false, bool alphaUsesLogProfile = false)
+    public AgentTestFactory(bool alphaUsesStdinProfile = false, bool alphaUsesLogProfile = false, HttpMessageHandler? managedHostHandler = null)
     {
         TempRoot = Path.Combine(Path.GetTempPath(), "gsc-integration-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TempRoot);
@@ -90,6 +90,8 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
             services.RemoveAll<IWindowsRunnerServiceManager>();
             services.AddSingleton(FakeRunner);
             services.AddSingleton<IWindowsRunnerServiceManager>(sp => sp.GetRequiredService<FakeWindowsRunnerServiceManager>());
+            if (managedHostHandler is not null)
+                services.AddHttpClient("managed-hosts").ConfigurePrimaryHttpMessageHandler(() => managedHostHandler);
         });
     }
 
