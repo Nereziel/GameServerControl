@@ -130,10 +130,69 @@ function serverWorkspaceValidTab(def, tab) {
   return tabs.some(x => x[0] === 'console') ? 'console' : 'overview';
 }
 
+
+function renderAllHostDashboard(root){
+  const groups=Array.isArray(HOST_OVERVIEW)?HOST_OVERVIEW:[];
+  const entries=groups.flatMap(host=>(host.servers||[]).map(server=>({host,server})));
+  const running=entries.filter(x=>x.server.processState==='Running').length;
+  const issues=entries.filter(x=>x.server.hasError).length+groups.filter(x=>!x.online).length;
+  const metrics=[['Game servers',entries.length],['Running',running],
+    ['Online computers',groups.filter(x=>x.online).length+'/'+groups.length],['Attention needed',issues]];
+  const stats='<div class="dashboard-stats">'+metrics.map(([label,value])=>
+    '<div class="dashboard-stat"><div><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong></div></div>'
+  ).join('')+'</div>';
+  const query=SERVER_FILTER.query, filter=SERVER_FILTER.state;
+  const sections=groups.map(host=>{
+    const filtered=(host.servers||[]).filter(server=>{
+      if(filter==='running'&&server.processState!=='Running')return false;
+      if(filter==='stopped'&&server.processState==='Running')return false;
+      return !query||[host.name,server.id,server.name,server.gameType]
+        .some(value=>String(value||'').toLocaleLowerCase().includes(query));
+    });
+    if(host.online&&!filtered.length&&(query||filter!=='all'))return '';
+    const cards=filtered.map(server=>{
+      const state=server.processState||'Unknown';
+      const cpu=server.cpuPercent==null?'—':Number(server.cpuPercent).toFixed(1)+'%';
+      const ram=server.memoryMB==null?'—':server.memoryMB+' MB';
+      const backup=server.lastBackupAt?new Date(server.lastBackupAt).toLocaleDateString():'Not yet';
+      return '<button type="button" class="sw-server-card" '+
+        uiAction('selectHostAndOpen',[host.id,server.id])+
+        ' aria-label="Manage '+esc(server.name)+' on '+esc(host.name)+'">'+
+        '<span class="sw-card-head"><span class="sw-card-icon">▣</span><span class="grow">'+
+        '<span class="sw-card-title">'+esc(server.name)+'</span><span class="sw-card-sub">'+
+        esc(server.gameType)+' · '+esc(host.name)+'</span></span>'+
+        '<span class="sw-card-state '+serverWorkspaceStateClass(state)+'">'+esc(state)+'</span></span>'+
+        '<span class="sw-card-metrics"><span>CPU<b>'+esc(cpu)+'</b></span><span>RAM<b>'+esc(ram)+
+        '</b></span><span>PID<b>'+esc(server.pidInGuest??'—')+'</b></span></span>'+
+        '<span class="sw-card-foot"><span>'+(server.hasError?'Attention needed':'Backup: '+esc(backup))+
+        '</span><span class="sw-card-open">Manage →</span></span></button>';
+    }).join('');
+    return '<section class="host-group"><div class="host-group-head"><div>'+
+      '<div class="host-group-name">'+esc(host.name)+(host.isLocal?' <span class="tiny muted">(this computer)</span>':'')+
+      '</div><div class="host-group-caption">'+esc(host.id)+'</div></div>'+
+      '<span class="host-group-state '+(host.online?'':'offline')+'">'+(host.online?'Online':'Offline')+'</span>'+
+      '<span class="host-group-count">'+esc((host.servers||[]).length)+' servers</span></div>'+
+      (host.online?(cards?'<div class="sw-server-grid">'+cards+'</div>':
+      '<div class="sw-empty">No servers registered on this computer.</div>'):
+      '<div class="host-group-offline">Computer unreachable. Check the Agent, network and managed tokens.</div>')+
+      '</section>';
+  }).filter(Boolean).join('');
+  root.innerHTML=stats+'<div class="dashboard-section-head"><div><h2>All computers</h2>'+
+    '<p>Central overview of your registered Agent hosts.</p></div></div>'+
+    (sections||'<div class="empty">No computers matched the current filter.</div>');
+}
+
 renderServers = function () {
   const root = $('#servers');
   if (!root) return;
   const tools = $('#serverListTools');
+  if (ACTIVE_HOST_ID==='all') {
+    if (tools) tools.classList.remove('hidden');
+    setWorkspaceHeading('All computers','CONTROL PANEL / MULTI-AGENT');
+    serverWorkspaceCleanupConsole();
+    renderAllHostDashboard(root);
+    return;
+  }
 
   if (SERVER_WORKSPACE.serverId) {
     const def = SERVERS.find(x => x.id === SERVER_WORKSPACE.serverId);
@@ -599,7 +658,9 @@ function serverWorkspaceRefreshTab(tab = SERVER_WORKSPACE.tab) {
 window.serverWorkspaceRefreshTab = serverWorkspaceRefreshTab;
 
 async function createServerStatusConnection(onMessage) {
-  const negotiate = await fetch(CFG.url + '/hubs/status/negotiate?negotiateVersion=1', {
+  const hubPath = ACTIVE_HOST_ID==='local'||ACTIVE_HOST_ID==='all' ? '/hubs/status'
+    : '/api/hosts/'+encodeURIComponent(ACTIVE_HOST_ID)+'/hubs/status';
+  const negotiate = await fetch(CFG.url + hubPath + '/negotiate?negotiateVersion=1', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + CFG.token }
   });
@@ -608,7 +669,7 @@ async function createServerStatusConnection(onMessage) {
   const negotiated = await negotiate.json();
   const url = new URL(CFG.url);
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.pathname = url.pathname.replace(/\/$/, '') + '/hubs/status';
+  url.pathname = url.pathname.replace(/\/$/, '') + hubPath;
   url.search = '';
   url.searchParams.set('id', negotiated.connectionToken);
   url.searchParams.set('access_token', CFG.token);
