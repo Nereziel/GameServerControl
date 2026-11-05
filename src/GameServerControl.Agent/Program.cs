@@ -59,6 +59,7 @@ builder.Services.AddHttpClient("managed-hosts", client => client.Timeout = Timeo
     {
         AllowAutoRedirect = false,
         UseCookies = false,
+        UseProxy = false,
         AutomaticDecompression = System.Net.DecompressionMethods.None,
         ConnectTimeout = TimeSpan.FromSeconds(7)
     });
