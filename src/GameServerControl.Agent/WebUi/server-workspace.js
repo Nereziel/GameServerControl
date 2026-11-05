@@ -36,10 +36,31 @@ profileToGame = function (p) {
 
 const SERVER_WORKSPACE = {
   serverId: null,
-  tab: 'console',
+  tab: 'overview',
   console: null,
   renderToken: 0
 };
+const SERVER_FILTER = { query: '', state: 'all' };
+function bindServerDashboardFilters() {
+  const search = document.getElementById('serverSearchInput');
+  if (search) search.addEventListener('input', () => {
+    SERVER_FILTER.query = search.value.trim().toLocaleLowerCase();
+    renderServers();
+  });
+  document.querySelectorAll('[data-server-filter]').forEach(button => {
+    button.addEventListener('click', () => {
+      SERVER_FILTER.state = button.dataset.serverFilter || 'all';
+      document.querySelectorAll('[data-server-filter]').forEach(item => {
+        const selected = item.dataset.serverFilter === SERVER_FILTER.state;
+        item.classList.toggle('active', selected);
+        item.setAttribute('aria-pressed', String(selected));
+      });
+      renderServers();
+    });
+  });
+}
+bindServerDashboardFilters();
+
 const SERVER_WORKSPACE_BASE_SHOW_VIEW = showView;
 
 
@@ -47,12 +68,12 @@ function serverWorkspaceParseHash() {
   const match = location.hash.match(/^#server\/([^/]+)(?:\/([^/]+))?$/);
   if (!match) {
     SERVER_WORKSPACE.serverId = null;
-    SERVER_WORKSPACE.tab = 'console';
+    SERVER_WORKSPACE.tab = 'overview';
     return;
   }
   try { SERVER_WORKSPACE.serverId = decodeURIComponent(match[1]); }
   catch { SERVER_WORKSPACE.serverId = match[1]; }
-  SERVER_WORKSPACE.tab = match[2] || 'console';
+  SERVER_WORKSPACE.tab = match[2] || 'overview';
 }
 
 function serverWorkspaceCleanupConsole() {
@@ -61,7 +82,7 @@ function serverWorkspaceCleanupConsole() {
   SERVER_WORKSPACE.console = null;
 }
 
-function openServerPage(id, tab = 'console') {
+function openServerPage(id, tab = 'overview') {
   SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
   location.hash = `server/${encodeURIComponent(id)}/${tab}`;
 }
@@ -112,28 +133,63 @@ function serverWorkspaceValidTab(def, tab) {
 renderServers = function () {
   const root = $('#servers');
   if (!root) return;
+  const tools = $('#serverListTools');
 
   if (SERVER_WORKSPACE.serverId) {
     const def = SERVERS.find(x => x.id === SERVER_WORKSPACE.serverId);
     if (def) {
+      if (tools) tools.classList.add('hidden');
       renderServerWorkspace(def);
       return;
     }
     SERVER_WORKSPACE.serverId = null;
   }
 
+  setWorkspaceHeading('Servers', 'CONTROL PANEL / OVERVIEW');
+  if (tools) tools.classList.remove('hidden');
   serverWorkspaceCleanupConsole();
+
+  const online = SERVERS.filter(def => serverWorkspaceStatus(def.id).processState === 'Running').length;
+  const offline = SERVERS.length - online;
+  const issues = SERVERS.filter(def => !!serverWorkspaceStatus(def.id).lastError).length;
+  const stats = `<div class="dashboard-stats">
+    <div class="dashboard-stat"><span class="dashboard-stat-icon">▦</span><div><span>Total servers</span><strong>${SERVERS.length}</strong></div></div>
+    <div class="dashboard-stat stat-success"><span class="dashboard-stat-icon">●</span><div><span>Running</span><strong>${online}</strong></div></div>
+    <div class="dashboard-stat"><span class="dashboard-stat-icon">◯</span><div><span>Offline</span><strong>${offline}</strong></div></div>
+    <div class="dashboard-stat ${issues ? 'stat-warning' : ''}"><span class="dashboard-stat-icon">!</span><div><span>Reported errors</span><strong>${issues}</strong></div></div>
+  </div>`;
   if (!SERVERS.length) {
-    root.innerHTML = `<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')}>Create your first server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')}>Add existing server</button></div>`;
+    if (tools) tools.classList.add('hidden');
+    root.innerHTML = stats + `<div class="empty"><div class="empty-symbol">▦</div><h2>No servers yet</h2><p>Add an existing game server or install a new one to get started.</p><div class="empty-actions"><button class="btn primary" ${uiAction('openCreate')}>Create server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed games</button></div></div>`;
     return;
   }
 
-  root.innerHTML = `<div class="sw-dashboard-head"><div><h2>Servers</h2><div class="muted tiny">Choose a server to open its console and controls.</div></div></div><div class="sw-server-grid">${SERVERS.map(def => {
+  const filtered = SERVERS.filter(def => {
+    const state = String(serverWorkspaceStatus(def.id).processState || 'Unknown');
+    if (SERVER_FILTER.state === 'running' && state !== 'Running') return false;
+    if (SERVER_FILTER.state === 'stopped' && state === 'Running') return false;
+    if (!SERVER_FILTER.query) return true;
+    return [def.name, def.id, def.gameType, def.steamAppId, def.guestWorkingDir]
+      .some(field => String(field || '').toLocaleLowerCase().includes(SERVER_FILTER.query));
+  }).sort((a, b) => {
+    const aOnline = serverWorkspaceStatus(a.id).processState === 'Running' ? 0 : 1;
+    const bOnline = serverWorkspaceStatus(b.id).processState === 'Running' ? 0 : 1;
+    return aOnline - bOnline || a.name.localeCompare(b.name);
+  });
+  const cards = filtered.map(def => {
     const status = serverWorkspaceStatus(def.id);
     const meta = serverMeta(def);
     const state = actionVisual(def.id, status.processState || 'Unknown');
-    return `<button class="sw-server-card" ${uiAction('openServerPage',[def.id])}><div class="sw-card-head"><div class="sw-card-icon">${meta.icon}</div><div class="grow"><div class="sw-card-title">${esc(def.name)}</div><div class="sw-card-sub">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V' : 'This machine'}</div></div><div class="sw-card-state ${serverWorkspaceStateClass(state)}">${esc(state)}</div></div><div class="sw-card-metrics"><span>CPU<b>${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></span><span>RAM<b>${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></span><span>PID<b>${status.pidInGuest ?? '—'}</b></span></div></button>`;
-  }).join('')}</div>`;
+    const lastBackup = status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleDateString() : 'Not yet';
+    return `<button type="button" class="sw-server-card" ${uiAction('openServerPage',[def.id,'overview'])} aria-label="Manage ${esc(def.name)}">
+      <span class="sw-card-head"><span class="sw-card-icon" aria-hidden="true">${esc(meta.icon)}</span><span class="grow"><span class="sw-card-title">${esc(def.name)}</span><span class="sw-card-sub">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V' : 'Local host'}</span></span><span class="sw-card-state ${serverWorkspaceStateClass(state)}"><i aria-hidden="true"></i>${esc(state)}</span></span>
+      <span class="sw-card-metrics"><span>CPU<b>${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></span><span>RAM<b>${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></span><span>PID<b>${status.pidInGuest ?? '—'}</b></span></span>
+      <span class="sw-card-foot"><span>${status.lastError ? '<span class="card-error-dot" aria-hidden="true">!</span> Needs attention' : 'Backup: ' + esc(lastBackup)}</span><span class="sw-card-open">Manage <span aria-hidden="true">→</span></span></span>
+    </button>`;
+  }).join('');
+  root.innerHTML = stats + `<div class="dashboard-section-head"><div><h2>Your servers</h2><p>Monitor and manage your game instances.</p></div><span class="dashboard-count">${filtered.length} of ${SERVERS.length}</span></div>` +
+    (filtered.length ? `<div class="sw-server-grid">${cards}</div>` :
+      '<div class="empty filtered-empty"><h2>No matching servers</h2><p>Try another search term or status filter.</p></div>');
 };
 
 function updateServerWorkspaceHeader(def) {
@@ -168,6 +224,8 @@ function updateServerWorkspaceHeader(def) {
 
 function renderServerWorkspace(def) {
   const root = $('#servers');
+  setWorkspaceHeading(def.name, 'SERVERS / ' + (SERVER_WORKSPACE.tab || 'OVERVIEW').toUpperCase());
+  $('#serverListTools')?.classList.add('hidden');
   const requestedTab = serverWorkspaceValidTab(def, SERVER_WORKSPACE.tab);
   const existing = root.querySelector('.sw-workspace');
   if (existing && existing.dataset.serverId === def.id && existing.dataset.tab === requestedTab) {
