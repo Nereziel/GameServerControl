@@ -24,23 +24,15 @@ public sealed record ManagedHostSummary(
 /// </summary>
 public sealed class ManagedHostGateway
 {
-    private static readonly HttpClient Client = new(new SocketsHttpHandler
-    {
-        AllowAutoRedirect = false,
-        UseCookies = false,
-        AutomaticDecompression = DecompressionMethods.None,
-        ConnectTimeout = TimeSpan.FromSeconds(7)
-    })
-    {
-        Timeout = Timeout.InfiniteTimeSpan
-    };
-
+    private readonly HttpClient _client;
     private readonly ManagedHostStore _hosts;
     private readonly ServerRegistry _registry;
     private readonly StatusTracker _statuses;
 
-    public ManagedHostGateway(ManagedHostStore hosts, ServerRegistry registry, StatusTracker statuses)
+    public ManagedHostGateway(ManagedHostStore hosts, ServerRegistry registry,
+        StatusTracker statuses, IHttpClientFactory httpClientFactory)
     {
+        _client = httpClientFactory.CreateClient("managed-hosts");
         _hosts = hosts;
         _registry = registry;
         _statuses = statuses;
@@ -56,13 +48,13 @@ public sealed class ManagedHostGateway
         await CheckRoleAsync(origin, registration.ReadOnlyToken, "ReadOnly", ct);
     }
 
-    private static async Task CheckRoleAsync(Uri origin, string token, string expected, CancellationToken ct)
+    private async Task CheckRoleAsync(Uri origin, string token, string expected, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(7));
         using var req = new HttpRequestMessage(HttpMethod.Get, new Uri(origin, "api/auth/me"));
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var response = await Client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+        using var response = await _client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
         if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException("Remote Agent authentication failed. Check network reachability and the managed token.");
         using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(timeout.Token),
@@ -163,12 +155,12 @@ public sealed class ManagedHostGateway
     private static DateTimeOffset? ReadDate(JsonElement element, string key)
         => DateTimeOffset.TryParse(ReadString(element, key), out var at) ? at : null;
 
-    private static async Task<JsonDocument> ReadJsonAsync(
+    private async Task<JsonDocument> ReadJsonAsync(
         HostCredentials host, string path, string token, CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, new Uri(host.Origin, path));
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        using var response = await Client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode || response.Content.Headers.ContentLength > 2 * 1024 * 1024)
             throw new InvalidOperationException("Remote Agent overview unavailable.");
         return await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct),
@@ -232,7 +224,7 @@ public sealed class ManagedHostGateway
         await ProxyHttpAsync(context, host, "hubs/status/negotiate");
     }
 
-    private static async Task ProxyHttpAsync(HttpContext context, HostCredentials host, string route)
+    private async Task ProxyHttpAsync(HttpContext context, HostCredentials host, string route)
     {
         if (context.Request.ContentLength > 32 * 1024 * 1024)
         {
@@ -256,7 +248,7 @@ public sealed class ManagedHostGateway
                     request.Content.Headers.TryAddWithoutValidation("Content-Type", context.Request.ContentType);
             }
 
-            using var upstream = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
+            using var upstream = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             context.Response.StatusCode = (int)upstream.StatusCode;
             context.Response.Headers.CacheControl = "no-store";
             if (upstream.Content.Headers.ContentType is { } contentType)
