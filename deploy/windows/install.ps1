@@ -267,7 +267,7 @@ if (Test-Path -LiteralPath $agentDir) {
 }
 
 Write-Step "Installing Agent to $agentDir"
-$preserve = @('appsettings.json', 'servers.json', 'tokens.json', 'public-relay.json')
+$preserve = @('appsettings.json', 'servers.json', 'tokens.json', 'public-relay.json', 'managed-hosts.json', 'managed-hosts.json.bak', 'secret-protection.key')
 $backupDir = Join-Path $tmpRoot 'preserved'
 New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
 foreach ($f in $preserve) {
