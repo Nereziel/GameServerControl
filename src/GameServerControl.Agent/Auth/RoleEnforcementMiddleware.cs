@@ -74,7 +74,14 @@ public sealed class RoleEnforcementMiddleware
             return;
         }
 
-        if (!string.Equals(roleClaim, nameof(TokenRole.Admin), StringComparison.OrdinalIgnoreCase))
+        // SignalR negotiation only establishes an authenticated read-only
+        // subscription; the remote hub independently authorizes console input.
+        var remoteHubNegotiate = HttpMethods.IsPost(ctx.Request.Method) &&
+            System.Text.RegularExpressions.Regex.IsMatch(p,
+                @"^/api/hosts/[a-z][a-z0-9-]{0,39}/hubs/status/negotiate$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!remoteHubNegotiate &&
+            !string.Equals(roleClaim, nameof(TokenRole.Admin), StringComparison.OrdinalIgnoreCase))
         {
             ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
             await ctx.Response.WriteAsync("This token is read-only.");

@@ -44,8 +44,11 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
         // SignalR's browser transport may need to send its bearer token through the
         // access_token query parameter. Do not accept query-string credentials on normal
         // API routes, where URLs can be retained by logs, history and intermediary tooling.
-        if (presented is null &&
-            Request.Path.StartsWithSegments("/hubs/status") &&
+        var isLocalHub = Request.Path.StartsWithSegments("/hubs/status");
+        var isRemoteHub = Request.Path.StartsWithSegments("/api/hosts") &&
+            string.Equals(Request.Path.Value?.Split('/').LastOrDefault(), "status", StringComparison.Ordinal) &&
+            Context.WebSockets.IsWebSocketRequest;
+        if (presented is null && (isLocalHub || isRemoteHub) &&
             Request.Query.TryGetValue("access_token", out var q))
             presented = q.ToString();
 

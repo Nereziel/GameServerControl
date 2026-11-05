@@ -76,6 +76,34 @@ for (const token of ['bindServerDashboardFilters', 'serverWorkspaceSetTab',
 if (!coreForUi.includes('closeMobileNavigation') || !installsForUi.includes("querySelector('.sidebar-nav')"))
   throw new Error('Sidebar interactions or Settings navigation are not wired correctly.');
 
+// Multi-Agent must preserve the authenticated coordinator as the only browser
+// origin. Remote server requests are routed through it rather than exposing
+// remote credentials, and browser controls remain role-aware.
+for (const id of ['hostSwitch', 'manageHostsBtn']) {
+  if (!htmlForUi.includes(`id="${id}"`))
+    throw new Error(`Missing multi-computer control: ${id}`);
+}
+for (const marker of [
+  'agentApiPath(path)', 'refreshManagedHosts', 'selectHostAndOpen',
+  'HOST_SWITCH_EPOCH', 'saveManagedHost', 'removeManagedHost'
+]) {
+  if (!coreForUi.includes(marker))
+    throw new Error(`Missing multi-Agent interaction: ${marker}`);
+}
+for (const marker of [
+  'renderAllHostDashboard', 'ACTIVE_HOST_ID', 'hubPath'
+]) {
+  if (!workspaceForUi.includes(marker))
+    throw new Error(`Missing multi-Agent dashboard or SignalR host routing: ${marker}`);
+}
+const adminUiForHosts = fs.readFileSync(path.join(webUiDir, 'server-admin.js'), 'utf8');
+if (!adminUiForHosts.includes("'manageHostsBtn'"))
+  throw new Error('ReadOnly users must not have enabled host credential-management controls.');
+const cloudGateway = fs.readFileSync('src/GameServerControl.Cloud/src/index.js', 'utf8');
+if (!cloudGateway.includes('hosts') || !cloudGateway.includes('hubs') ||
+    !cloudGateway.includes('negotiate'))
+  throw new Error('Cloudflare role filtering must support remote SignalR negotiation.');
+
 // HTML must be revalidated, while JS/CSS URLs change with the deployed asset bytes.
 const indexHtml = fs.readFileSync(path.join(webUiDir, 'index.html'), 'utf8');
 const programSource = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Program.cs'), 'utf8');
