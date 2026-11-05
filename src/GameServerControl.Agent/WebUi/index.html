@@ -2,50 +2,93 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<meta name="theme-color" content="#0b0d10" />
-<title>GameServerControl</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0b111b" />
+<meta name="color-scheme" content="dark" />
+<title>GameServerControl · Server operations</title>
 <link rel="stylesheet" href="/webui/styles.css?v=__GSC_ASSET_VERSION__" />
-
 </head>
-
 <body>
 <div id="login" class="login hidden">
-  <h1>GameServerControl</h1><div class="muted">Connect this browser to the Agent.</div>
-  <div class="field"><label>Agent URL</label><input id="loginUrl"></div>
-  <div class="field"><label>API token</label><input id="loginToken" type="password" autocomplete="off"></div>
-  <button id="loginConnectBtn" class="btn primary" style="width:100%">Connect</button>
+  <div class="login-brand"><span class="brand-mark" aria-hidden="true">G</span><span>GameServer<span class="brand-accent">Control</span></span></div>
+  <div class="login-eyebrow">PRIVATE CONTROL PANEL</div>
+  <h1>Connect to your Agent</h1>
+  <p class="muted">Securely manage your game servers from one workspace.</p>
+  <div class="field"><label for="loginUrl">Agent URL</label><input id="loginUrl" type="url" placeholder="https://your-agent-host" autocomplete="url" /></div>
+  <div class="field"><label for="loginToken">API token</label><input id="loginToken" type="password" autocomplete="off" placeholder="Paste your API token" /></div>
+  <button id="loginConnectBtn" class="btn primary login-submit">Connect to Agent</button>
+  <div class="login-footnote">Your token stays in this browser session.</div>
 </div>
-<div id="app" class="hidden">
-  <div class="top">
-    <div class="brand">GameServer<span>Control</span></div><div id="agentLabel" class="tiny muted hide-sm"></div><div class="spacer"></div>
-    <button id="updateBtn" class="btn hidden">Update</button>
-    <button id="createServerBtn" class="btn primary">＋ Create server</button>
-    <button id="discoverBtn" class="btn">Discover</button>
-    <button id="addExistingBtn" class="btn">Add existing</button>
-    <button id="tokensBtn" class="btn hide-sm">Tokens</button>
-    <button id="refreshBtn" class="btn">Refresh</button>
-    <button id="logoutBtn" class="btn hide-sm">Sign out</button>
-  </div>
-  <div class="shell">
-    <div class="tabs"><button id="tabServers" class="tab active">Servers</button><button id="tabInstalls" class="tab">Installations <span id="installBadge" class="badge hidden">0</span></button></div>
-    <div id="noticeBar" class="noticebar hidden"><strong id="noticeTitle">Status</strong><span id="noticeText" class="grow"></span><button id="noticeCloseBtn" class="btn" style="padding:4px 8px">×</button></div>
-    <section id="serversView"><div id="servers"></div></section>
-    <section id="installsView" class="hidden"><div class="summarybar"><div class="muted tiny">Install jobs keep running when this page is closed. Active jobs stream their log continuously.</div><div class="spacer"></div><button id="clearFinishedJobsBtn" class="btn">Clear finished</button></div><div id="jobs"></div></section>
-  </div>
-</div>
-<div id="overlay" class="overlay hidden">
-  <div id="modal" class="modal"><div class="modalhead"><h2 id="modalTitle">Dialog</h2><div class="spacer"></div><button id="modalCloseBtn" class="btn">Close</button></div><div id="modalBody" class="modalbody"></div><div id="modalFoot" class="modalfoot"></div></div>
-</div>
-<div id="toast" class="toast"></div>
 
-<!-- Scripts are at the end of body, so they do not need defer. core loads first and contains
-     the control-room overrides before the feature modules perform their immediate boot. -->
+<div id="app" class="app-frame hidden">
+  <aside id="appSidebar" class="app-sidebar" aria-label="Primary navigation">
+    <div class="sidebar-brand">
+      <span class="brand-mark" aria-hidden="true">G</span>
+      <div><div class="brand">GameServer<span>Control</span></div><div class="brand-caption">SERVER OPERATIONS</div></div>
+    </div>
+    <div class="sidebar-section-label">WORKSPACE</div>
+    <nav class="tabs sidebar-nav" aria-label="Main navigation">
+      <button id="tabServers" class="tab active" type="button"><span class="nav-icon" aria-hidden="true">▦</span><span>Servers</span></button>
+      <button id="tabInstalls" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⇣</span><span>Installations</span><span id="installBadge" class="badge hidden">0</span></button>
+    </nav>
+    <div class="sidebar-spacer"></div>
+    <div class="sidebar-connection">
+      <div class="connection-heading"><span class="connection-dot" aria-hidden="true"></span>AGENT CONNECTED</div>
+      <div id="agentLabel" class="connection-address"></div>
+    </div>
+    <button id="logoutBtn" type="button" class="sidebar-signout"><span aria-hidden="true">↪</span> Sign out</button>
+  </aside>
+  <div id="navScrim" class="nav-scrim hidden"></div>
+  <div class="app-main">
+    <header class="top">
+      <div class="top-leading">
+        <button id="mobileNavToggle" class="btn menu-toggle" type="button" aria-label="Open navigation" aria-controls="appSidebar" aria-expanded="false">☰</button>
+        <div class="page-heading"><div id="pageEyebrow" class="eyebrow">CONTROL PANEL / OVERVIEW</div><h1 id="pageHeading">Servers</h1></div>
+      </div>
+      <div class="top-actions">
+        <button id="updateBtn" class="btn hidden" type="button">Update</button>
+        <button id="discoverBtn" class="btn secondary-action" type="button">Discover</button>
+        <button id="addExistingBtn" class="btn secondary-action" type="button">Add existing</button>
+        <button id="tokensBtn" class="btn secondary-action" type="button">API tokens</button>
+        <button id="refreshBtn" class="btn btn-icon" type="button" title="Refresh data" aria-label="Refresh data">↻</button>
+        <button id="createServerBtn" class="btn primary" type="button"><span aria-hidden="true">+</span> New server</button>
+      </div>
+    </header>
+    <main class="shell" id="mainContent">
+      <div id="noticeBar" class="noticebar hidden" role="status" aria-live="polite"><strong id="noticeTitle">Status</strong><span id="noticeText" class="grow"></span><button id="noticeCloseBtn" class="btn notice-close" type="button" aria-label="Dismiss message">×</button></div>
+      <section id="serversView" aria-label="Server dashboard">
+        <div id="serverListTools" class="server-list-tools">
+          <div class="server-search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input id="serverSearchInput" type="search" placeholder="Search servers or games…" aria-label="Search servers" autocomplete="off" /></div>
+          <div class="server-filters" role="group" aria-label="Filter servers by status">
+            <button class="server-filter active" type="button" data-server-filter="all" aria-pressed="true">All</button>
+            <button class="server-filter" type="button" data-server-filter="running" aria-pressed="false">Running</button>
+            <button class="server-filter" type="button" data-server-filter="stopped" aria-pressed="false">Stopped</button>
+          </div>
+        </div>
+        <div id="servers"></div>
+      </section>
+      <section id="installsView" class="hidden" aria-label="Installations">
+        <div class="summarybar"><div><b>Installation activity</b><div class="muted tiny">Jobs continue on the Agent even when you close this page.</div></div><div class="spacer"></div><button id="clearFinishedJobsBtn" class="btn" type="button">Clear finished</button></div>
+        <div id="jobs"></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div id="overlay" class="overlay hidden">
+  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modalhead"><h2 id="modalTitle">Dialog</h2><div class="spacer"></div><button id="modalCloseBtn" class="btn" type="button">Close</button></div>
+    <div id="modalBody" class="modalbody"></div>
+    <div id="modalFoot" class="modalfoot"></div>
+  </div>
+</div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- External scripts only; same-origin assets are content-fingerprinted by the Agent. -->
 <script src="/webui/core.js?v=__GSC_ASSET_VERSION__"></script>
 <script src="/webui/server-admin.js?v=__GSC_ASSET_VERSION__"></script>
 <script src="/webui/jobs-mods.js?v=__GSC_ASSET_VERSION__"></script>
 <script src="/webui/config-backups.js?v=__GSC_ASSET_VERSION__"></script>
 <script src="/webui/server-workspace.js?v=__GSC_ASSET_VERSION__"></script>
-
 </body>
 </html>

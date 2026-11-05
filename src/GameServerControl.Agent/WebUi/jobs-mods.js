@@ -42,9 +42,9 @@ async function updateAllMods(){if(!MOD_UPDATES.length)return;const failures=[];l
 
 /* Agent-wide Settings. Relay connection credentials belong to the Agent, not one game server. */
 function installGlobalSettingsView(){
-  const tabs=document.querySelector('.shell>.tabs');
+  const tabs=document.querySelector('.sidebar-nav');
   const installs=$('#installsView');
-  if(tabs&&!$('#tabSettings'))tabs.insertAdjacentHTML('beforeend',`<button id="tabSettings" class="tab" ${uiAction('showView',['settings'])}>Settings</button>`);
+  if(tabs&&!$('#tabSettings'))tabs.insertAdjacentHTML('beforeend',`<button id="tabSettings" class="tab" type="button" ${uiAction('showView',['settings'])}><span class="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>`);
   if(installs&&!$('#settingsView'))installs.insertAdjacentHTML('afterend','<section id="settingsView" class="hidden"><div id="settingsRoot"></div></section>');
 }
 const GLOBAL_SETTINGS_BASE_SHOW_VIEW=showView;
@@ -52,6 +52,8 @@ showView=function(v){
   installGlobalSettingsView();
   if(v==='settings'){
     CURRENT_VIEW='settings';
+    setWorkspaceHeading('Settings','CONTROL PANEL / AGENT');
+    closeMobileNavigation();
     $('#serversView')?.classList.add('hidden');
     $('#installsView')?.classList.add('hidden');
     $('#settingsView')?.classList.remove('hidden');

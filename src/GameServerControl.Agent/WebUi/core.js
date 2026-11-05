@@ -79,7 +79,7 @@ async function api(path,opts={}){
 function cleanupModal(){if(!MODAL_CLEANUP)return;const fn=MODAL_CLEANUP;MODAL_CLEANUP=null;try{fn()}catch{}}
 function openModal(title,body,foot='',wide=false){cleanupModal();$('#modalTitle').textContent=title;$('#modalBody').innerHTML=body;$('#modalFoot').innerHTML=foot;$('#modal').classList.toggle('wide',wide);$('#overlay').classList.remove('hidden')}
 function closeModal(){cleanupModal();$('#overlay').classList.add('hidden')}
-function showView(v){CURRENT_VIEW=v;$('#serversView').classList.toggle('hidden',v!=='servers');$('#installsView').classList.toggle('hidden',v!=='installs');$('#tabServers').classList.toggle('active',v==='servers');$('#tabInstalls').classList.toggle('active',v==='installs');if(v==='installs')refreshJobs()}
+function showView(v){CURRENT_VIEW=v;$('#serversView').classList.toggle('hidden',v!=='servers');$('#installsView').classList.toggle('hidden',v!=='installs');$('#tabServers').classList.toggle('active',v==='servers');$('#tabInstalls').classList.toggle('active',v==='installs');setWorkspaceHeading(v==='installs'?'Installations':'Servers',v==='installs'?'CONTROL PANEL / ACTIVITY':'CONTROL PANEL / OVERVIEW');closeMobileNavigation();if(v==='installs')refreshJobs()}
 
 function profileToGame(p){
   const c=p.capabilities||{};
@@ -443,8 +443,33 @@ action=async function(id,a){
   }catch(e){GSCUX.actions[id]={kind:a,label:`${a} failed`,state:STATUS[id]?.processState||'Unknown',error:true,detail:e.message};renderServers();setNotice(`${a} failed: ${e.message}`,'err',false);setTimeout(()=>{delete GSCUX.actions[id];renderServers()},5000)}
 };
 
+function setWorkspaceHeading(title, context='CONTROL PANEL / OVERVIEW'){
+  const heading=$('#pageHeading'), eyebrow=$('#pageEyebrow');
+  if(heading&&heading.textContent!==title)heading.textContent=title;
+  if(eyebrow&&eyebrow.textContent!==context)eyebrow.textContent=context;
+}
+function closeMobileNavigation(){
+  $('#app')?.classList.remove('nav-open');
+  $('#navScrim')?.classList.add('hidden');
+  $('#mobileNavToggle')?.setAttribute('aria-expanded','false');
+}
+function toggleMobileNavigation(){
+  const open=!$('#app')?.classList.contains('nav-open');
+  $('#app')?.classList.toggle('nav-open',open);
+  $('#navScrim')?.classList.toggle('hidden',!open);
+  $('#mobileNavToggle')?.setAttribute('aria-expanded',String(open));
+}
+
 function bindStaticUi(){
   const bind=(selector,event,handler)=>{const el=$(selector);if(el)el.addEventListener(event,handler)};
+  bind('#mobileNavToggle','click',toggleMobileNavigation);
+  bind('#navScrim','click',closeMobileNavigation);
+  document.querySelector('.sidebar-nav')?.addEventListener('click',event=>{
+    if(event.target.closest('.tab'))closeMobileNavigation();
+  });
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape')closeMobileNavigation();
+  });
   bind('#loginConnectBtn','click',()=>login());
   bind('#updateBtn','click',()=>openUpdate());
   bind('#createServerBtn','click',()=>openCreate());

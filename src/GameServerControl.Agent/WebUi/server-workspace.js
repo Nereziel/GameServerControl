@@ -36,37 +36,44 @@ profileToGame = function (p) {
 
 const SERVER_WORKSPACE = {
   serverId: null,
-  tab: 'console',
+  tab: 'overview',
   console: null,
   renderToken: 0
 };
+const SERVER_FILTER = { query: '', state: 'all' };
+function bindServerDashboardFilters() {
+  const search = document.getElementById('serverSearchInput');
+  if (search) search.addEventListener('input', () => {
+    SERVER_FILTER.query = search.value.trim().toLocaleLowerCase();
+    renderServers();
+  });
+  document.querySelectorAll('[data-server-filter]').forEach(button => {
+    button.addEventListener('click', () => {
+      SERVER_FILTER.state = button.dataset.serverFilter || 'all';
+      document.querySelectorAll('[data-server-filter]').forEach(item => {
+        const selected = item.dataset.serverFilter === SERVER_FILTER.state;
+        item.classList.toggle('active', selected);
+        item.setAttribute('aria-pressed', String(selected));
+      });
+      renderServers();
+    });
+  });
+}
+bindServerDashboardFilters();
+
 const SERVER_WORKSPACE_BASE_SHOW_VIEW = showView;
 
-function installServerWorkspaceStyles() {
-  if (document.getElementById('serverWorkspaceStyles')) return;
-  const style = document.createElement('style');
-  style.id = 'serverWorkspaceStyles';
-  style.textContent = `
-    .sw-dashboard-head{display:flex;align-items:end;gap:16px;margin-bottom:16px}.sw-dashboard-head h2{margin:0;font-size:22px}.sw-server-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:12px}.sw-server-card{display:block;width:100%;text-align:left;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:11px;padding:16px;cursor:pointer;transition:.14s}.sw-server-card:hover{border-color:#66717f;background:#181d24;transform:translateY(-1px)}.sw-card-head{display:flex;align-items:center;gap:12px}.sw-card-icon{font-size:28px;width:38px;text-align:center}.sw-card-title{font-size:16px;font-weight:850}.sw-card-sub{color:var(--muted);font-size:11px;margin-top:3px}.sw-card-state{margin-left:auto;font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.5px}.sw-card-state.up{color:var(--ok)}.sw-card-state.warn{color:var(--warn)}.sw-card-state.down{color:var(--muted)}.sw-card-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:14px}.sw-card-metrics span{border:1px solid var(--line);background:#101318;border-radius:7px;padding:8px;color:var(--muted);font-size:10px;text-transform:uppercase}.sw-card-metrics b{display:block;color:var(--text);font-size:13px;margin-top:2px;text-transform:none}
-    .sw-workspace{border:1px solid var(--line);background:var(--panel);border-radius:12px;overflow:hidden}.sw-head{display:flex;gap:14px;align-items:center;padding:16px 18px;border-bottom:1px solid var(--line);background:#101318}.sw-back{border:0;background:transparent;color:var(--muted);font-size:20px;cursor:pointer;padding:5px 8px}.sw-back:hover{color:var(--text)}.sw-icon{font-size:29px}.sw-name{font-size:19px;font-weight:900}.sw-meta{color:var(--muted);font-size:11px;margin-top:2px}.sw-actions{display:flex;gap:7px;margin-left:auto;align-items:center}.sw-power{min-width:84px}.sw-state{font-size:10px;font-weight:850;padding:5px 9px;border:1px solid var(--line);border-radius:999px;text-transform:uppercase}.sw-state.up{color:var(--ok);border-color:rgba(63,185,80,.45)}.sw-state.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.sw-state.down{color:var(--muted)}
-    .sw-tabs{display:flex;gap:2px;padding:0 14px;border-bottom:1px solid var(--line);background:#0d1014;overflow-x:auto}.sw-tab{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:12px 11px;font-size:12px;font-weight:750;white-space:nowrap;cursor:pointer}.sw-tab:hover{color:var(--text)}.sw-tab.active{color:var(--text);border-bottom-color:var(--accent)}.sw-body{padding:17px;min-height:480px}.sw-operation{margin-bottom:12px}.sw-metrics{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:9px;margin-bottom:15px}.sw-metric{border:1px solid var(--line);background:#101318;border-radius:8px;padding:11px}.sw-metric span{display:block;color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.45px}.sw-metric b{display:block;margin-top:4px;font-size:15px}.sw-info{display:grid;grid-template-columns:180px minmax(0,1fr);gap:8px 16px;border:1px solid var(--line);border-radius:9px;padding:14px}.sw-info>div:nth-child(odd){color:var(--muted);font-size:12px}.sw-info>div:nth-child(even){font-size:12px;overflow-wrap:anywhere}
-    .sw-console{border:1px solid #29303a;border-radius:9px;overflow:hidden;background:#07090c}.sw-console-head{display:flex;align-items:center;gap:8px;padding:9px 11px;border-bottom:1px solid #252b33;background:#0d1117;color:var(--muted);font-size:11px}.sw-console-dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}.sw-terminal{margin:0;min-height:430px;max-height:58vh;overflow:auto;padding:13px 14px;background:#07090c;color:#d7dde6;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.sw-consolebar{display:flex;gap:8px;padding:10px;border-top:1px solid #252b33;background:#0d1117}.sw-consolebar input{flex:1;background:#090c10;border:1px solid #343c48;color:var(--text);border-radius:6px;padding:9px 10px;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.sw-consolebar input:disabled{opacity:.55}.sw-help{color:var(--muted);font-size:11px;padding:8px 11px;border-top:1px solid #20262e;background:#0a0d11}.sw-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px}.sw-toolbar .spacer{flex:1}.sw-row{display:flex;gap:12px;align-items:center;padding:11px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:7px;background:#101318}.sw-row .grow{flex:1;min-width:0}.sw-row-title{font-weight:750}.sw-row-meta{font-size:11px;color:var(--muted);margin-top:2px}.sw-section{border:1px solid var(--line);border-radius:9px;padding:14px;background:#101318;margin-bottom:12px}.sw-section h3{font-size:14px;margin:0 0 10px}.sw-empty{padding:35px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:9px}
-    @media(max-width:850px){.sw-head{align-items:flex-start;flex-wrap:wrap}.sw-actions{width:100%;margin-left:0}.sw-actions .sw-state{margin-left:auto}.sw-metrics{grid-template-columns:repeat(2,1fr)}.sw-info{grid-template-columns:1fr}.sw-info>div:nth-child(odd){margin-top:6px}.sw-terminal{min-height:330px}.sw-server-grid{grid-template-columns:1fr}}
-    @media(max-width:520px){.sw-actions{display:grid;grid-template-columns:repeat(3,1fr)}.sw-actions .sw-state{grid-column:1/-1;margin:0;text-align:center}.sw-power{min-width:0}.sw-body{padding:12px}.sw-card-metrics{grid-template-columns:1fr 1fr 1fr}}
-  `;
-  document.head.appendChild(style);
-}
 
 function serverWorkspaceParseHash() {
   const match = location.hash.match(/^#server\/([^/]+)(?:\/([^/]+))?$/);
   if (!match) {
     SERVER_WORKSPACE.serverId = null;
-    SERVER_WORKSPACE.tab = 'console';
+    SERVER_WORKSPACE.tab = 'overview';
     return;
   }
   try { SERVER_WORKSPACE.serverId = decodeURIComponent(match[1]); }
   catch { SERVER_WORKSPACE.serverId = match[1]; }
-  SERVER_WORKSPACE.tab = match[2] || 'console';
+  SERVER_WORKSPACE.tab = match[2] || 'overview';
 }
 
 function serverWorkspaceCleanupConsole() {
@@ -75,7 +82,7 @@ function serverWorkspaceCleanupConsole() {
   SERVER_WORKSPACE.console = null;
 }
 
-function openServerPage(id, tab = 'console') {
+function openServerPage(id, tab = 'overview') {
   SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
   location.hash = `server/${encodeURIComponent(id)}/${tab}`;
 }
@@ -124,31 +131,65 @@ function serverWorkspaceValidTab(def, tab) {
 }
 
 renderServers = function () {
-  installServerWorkspaceStyles();
   const root = $('#servers');
   if (!root) return;
+  const tools = $('#serverListTools');
 
   if (SERVER_WORKSPACE.serverId) {
     const def = SERVERS.find(x => x.id === SERVER_WORKSPACE.serverId);
     if (def) {
+      if (tools) tools.classList.add('hidden');
       renderServerWorkspace(def);
       return;
     }
     SERVER_WORKSPACE.serverId = null;
   }
 
+  setWorkspaceHeading('Servers', 'CONTROL PANEL / OVERVIEW');
+  if (tools) tools.classList.remove('hidden');
   serverWorkspaceCleanupConsole();
+
+  const online = SERVERS.filter(def => serverWorkspaceStatus(def.id).processState === 'Running').length;
+  const offline = SERVERS.length - online;
+  const issues = SERVERS.filter(def => !!serverWorkspaceStatus(def.id).lastError).length;
+  const stats = `<div class="dashboard-stats">
+    <div class="dashboard-stat"><span class="dashboard-stat-icon">▦</span><div><span>Total servers</span><strong>${SERVERS.length}</strong></div></div>
+    <div class="dashboard-stat stat-success"><span class="dashboard-stat-icon">●</span><div><span>Running</span><strong>${online}</strong></div></div>
+    <div class="dashboard-stat"><span class="dashboard-stat-icon">◯</span><div><span>Offline</span><strong>${offline}</strong></div></div>
+    <div class="dashboard-stat ${issues ? 'stat-warning' : ''}"><span class="dashboard-stat-icon">!</span><div><span>Reported errors</span><strong>${issues}</strong></div></div>
+  </div>`;
   if (!SERVERS.length) {
-    root.innerHTML = `<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')}>Create your first server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')}>Add existing server</button></div>`;
+    if (tools) tools.classList.add('hidden');
+    root.innerHTML = stats + `<div class="empty"><div class="empty-symbol">▦</div><h2>No servers yet</h2><p>Add an existing game server or install a new one to get started.</p><div class="empty-actions"><button class="btn primary" ${uiAction('openCreate')}>Create server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed games</button></div></div>`;
     return;
   }
 
-  root.innerHTML = `<div class="sw-dashboard-head"><div><h2>Servers</h2><div class="muted tiny">Choose a server to open its console and controls.</div></div></div><div class="sw-server-grid">${SERVERS.map(def => {
+  const filtered = SERVERS.filter(def => {
+    const state = String(serverWorkspaceStatus(def.id).processState || 'Unknown');
+    if (SERVER_FILTER.state === 'running' && state !== 'Running') return false;
+    if (SERVER_FILTER.state === 'stopped' && state === 'Running') return false;
+    if (!SERVER_FILTER.query) return true;
+    return [def.name, def.id, def.gameType, def.steamAppId, def.guestWorkingDir]
+      .some(field => String(field || '').toLocaleLowerCase().includes(SERVER_FILTER.query));
+  }).sort((a, b) => {
+    const aOnline = serverWorkspaceStatus(a.id).processState === 'Running' ? 0 : 1;
+    const bOnline = serverWorkspaceStatus(b.id).processState === 'Running' ? 0 : 1;
+    return aOnline - bOnline || a.name.localeCompare(b.name);
+  });
+  const cards = filtered.map(def => {
     const status = serverWorkspaceStatus(def.id);
     const meta = serverMeta(def);
     const state = actionVisual(def.id, status.processState || 'Unknown');
-    return `<button class="sw-server-card" ${uiAction('openServerPage',[def.id])}><div class="sw-card-head"><div class="sw-card-icon">${meta.icon}</div><div class="grow"><div class="sw-card-title">${esc(def.name)}</div><div class="sw-card-sub">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V' : 'This machine'}</div></div><div class="sw-card-state ${serverWorkspaceStateClass(state)}">${esc(state)}</div></div><div class="sw-card-metrics"><span>CPU<b>${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></span><span>RAM<b>${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></span><span>PID<b>${status.pidInGuest ?? '—'}</b></span></div></button>`;
-  }).join('')}</div>`;
+    const lastBackup = status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleDateString() : 'Not yet';
+    return `<button type="button" class="sw-server-card" ${uiAction('openServerPage',[def.id,'overview'])} aria-label="Manage ${esc(def.name)}">
+      <span class="sw-card-head"><span class="sw-card-icon" aria-hidden="true">${esc(meta.icon)}</span><span class="grow"><span class="sw-card-title">${esc(def.name)}</span><span class="sw-card-sub">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V' : 'Local host'}</span></span><span class="sw-card-state ${serverWorkspaceStateClass(state)}"><i aria-hidden="true"></i>${esc(state)}</span></span>
+      <span class="sw-card-metrics"><span>CPU<b>${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></span><span>RAM<b>${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></span><span>PID<b>${status.pidInGuest ?? '—'}</b></span></span>
+      <span class="sw-card-foot"><span>${status.lastError ? '<span class="card-error-dot" aria-hidden="true">!</span> Needs attention' : 'Backup: ' + esc(lastBackup)}</span><span class="sw-card-open">Manage <span aria-hidden="true">→</span></span></span>
+    </button>`;
+  }).join('');
+  root.innerHTML = stats + `<div class="dashboard-section-head"><div><h2>Your servers</h2><p>Monitor and manage your game instances.</p></div><span class="dashboard-count">${filtered.length} of ${SERVERS.length}</span></div>` +
+    (filtered.length ? `<div class="sw-server-grid">${cards}</div>` :
+      '<div class="empty filtered-empty"><h2>No matching servers</h2><p>Try another search term or status filter.</p></div>');
 };
 
 function updateServerWorkspaceHeader(def) {
@@ -179,10 +220,16 @@ function updateServerWorkspaceHeader(def) {
   if (cpu) cpu.textContent = status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—';
   if (ram) ram.textContent = status.memoryMB != null ? status.memoryMB + ' MB' : '—';
   if (pid) pid.textContent = status.pidInGuest ?? '—';
+  const backup = $('#swOverviewBackup'), stateText = $('#swOverviewState'), error = $('#swOverviewError');
+  if (backup) backup.textContent = status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : 'No backups yet';
+  if (stateText) stateText.textContent = status.processState || 'Unknown';
+  if (error) error.textContent = status.lastError || 'No active errors reported';
 }
 
 function renderServerWorkspace(def) {
   const root = $('#servers');
+  setWorkspaceHeading(def.name, 'SERVERS / ' + (SERVER_WORKSPACE.tab || 'OVERVIEW').toUpperCase());
+  $('#serverListTools')?.classList.add('hidden');
   const requestedTab = serverWorkspaceValidTab(def, SERVER_WORKSPACE.tab);
   const existing = root.querySelector('.sw-workspace');
   if (existing && existing.dataset.serverId === def.id && existing.dataset.tab === requestedTab) {
@@ -195,7 +242,20 @@ function renderServerWorkspace(def) {
   const meta = serverMeta(def);
   const tabs = serverWorkspaceTabs(def);
 
-  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}"><div class="sw-head"><button class="sw-back" ${uiAction('serverWorkspaceHome')} title="Back to servers">←</button><div class="sw-icon">${meta.icon}</div><div class="grow"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div></div><div class="sw-actions"><button id="swStart" class="btn primary sw-power" ${uiAction('action',[def.id,'start'])}>Start</button><button id="swRestart" class="btn sw-power" ${uiAction('action',[def.id,'restart'])}>Restart</button><button id="swStop" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button><span id="swState" class="sw-state"></span></div></div><div class="sw-tabs">${tabs.map(([key, label]) => `<button class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" ${uiAction('serverWorkspaceSetTab',[key])}>${label}</button>`).join('')}</div><div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div></div>`;
+  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}">
+    <div class="sw-head">
+      <button type="button" class="sw-back" ${uiAction('serverWorkspaceHome')} aria-label="Back to all servers" title="Back to servers">←</button>
+      <div class="sw-icon" aria-hidden="true">${esc(meta.icon)}</div>
+      <div class="sw-identity"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'Local host'} · ${esc(def.id)}</div></div>
+      <div class="sw-actions"><span id="swState" class="sw-state"></span><span class="sw-action-divider" aria-hidden="true"></span>
+        <button id="swStart" type="button" class="btn primary sw-power" ${uiAction('action',[def.id,'start'])}>Start</button>
+        <button id="swRestart" type="button" class="btn sw-power" ${uiAction('action',[def.id,'restart'])}>Restart</button>
+        <button id="swStop" type="button" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button>
+      </div>
+    </div>
+    <nav class="sw-tabs" aria-label="Server sections">${tabs.map(([key, label]) => `<button type="button" class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" ${SERVER_WORKSPACE.tab === key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[key])}>${esc(label)}</button>`).join('')}</nav>
+    <div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div>
+  </div>`;
   updateServerWorkspaceHeader(def);
   renderServerWorkspaceTab(def, SERVER_WORKSPACE.tab);
 }
@@ -225,8 +285,43 @@ async function renderServerWorkspaceTab(def, tab) {
 function renderServerOverview(def, body) {
   const status = serverWorkspaceStatus(def.id);
   const ports = effectiveNetworkPorts(def);
-  const metadata = Object.entries(status.metadata || {}).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('');
-  body.innerHTML = `<div class="sw-metrics"><div class="sw-metric"><span>CPU</span><b id="swCpu">${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></div><div class="sw-metric"><span>RAM</span><b id="swRam">${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></div><div class="sw-metric"><span>PID</span><b id="swPid">${status.pidInGuest ?? '—'}</b></div><div class="sw-metric"><span>Last backup</span><b>${status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : '—'}</b></div></div><div class="sw-info"><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Save folders</div><div class="mono">${(def.saveDirs || []).map(esc).join('<br>') || '—'}</div><div>Network</div><div>${ports.length ? ports.map(formatNetworkPort).map(esc).join('<br>') : 'No reserved ports'}</div>${metadata}</div>`;
+  const metadata = Object.entries(status.metadata || {}).map(([key, value]) =>
+    `<div>${esc(key)}</div><div>${esc(value)}</div>`).join('');
+  const profile = profileFor(def);
+  const quickActions = [
+    ...(profile?.caps?.console ? [['Console', 'Live console or logs', 'console']] : []),
+    ['Diagnostics', 'Errors & activity', 'diagnostics'],
+    ['Backups', 'Snapshots & restore', 'backups'],
+    ['Network', 'Ports & relay', 'network'],
+    ['Settings', 'Configure instance', 'settings']
+  ];
+  body.innerHTML = `<div class="sw-metrics">
+      <div class="sw-metric"><span>Processor</span><b id="swCpu">${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></div>
+      <div class="sw-metric"><span>Memory</span><b id="swRam">${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></div>
+      <div class="sw-metric"><span>Process ID</span><b id="swPid">${status.pidInGuest ?? '—'}</b></div>
+      <div class="sw-metric"><span>Last backup</span><b id="swOverviewBackup">${status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : 'No backups yet'}</b></div>
+    </div>
+    <div class="sw-overview-grid">
+      <section class="sw-section"><div class="sw-section-heading"><h3>Server details</h3><span class="tiny muted">Configuration</span></div>
+        <div class="sw-info"><div>Process status</div><div id="swOverviewState">${esc(status.processState || 'Unknown')}</div>
+          <div>Working directory</div><div class="mono">${esc(def.guestWorkingDir || '—')}</div>
+          <div>Executable</div><div class="mono">${esc(def.guestExePath || '—')}</div>
+          <div>Save directories</div><div class="mono">${(def.saveDirs || []).map(esc).join('<br>') || '—'}</div>
+          <div>Network ports</div><div>${ports.length ? ports.map(formatNetworkPort).map(esc).join('<br>') : 'No ports configured'}</div>
+          ${metadata}
+        </div>
+      </section>
+      <div class="sw-overview-side">
+        <section class="sw-section"><div class="sw-section-heading"><h3>Quick access</h3></div>
+          <div class="sw-quick-links">${quickActions.map(([title, detail, tab]) =>
+            `<button type="button" class="sw-quick-link" ${uiAction('serverWorkspaceSetTab',[tab])}><span><b>${title}</b><small>${detail}</small></span><span aria-hidden="true">→</span></button>`
+          ).join('')}</div>
+        </section>
+        <section class="sw-section"><div class="sw-section-heading"><h3>Health</h3><button type="button" class="btn btn-small" ${uiAction('serverWorkspaceSetTab',['diagnostics'])}>View history</button></div>
+          <div class="sw-health-summary"><span class="sw-health-led ${status.lastError ? 'error' : ''}" aria-hidden="true"></span><div id="swOverviewError">${esc(status.lastError || 'No active errors reported')}</div></div>
+        </section>
+      </div>
+    </div>`;
 }
 
 function serverDiagnosticTime(at) {
@@ -680,7 +775,7 @@ window.addEventListener('hashchange', () => {
   if (CURRENT_VIEW !== 'servers') SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
   renderServers();
 });
-window.addEventListener('DOMContentLoaded', installServerWorkspaceStyles);
+
 
 /* Network/schedule polish layered over the workspace so the profile remains the source of truth. */
 function serverWorkspacePortCount(ports) {
@@ -786,13 +881,7 @@ startInstall = async function (key) {
   const state={serverId:null,list:[],selected:null,content:null,history:[],dirty:false,filter:'',validationTimer:null,validationSeq:0};
   window.GSC_FILES=state;
 
-  const style=document.createElement('style');
-  style.id='gscFilesEditorStyles';
-  style.textContent=`
-    .fse-layout{display:grid;grid-template-columns:minmax(250px,330px) minmax(0,1fr);gap:12px;min-height:520px}.fse-sidebar,.fse-main{border:1px solid var(--line);border-radius:9px;background:#101318;overflow:hidden}.fse-filter{padding:10px;border-bottom:1px solid var(--line)}.fse-filter input{width:100%}.fse-list{max-height:650px;overflow:auto;padding:8px}.fse-group{margin:10px 5px 5px;color:var(--muted);font-size:10px;font-weight:850;text-transform:uppercase;letter-spacing:.55px}.fse-file{display:block;width:100%;text-align:left;color:var(--text);background:transparent;border:1px solid transparent;border-radius:7px;padding:8px 9px;margin:2px 0;cursor:pointer}.fse-file:hover{background:#171c23;border-color:#2c3440}.fse-file.active{background:#1a2028;border-color:#536171}.fse-file-name{font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-meta{font-size:10px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fse-file-badges{display:flex;gap:5px;margin-top:5px;flex-wrap:wrap}.fse-badge{font-size:9px;border:1px solid var(--line);border-radius:999px;padding:2px 6px;color:var(--muted)}.fse-badge.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-main{padding:12px}.fse-head{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px}.fse-title{font-size:14px;font-weight:850}.fse-path{font:10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--muted);overflow-wrap:anywhere;margin-top:3px}.fse-head-actions{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}.fse-statusbar{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-bottom:9px}.fse-status{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:3px 7px;color:var(--muted)}.fse-status.ok{color:var(--ok);border-color:rgba(63,185,80,.45)}.fse-status.err{color:var(--danger);border-color:rgba(248,81,73,.55)}.fse-status.warn{color:var(--warn);border-color:rgba(210,153,34,.45)}.fse-editgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px}.fse-pane-title{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:0 0 5px}.fse-editor{box-sizing:border-box;width:100%;min-height:390px;max-height:58vh;resize:vertical;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}.fse-preview{box-sizing:border-box;min-height:390px;max-height:58vh;overflow:auto;background:#080b0f;color:#dce3ec;border:1px solid #303947;border-radius:7px;padding:11px;margin:0;font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word;tab-size:2}.fse-history{margin-top:12px;border-top:1px solid var(--line);padding-top:11px}.fse-history-row{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05)}.fse-history-row:last-child{border-bottom:0}.fse-history-row .grow{min-width:0}.fse-token-comment{color:#7f8b99}.fse-token-string{color:#a5d6ff}.fse-token-number{color:#d2a8ff}.fse-token-literal{color:#ff7b72}.fse-token-key{color:#79c0ff}.fse-token-section{color:#ffa657;font-weight:700}.fse-token-tag{color:#7ee787}.fse-empty{padding:45px 20px;text-align:center;color:var(--muted)}
-    @media(max-width:1000px){.fse-layout{grid-template-columns:1fr}.fse-list{max-height:260px}.fse-editgrid{grid-template-columns:1fr}.fse-preview{min-height:220px;max-height:360px}}
-  `;
-  document.head.appendChild(style);
+
 
   const baseTabs=serverWorkspaceTabs;
   serverWorkspaceTabs=function(def){
