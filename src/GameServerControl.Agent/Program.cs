@@ -4,6 +4,7 @@ using GameServerControl.Agent.Hubs;
 using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Logs;
 using GameServerControl.Agent.Networking;
+using GameServerControl.Agent.MultiAgent;
 using GameServerControl.Agent.Notifications;
 using GameServerControl.Agent.Rcon;
 using GameServerControl.Agent.Servers;
@@ -53,6 +54,8 @@ builder.Services.AddSingleton<WindowsRunnerServiceManager>();
 builder.Services.AddSingleton<IWindowsRunnerServiceManager>(sp => sp.GetRequiredService<WindowsRunnerServiceManager>());
 builder.Services.AddSingleton<LocalProcessService>();
 builder.Services.AddSingleton<ServerRegistry>();
+builder.Services.AddSingleton<ManagedHostStore>();
+builder.Services.AddSingleton<ManagedHostGateway>();
 builder.Services.AddSingleton<ServerStore>();
 builder.Services.AddSingleton<PublicRelayManager>();
 builder.Services.AddSingleton<StatusTracker>();
@@ -170,6 +173,7 @@ app.MapGet("/webui/{file}", (string file) =>
     return File.Exists(path) ? Results.File(path, contentType) : Results.NotFound();
 });
 
+app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
 app.UseMiddleware<RoleEnforcementMiddleware>();
@@ -178,6 +182,7 @@ app.UseMiddleware<AuditMiddleware>();
 var api = app.MapGroup("/api").RequireAuthorization();
 api.MapServerConfigFiles();
 api.MapOperationalEndpoints();
+api.MapManagedHosts();
 
 api.MapGet("/health", () => Results.Ok(new { ok = true, ts = DateTimeOffset.UtcNow }));
 api.MapGet("/version", (UpdateChecker checker) => Results.Ok(checker.Latest));
