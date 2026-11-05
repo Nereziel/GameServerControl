@@ -220,6 +220,10 @@ function updateServerWorkspaceHeader(def) {
   if (cpu) cpu.textContent = status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—';
   if (ram) ram.textContent = status.memoryMB != null ? status.memoryMB + ' MB' : '—';
   if (pid) pid.textContent = status.pidInGuest ?? '—';
+  const backup = $('#swOverviewBackup'), stateText = $('#swOverviewState'), error = $('#swOverviewError');
+  if (backup) backup.textContent = status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : 'No backups yet';
+  if (stateText) stateText.textContent = status.processState || 'Unknown';
+  if (error) error.textContent = status.lastError || 'No active errors reported';
 }
 
 function renderServerWorkspace(def) {
@@ -238,7 +242,20 @@ function renderServerWorkspace(def) {
   const meta = serverMeta(def);
   const tabs = serverWorkspaceTabs(def);
 
-  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}"><div class="sw-head"><button class="sw-back" ${uiAction('serverWorkspaceHome')} title="Back to servers">←</button><div class="sw-icon">${meta.icon}</div><div class="grow"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div></div><div class="sw-actions"><button id="swStart" class="btn primary sw-power" ${uiAction('action',[def.id,'start'])}>Start</button><button id="swRestart" class="btn sw-power" ${uiAction('action',[def.id,'restart'])}>Restart</button><button id="swStop" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button><span id="swState" class="sw-state"></span></div></div><div class="sw-tabs">${tabs.map(([key, label]) => `<button class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" ${uiAction('serverWorkspaceSetTab',[key])}>${label}</button>`).join('')}</div><div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div></div>`;
+  root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}">
+    <div class="sw-head">
+      <button type="button" class="sw-back" ${uiAction('serverWorkspaceHome')} aria-label="Back to all servers" title="Back to servers">←</button>
+      <div class="sw-icon" aria-hidden="true">${esc(meta.icon)}</div>
+      <div class="sw-identity"><div class="sw-name">${esc(def.name)}</div><div class="sw-meta">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'Local host'} · ${esc(def.id)}</div></div>
+      <div class="sw-actions"><span id="swState" class="sw-state"></span><span class="sw-action-divider" aria-hidden="true"></span>
+        <button id="swStart" type="button" class="btn primary sw-power" ${uiAction('action',[def.id,'start'])}>Start</button>
+        <button id="swRestart" type="button" class="btn sw-power" ${uiAction('action',[def.id,'restart'])}>Restart</button>
+        <button id="swStop" type="button" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button>
+      </div>
+    </div>
+    <nav class="sw-tabs" aria-label="Server sections">${tabs.map(([key, label]) => `<button type="button" class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" ${SERVER_WORKSPACE.tab === key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[key])}>${esc(label)}</button>`).join('')}</nav>
+    <div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div>
+  </div>`;
   updateServerWorkspaceHeader(def);
   renderServerWorkspaceTab(def, SERVER_WORKSPACE.tab);
 }
@@ -268,8 +285,43 @@ async function renderServerWorkspaceTab(def, tab) {
 function renderServerOverview(def, body) {
   const status = serverWorkspaceStatus(def.id);
   const ports = effectiveNetworkPorts(def);
-  const metadata = Object.entries(status.metadata || {}).map(([k, v]) => `<div>${esc(k)}</div><div>${esc(v)}</div>`).join('');
-  body.innerHTML = `<div class="sw-metrics"><div class="sw-metric"><span>CPU</span><b id="swCpu">${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></div><div class="sw-metric"><span>RAM</span><b id="swRam">${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></div><div class="sw-metric"><span>PID</span><b id="swPid">${status.pidInGuest ?? '—'}</b></div><div class="sw-metric"><span>Last backup</span><b>${status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : '—'}</b></div></div><div class="sw-info"><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Save folders</div><div class="mono">${(def.saveDirs || []).map(esc).join('<br>') || '—'}</div><div>Network</div><div>${ports.length ? ports.map(formatNetworkPort).map(esc).join('<br>') : 'No reserved ports'}</div>${metadata}</div>`;
+  const metadata = Object.entries(status.metadata || {}).map(([key, value]) =>
+    `<div>${esc(key)}</div><div>${esc(value)}</div>`).join('');
+  const profile = profileFor(def);
+  const quickActions = [
+    ...(profile?.caps?.console ? [['Console', 'Live console or logs', 'console']] : []),
+    ['Diagnostics', 'Errors & activity', 'diagnostics'],
+    ['Backups', 'Snapshots & restore', 'backups'],
+    ['Network', 'Ports & relay', 'network'],
+    ['Settings', 'Configure instance', 'settings']
+  ];
+  body.innerHTML = `<div class="sw-metrics">
+      <div class="sw-metric"><span>Processor</span><b id="swCpu">${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></div>
+      <div class="sw-metric"><span>Memory</span><b id="swRam">${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></div>
+      <div class="sw-metric"><span>Process ID</span><b id="swPid">${status.pidInGuest ?? '—'}</b></div>
+      <div class="sw-metric"><span>Last backup</span><b id="swOverviewBackup">${status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : 'No backups yet'}</b></div>
+    </div>
+    <div class="sw-overview-grid">
+      <section class="sw-section"><div class="sw-section-heading"><h3>Server details</h3><span class="tiny muted">Configuration</span></div>
+        <div class="sw-info"><div>Process status</div><div id="swOverviewState">${esc(status.processState || 'Unknown')}</div>
+          <div>Working directory</div><div class="mono">${esc(def.guestWorkingDir || '—')}</div>
+          <div>Executable</div><div class="mono">${esc(def.guestExePath || '—')}</div>
+          <div>Save directories</div><div class="mono">${(def.saveDirs || []).map(esc).join('<br>') || '—'}</div>
+          <div>Network ports</div><div>${ports.length ? ports.map(formatNetworkPort).map(esc).join('<br>') : 'No ports configured'}</div>
+          ${metadata}
+        </div>
+      </section>
+      <div class="sw-overview-side">
+        <section class="sw-section"><div class="sw-section-heading"><h3>Quick access</h3></div>
+          <div class="sw-quick-links">${quickActions.map(([title, detail, tab]) =>
+            `<button type="button" class="sw-quick-link" ${uiAction('serverWorkspaceSetTab',[tab])}><span><b>${title}</b><small>${detail}</small></span><span aria-hidden="true">→</span></button>`
+          ).join('')}</div>
+        </section>
+        <section class="sw-section"><div class="sw-section-heading"><h3>Health</h3><button type="button" class="btn btn-small" ${uiAction('serverWorkspaceSetTab',['diagnostics'])}>View history</button></div>
+          <div class="sw-health-summary"><span class="sw-health-led ${status.lastError ? 'error' : ''}" aria-hidden="true"></span><div id="swOverviewError">${esc(status.lastError || 'No active errors reported')}</div></div>
+        </section>
+      </div>
+    </div>`;
 }
 
 function serverDiagnosticTime(at) {
