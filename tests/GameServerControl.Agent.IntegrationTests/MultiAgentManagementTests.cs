@@ -1,4 +1,5 @@
 using System.Net;
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
 using GameServerControl.Agent.MultiAgent;
@@ -107,4 +108,103 @@ public sealed class MultiAgentManagementTests
         Assert.Empty(reopened.List());
         Assert.Throws<ArgumentException>(() => reopened.Add(registration with { Id = "local" }));
     }
+    [Fact]
+    public async Task Remote_host_proxy_uses_caller_role_and_never_returns_remote_tokens()
+    {
+        const string remoteAdmin = "test-remote-admin-0123456789";
+        const string remoteReadonly = "test-remote-readonly-0123456789";
+        using var handler = new FakeRemoteAgent(remoteAdmin, remoteReadonly);
+        using var factory = new AgentTestFactory(managedHostHandler: handler);
+        using var admin = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+        using var viewer = factory.CreateClientWithToken(factory.CreateReadOnlyToken());
+
+        var registration = new ManagedHostInput("pc2", "PC 2",
+            "https://pc2.example.ts.net", remoteAdmin, remoteReadonly);
+        using var added = await admin.PostAsJsonAsync("/api/hosts", registration);
+        Assert.Equal(HttpStatusCode.OK, added.StatusCode);
+        var addedText = await added.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(remoteAdmin, addedText);
+        Assert.DoesNotContain(remoteReadonly, addedText);
+        Assert.DoesNotContain("pc2.example.ts.net", addedText);
+
+        using var view = await viewer.GetAsync("/api/hosts/overview");
+        Assert.Equal(HttpStatusCode.OK, view.StatusCode);
+        var overview = await view.Content.ReadAsStringAsync();
+        using var summary = JsonDocument.Parse(overview);
+        var remote = summary.RootElement.EnumerateArray()
+            .Single(x => x.GetProperty("id").GetString() == "pc2");
+        Assert.True(remote.GetProperty("online").GetBoolean());
+        Assert.Equal("Remote Game", remote.GetProperty("servers")[0].GetProperty("name").GetString());
+        Assert.Equal("Running", remote.GetProperty("servers")[0].GetProperty("processState").GetString());
+        Assert.DoesNotContain(remoteAdmin, overview);
+        Assert.DoesNotContain(remoteReadonly, overview);
+        Assert.DoesNotContain("fake-rcon-password", overview);
+
+        using var get = await viewer.GetAsync("/api/hosts/pc2/api/servers");
+        Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+        Assert.DoesNotContain("fake-rcon-password", await get.Content.ReadAsStringAsync());
+
+        using var denied = await viewer.PostAsync("/api/hosts/pc2/api/servers/remote-one/start", null);
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+
+        using var allowed = await admin.PostAsync("/api/hosts/pc2/api/servers/remote-one/start", null);
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+
+        using var negotiate = await viewer.PostAsync("/api/hosts/pc2/hubs/status/negotiate", null);
+        Assert.Equal(HttpStatusCode.OK, negotiate.StatusCode);
+
+        using var nested = await admin.GetAsync("/api/hosts/pc2/api/hosts");
+        Assert.Equal(HttpStatusCode.NotFound, nested.StatusCode);
+
+        Assert.Contains(handler.Calls, call => call.Path == "/api/servers/remote-one/start"
+            && call.Token == remoteAdmin && call.Method == "POST");
+        Assert.Contains(handler.Calls, call => call.Path == "/api/servers"
+            && call.Token == remoteReadonly);
+        Assert.Contains(handler.Calls, call => call.Path == "/hubs/status/negotiate"
+            && call.Token == remoteReadonly);
+        Assert.DoesNotContain(handler.Calls, call => call.Token == AgentTestFactory.AdminToken);
+    }
+
+    private sealed class FakeRemoteAgent : HttpMessageHandler
+    {
+        private readonly string _admin;
+        private readonly string _readonly;
+        public ConcurrentQueue<(string Path, string Token, string Method)> Calls { get; } = new();
+
+        public FakeRemoteAgent(string admin, string readonlyToken)
+        {
+            _admin = admin;
+            _readonly = readonlyToken;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var path = request.RequestUri?.AbsolutePath ?? "";
+            var token = request.Headers.Authorization?.Parameter ?? "";
+            var method = request.Method.Method;
+            Calls.Enqueue((path, token, method));
+            var valid = token == _admin || token == _readonly;
+            if (!valid)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            object? data = path switch
+            {
+                "/api/auth/me" => new { role = token == _admin ? "Admin" : "ReadOnly" },
+                "/api/servers" => token == _admin
+                    ? new[] { new { id = "remote-one", name = "Remote Game", gameType = "SteamGeneric",
+                        hostingMode = "BareMetal", rconPassword = "fake-rcon-password" } }
+                    : new[] { new { id = "remote-one", name = "Remote Game", gameType = "SteamGeneric",
+                        hostingMode = "BareMetal", rconPassword = "" } },
+                "/api/status" => new[] { new { id = "remote-one", processState = "Running",
+                    cpuPercent = 12.5, memoryMB = 256L, pidInGuest = 1234 } },
+                "/api/servers/remote-one/start" when token == _admin => new { success = true },
+                "/hubs/status/negotiate" => new { connectionToken = "fake-connection", connectionId = "fake" },
+                _ => null
+            };
+            return Task.FromResult(new HttpResponseMessage(data is null ? HttpStatusCode.Forbidden : HttpStatusCode.OK)
+            {
+                Content = data is null ? null : JsonContent.Create(data)
+            });
+        }
+    }
+
 }
