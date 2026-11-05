@@ -110,8 +110,8 @@ async function selectHost(id){
   showView('servers');
   setHostChrome();
   try{
-    if(id!=='all')await loadProfiles();
-    await loadServers(true);
+    if(id!=='all')try{await loadProfiles()}catch(e){setNotice('Profile refresh failed: '+e.message,'err',false)}
+    await loadServers(false);
     await refreshJobs(false);
   }catch(e){setNotice('Computer connection failed: '+e.message,'err',false)}
 }
@@ -515,10 +515,11 @@ boot=async function(){
 };
 
 loadServers=async function(silent=false){
-  if(GSCUX.refreshing)return;
+  if(GSCUX.refreshing&&GSCUX.refreshEpoch===HOST_SWITCH_EPOCH)return;
   if(ACTIVE_HOST_ID==='all'&&Date.now()-LAST_HOST_OVERVIEW<12000)return;
   GSCUX.refreshing=true;
   const selected=ACTIVE_HOST_ID,epoch=HOST_SWITCH_EPOCH;
+  GSCUX.refreshEpoch=epoch;
   try{
     if(selected==='all'){
       const overview=await api('/api/hosts/overview');
@@ -535,7 +536,7 @@ loadServers=async function(silent=false){
     }
     renderServers();
   }catch(e){if(!silent)setNotice('Refresh failed: '+e.message,'err',false)}
-  finally{GSCUX.refreshing=false}
+  finally{if(GSCUX.refreshEpoch===epoch)GSCUX.refreshing=false}
 };
 
 window.selectServer=function(id){GSCUX.selected=id;renderServers()};
