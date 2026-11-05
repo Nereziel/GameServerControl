@@ -77,7 +77,8 @@ function isReadOnlyControlPost(method, pathname) {
   if (String(method || '').toUpperCase() !== 'POST') return false;
   const path = String(pathname || '');
   if (path === '/hubs/status/negotiate') return true;
-  return /^\/api\/servers\/[^/]+\/logs\/tail$/i.test(path);
+  if (/^\/api\/hosts\/[a-z][a-z0-9-]{0,39}\/hubs\/status\/negotiate$/i.test(path)) return true;
+  return /^\/api\/(?:hosts\/[a-z][a-z0-9-]{0,39}\/api\/)?servers\/[^/]+\/logs\/tail$/i.test(path);
 }
 
 export function authorizeGatewayRequest(method, role, pathname = '') {
