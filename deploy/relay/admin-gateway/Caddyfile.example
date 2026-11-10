@@ -1,0 +1,42 @@
+# Copy this configuration to /etc/caddy/Caddyfile and replace the example
+# hostname and private Tailscale IPv4 addresses. The gateway forwards ONLY
+# authenticated HTTPS requests to Agents; it never serves a WebUI.
+#
+# Set GSC_ADMIN_GATEWAY_KEY in Caddy's protected systemd EnvironmentFile.
+# The SAME random value must be stored as GATEWAY_SHARED_KEY in the Worker.
+#
+# Each Caddy route ID MUST match its ID registered in the Cloudflare WebUI.
+# Never expose Agent port 5099 on a public interface.
+
+gsc-gateway.example.com {
+    # Caddy obtains/renews HTTPS certificates. Use DNS pointing to the VPS.
+    # All clients, including Cloudflare Worker, must use trusted HTTPS.
+    @pc1 {
+        path /gsc-agent/pc1/*
+        header X-GSC-Proxy-Key {$GSC_ADMIN_GATEWAY_KEY}
+    }
+    @pc2 {
+        path /gsc-agent/pc2/*
+        header X-GSC-Proxy-Key {$GSC_ADMIN_GATEWAY_KEY}
+    }
+
+    route {
+        handle @pc1 {
+            uri strip_prefix /gsc-agent/pc1
+            reverse_proxy http://100.100.10.1:5099 {
+                header_up -X-GSC-Proxy-Key
+                header_up -CF-Access-Jwt-Assertion
+            }
+        }
+        handle @pc2 {
+            uri strip_prefix /gsc-agent/pc2
+            reverse_proxy http://100.100.10.2:5099 {
+                header_up -X-GSC-Proxy-Key
+                header_up -CF-Access-Jwt-Assertion
+            }
+        }
+        handle {
+            respond "Forbidden" 403
+        }
+    }
+}
