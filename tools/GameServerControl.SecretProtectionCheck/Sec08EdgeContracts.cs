@@ -23,7 +23,7 @@ internal static class Sec08EdgeContracts
             try { Directory.Delete(root, recursive: true); } catch { }
         }
 
-        const string preserveLoop = "appsettings.json servers.json tokens.json public-relay.json secret-protection.key";
+        const string preserveLoop = "appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key";
         foreach (var installer in new[] { "deploy/linux/install-from-release.sh", "deploy/linux/install.sh" })
         {
             var source = File.ReadAllText(installer);
