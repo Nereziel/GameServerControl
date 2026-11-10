@@ -13,7 +13,7 @@
   "d1_databases": [{
     "binding": "HOSTS_DB",
     "database_name": "gameservercontrol-hosts",
-    "database_id": "00000000-0000-0000-0000-000000000000",
+    "database_id": "172b41ad-d096-4e63-b0c8-4de89c02635e",
     "migrations_dir": "migrations"
   }],
   "secrets": {
