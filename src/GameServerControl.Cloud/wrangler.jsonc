@@ -5,22 +5,24 @@
   "compatibility_date": "2026-11-02",
   "workers_dev": false,
   "preview_urls": false,
-  "observability": {
-    "enabled": true
-  },
+  "observability": { "enabled": true },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS"
   },
+  "d1_databases": [{
+    "binding": "HOSTS_DB",
+    "database_name": "gameservercontrol-hosts",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
   "secrets": {
     "required": [
-      "AGENT_ORIGIN",
+      "GATEWAY_ORIGIN",
+      "GATEWAY_SHARED_KEY",
+      "HOSTS_ENCRYPTION_KEY",
       "ACCESS_TEAM_DOMAIN",
-      "ACCESS_POLICY_AUD",
-      "AGENT_ADMIN_TOKEN",
-      "AGENT_READONLY_TOKEN",
-      "ORIGIN_ACCESS_CLIENT_ID",
-      "ORIGIN_ACCESS_CLIENT_SECRET"
+      "ACCESS_POLICY_AUD"
     ]
   }
 }
