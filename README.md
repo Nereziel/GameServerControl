@@ -138,9 +138,11 @@ The VPS provider/cloud firewall must still allow the selected public game ports.
 
 ## Multiple physical computers (Multi-Agent)
 
-Run one Agent per computer and register additional Agents with the main coordinator through the WebUI **+ Connect computer** menu. The **All computers** dashboard then shows game servers across hosts. Selecting a remote server opens its normal controls, configuration, backups and live console using authenticated server-to-server proxying. Remote tokens stay encrypted on the coordinator, not in the browser.
+Each Windows/Linux Agent independently manages its own game servers and offers a local WebUI. The **Cloudflare Worker** hosts a central panel with an encrypted D1 computer registry and reaches each PC independently over HTTPS through a forwarding-only VPS Caddy proxy and Tailscale. If PC1 is off, the dashboard still manages PC2. No `cloudflared` or main coordinator PC is required for this Cloudflare mode. The VPS **GameServerControl.Relay** stays separate and handles public game TCP/UDP ports only.
 
-For installation, network and Admin/ReadOnly setup, see [Multi-Agent management](docs/multi-agent-management.md). This feature requires reachable, explicitly registered remote Agents on a private Tailscale network or trusted HTTPS endpoint. A single Cloudflare Worker can continue to use the coordinator Agent as its sole origin.
+The existing **local Agent WebUI** can also coordinate remote Agents using its own encrypted `managed-hosts.json` registry; that local-only view depends on the PC hosting that WebUI.
+
+See [Cloudflare remote management](docs/cloudflare-remote-management.md) for the deployment, D1, VPN and gateway setup, and [local Multi-Agent management](docs/multi-agent-management.md) for direct/local use.
 
 ## Web UI
 

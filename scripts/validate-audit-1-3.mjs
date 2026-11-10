@@ -4,6 +4,7 @@ const roles = fs.readFileSync('src/GameServerControl.Agent/Auth/RoleEnforcementM
 const serverView = fs.readFileSync('src/GameServerControl.Shared/ServerViewDto.cs', 'utf8');
 const worker = fs.readFileSync('src/GameServerControl.Cloud/src/index.js', 'utf8');
 const wrangler = fs.readFileSync('src/GameServerControl.Cloud/wrangler.jsonc', 'utf8');
+const hosts = fs.readFileSync('src/GameServerControl.Cloud/src/hosts.js', 'utf8');
 const deploy = fs.readFileSync('.github/workflows/cloudflare-deploy.yml', 'utf8');
 const docs = fs.readFileSync('docs/cloudflare-remote-management.md', 'utf8');
 const agentProject = fs.readFileSync('src/GameServerControl.Agent/GameServerControl.Agent.csproj', 'utf8');
@@ -26,20 +27,28 @@ rejectToken(serverView, 'string? DiscordWebhookUrl', 'ServerViewDto must not exp
 requireToken(serverView, 'HasRconPassword', 'ServerViewDto should expose only RCON password presence');
 requireToken(serverView, 'HasDiscordWebhookUrl', 'ServerViewDto should expose only webhook presence');
 
-for (const token of ['AGENT_ADMIN_TOKEN', 'AGENT_READONLY_TOKEN']) {
-  requireToken(worker, `'${token}'`, `Worker requiredConfig must require ${token}`);
-  requireToken(wrangler, `"${token}"`, `Wrangler required secrets must include ${token}`);
-  requireToken(deploy, token, `Deploy workflow must map ${token}`);
-  requireToken(docs, `\`${token}\``, `Cloudflare docs must document ${token}`);
+// Cloudflare mode uses an encrypted credential pair per independent Agent
+// (stored in D1), not one global pair pointing at a single coordinator.
+for (const token of ['adminToken', 'readOnlyToken']) {
+  requireToken(hosts, token, 'Cloud per-host credentials must have distinct Admin/ReadOnly roles');
 }
-
-requireToken(deploy, 'GSC_CF_AGENT_ADMIN_TOKEN', 'Deploy workflow must use the Admin Agent token secret');
-requireToken(deploy, 'GSC_CF_AGENT_READONLY_TOKEN', 'Deploy workflow must use the ReadOnly Agent token secret');
-requireToken(docs, 'GSC_CF_AGENT_ADMIN_TOKEN', 'Cloudflare documentation must describe the Admin Agent token secret');
-requireToken(docs, 'GSC_CF_AGENT_READONLY_TOKEN', 'Cloudflare documentation must describe the ReadOnly Agent token secret');
+requireToken(worker, 'authorizeGatewayRequest', 'Cloud gateway must reject ReadOnly modifications');
+requireToken(worker, 'verifyPanelAccess', 'Cloud gateway must validate Cloudflare Access');
+requireToken(worker, 'getHost(env, hostId)', 'Cloud gateway must use a selected host record');
+requireToken(hosts, "'AES-GCM'", 'D1 Agent tokens must be encrypted using AES-GCM');
+requireToken(hosts, 'gatewayUrl(env, host.id', 'Host requests must use the fixed VPS gateway URL');
+requireToken(hosts, 'role === \'Admin\'', 'Cloud gateway must select correct per-host token role');
+requireToken(hosts, 'HOSTS_DB', 'Remote Agent credentials must live in D1, not browser storage');
+requireToken(wrangler, '"HOSTS_ENCRYPTION_KEY"', 'Worker must require a separate encryption-key secret');
+requireToken(wrangler, '"GATEWAY_SHARED_KEY"', 'Worker must authenticate to VPS gateway');
+requireToken(wrangler, '"HOSTS_DB"', 'Worker must bind a D1 database');
+requireToken(deploy, 'GSC_CF_HOSTS_ENCRYPTION_KEY', 'Deployment must supply the encryption key');
+requireToken(deploy, 'GSC_CF_GATEWAY_SHARED_KEY', 'Deployment must supply a distinct VPS gateway key');
+requireToken(docs, 'Admin', 'Cloudflare docs must describe the per-host Admin role');
+requireToken(docs, 'ReadOnly', 'Cloudflare docs must describe the per-host ReadOnly role');
+rejectToken(worker, 'env.AGENT_API_TOKEN', 'Worker must not fall back to a legacy Agent token');
+rejectToken(worker, 'env.AGENT_ADMIN_TOKEN', 'Worker must not use a coordinator-wide Admin token');
 rejectToken(deploy, 'GSC_CF_AGENT_API_TOKEN', 'Legacy single-token deploy mapping must be removed');
-rejectToken(worker, 'env.AGENT_API_TOKEN', 'Worker must not fall back to the legacy single-token binding');
-rejectToken(docs, 'GSC_CF_AGENT_API_TOKEN', 'Cloudflare documentation must not reference the legacy GitHub secret');
 
 requireToken(agentProject, '<PackageReference Include="System.Management.Automation" Version="7.4.21" />', 'Embedded PowerShell must be on the audited security patch level');
 

@@ -1,6 +1,11 @@
 # Multi-Agent: manage more than one physical computer
 
-GameServerControl uses **one Agent per physical computer**. A designated **coordinator Agent** holds encrypted connection records for other Agents. The existing WebUI and Cloudflare Worker talk to the coordinator; it proxies authorized requests to each remote Agent.
+GameServerControl uses **one Agent per physical computer**. There are two distinct administration modes:
+
+- **Cloudflare WebUI (recommended for independent PCs):** Cloudflare Worker holds the encrypted host registry in D1 and reaches each PC independently through the VPS HTTPS/Tailscale proxy. PC1 may be powered off while PC2 stays online. **No coordinator Agent is required**. See [Cloudflare remote management](cloudflare-remote-management.md).
+- **Direct/local Agent WebUI:** The Agent on the PC whose WebUI you opened can act as a coordinator for other registered Agents. This legacy local view depends on that coordinating Agent remaining online for its combined dashboard. Each individual PC still has its own local WebUI.
+
+The instructions below cover the **local Agent coordinator** mode, not the independent Cloudflare deployment.
 
 ```
 Browser / Cloudflare Access
@@ -48,14 +53,16 @@ The coordinator does **not** move, duplicate or run processes from remote comput
 
 ## Cloudflare panel
 
-The existing Cloudflare Worker still connects to **one** configured `AGENT_ORIGIN`: the coordinator. Host switching happens inside that Agent and works with the existing authenticated Cloudflare Access gateway and the same WebUI. No extra Cloudflare Worker, public API or DNS entry is required per remote computer.
+The Cloudflare WebUI no longer connects through a coordinating PC. The Worker uses its own encrypted D1 host registry and sends each API/SignalR request over HTTPS to the public **VPS forwarding gateway**. That proxy forwards only to the configured PC's Tailscale IPv4 Agent listener. The Worker does not depend on PC1 being online to administer PC2.
 
-Cloudflare Access still maps identities to the coordinator's `Admin` or `ReadOnly` role. The coordinator then selects the matching remote token. Only the narrow SignalR negotiation POST is allowed for read-only callers; command sending stays Admin-only.
+See [Cloudflare remote management](cloudflare-remote-management.md) for the separate Cloudflare-hosted registration UI, VPS Caddy configuration and D1 provisioning. Cloudflare Access maps authenticated users to Admin/ReadOnly, and remote Agent role checks remain enforced.
+
+The local `managed-hosts.json` registry remains supported for direct/local WebUI usage only.
 
 ## Limits and operational notes
 
 - Up to 20 remote host records can be configured. The combined dashboard limits each remote snapshot to the first 200 reported game servers.
 - The All computers dashboard polls less often than the selected host to avoid unnecessary network traffic.
 - Initial enrollment is manual; there is no automatic discovery, unattended credential exchange or public Internet inbound port requirement.
-- If the coordinator PC is down, the combined dashboard is unavailable, **but each remote Agent and its local WebUI continue working independently**.
-- Before a production deployment, verify host registration, startup/shutdown, ReadOnly access and live remote console across the actual network (including the Cloudflare path if used). Automated CI cannot reproduce your Tailscale network.
+- In **local coordinator** mode, if that PC is down its combined dashboard is unavailable; every other Agent still runs independently. **Cloudflare mode does not have this dependency.**
+- Before production deployment, verify registration, startup/shutdown, ReadOnly and live console over the real Tailscale network. Automated CI cannot reproduce the complete network.

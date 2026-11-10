@@ -70,7 +70,7 @@ function agentApiPath(path){
 
 function setHostChrome(){
   const all=ACTIVE_HOST_ID==='all';
-  for(const id of ['createServerBtn','discoverBtn','addExistingBtn']){
+  for(const id of ['createServerBtn','discoverBtn','addExistingBtn',...(window.GSC_CLOUD_MODE ? ['updateBtn','tokensBtn'] : [])]){
     const button=$('#'+id);
     if(button){
       button.disabled=all||!!(typeof isReadOnly==='function'&&isReadOnly());
@@ -84,8 +84,9 @@ function setHostChrome(){
 async function refreshManagedHosts(){
   const hosts=await api('/api/hosts');
   HOST_DIRECTORY=Array.isArray(hosts)?hosts:[];
-  if(ACTIVE_HOST_ID!=='all'&&ACTIVE_HOST_ID!=='local'&&!HOST_DIRECTORY.some(h=>h.id===ACTIVE_HOST_ID))
-    ACTIVE_HOST_ID='local';
+  if(ACTIVE_HOST_ID!=='all'&&!(ACTIVE_HOST_ID==='local'&&!window.GSC_CLOUD_MODE)&&
+      !HOST_DIRECTORY.some(h=>h.id===ACTIVE_HOST_ID))
+    ACTIVE_HOST_ID=window.GSC_CLOUD_MODE?'all':'local';
   const select=$('#hostSwitch');
   if(select){
     select.innerHTML='<option value="all">All computers</option>'+HOST_DIRECTORY.map(h=>
@@ -126,13 +127,18 @@ async function openManagedHosts(){
   const rows=HOST_DIRECTORY.filter(h=>!h.isLocal).map(h=>
     `<div class="host-managed-row"><span><b>${esc(h.name)}</b><small class="mono">${esc(h.id)}</small></span><button class="btn danger" ${uiAction('removeManagedHost',[h.id])}>Remove</button></div>`).join('')||
     '<div class="tiny muted">No additional computers registered yet.</div>';
-  const form=`<div class="host-security-note">Install GameServerControl Agent on the second PC first. Create one Admin and one ReadOnly token there. Connect via Tailscale or a TLS-protected private Agent URL. Tokens stay encrypted on this coordinating Agent, never in your browser after saving.</div>
+  const cloud=!!window.GSC_CLOUD_MODE;
+  const form=`<div class="host-security-note">${cloud?
+    'Install Agent on each PC, give it a Tailscale listener and configure its route in the VPS Caddy proxy. The route must match the Computer ID below. Tokens are encrypted in Cloudflare D1; one offline PC does not affect any other.':
+    'Install GameServerControl Agent on the second PC first. Create one Admin and one ReadOnly token there. Connect via Tailscale or a TLS-protected private Agent URL. Tokens stay encrypted on this coordinating Agent, never in your browser after saving.'}</div>
     <div class="host-form"><div class="formgrid"><div class="field"><label>Computer ID</label><input id="hostNewId" placeholder="gaming-pc-2" maxlength="40" autocomplete="off"></div>
     <div class="field"><label>Display name</label><input id="hostNewName" placeholder="Gaming PC 2" maxlength="80" autocomplete="off"></div></div>
-    <div class="field"><label>Agent address</label><input id="hostNewOrigin" type="url" placeholder="https://pc2.example.ts.net:5100 or http://100.100.1.2:5099" autocomplete="off"></div>
+    ${cloud?'':`<div class="field"><label>Agent address</label><input id="hostNewOrigin" type="url" placeholder="https://pc2.example.ts.net:5100 or http://100.100.1.2:5099" autocomplete="off"></div>`}
     <div class="formgrid"><div class="field"><label>Agent Admin token</label><input id="hostNewAdmin" type="password" autocomplete="new-password" spellcheck="false"></div>
     <div class="field"><label>Agent ReadOnly token</label><input id="hostNewReadonly" type="password" autocomplete="new-password" spellcheck="false"></div></div>
-    <div class="help">Credentials are verified against the remote Agent before the connection is saved. No unauthenticated or unencrypted public HTTP connection is allowed.</div>
+    <div class="help">Credentials are verified against the remote Agent before saving. ${cloud?
+      'Cloudflare always contacts the preconfigured HTTPS VPS gateway, never a browser-supplied origin.':
+      'No unauthenticated or unencrypted public HTTP connection is allowed.'}</div>
     <button class="btn primary" ${uiAction('saveManagedHost')}>Connect computer</button></div>`;
   openModal('Manage computers',
     '<div class="sw-section"><h3>Connected computers</h3>'+rows+'</div><div class="sw-section"><h3>Add a physical computer</h3>'+form+'</div>',
@@ -144,7 +150,7 @@ async function saveManagedHost(){
   const origin=$('#hostNewOrigin')?.value.trim()||'';
   const adminToken=$('#hostNewAdmin')?.value.trim()||'';
   const readOnlyToken=$('#hostNewReadonly')?.value.trim()||'';
-  if(!id||!name||!origin||!adminToken||!readOnlyToken)
+  if(!id||!name||(!window.GSC_CLOUD_MODE&&!origin)||!adminToken||!readOnlyToken)
     return toast('All computer connection fields are required.','err');
   const button=$('#hostNewAdmin')?.closest('.host-form')?.querySelector('button.primary');
   if(button)button.disabled=true;
@@ -269,7 +275,7 @@ async function init(){
 }
 window.addEventListener('DOMContentLoaded',init);
 
-async function refreshAll(){await Promise.allSettled([loadServers(),refreshJobs(false),checkForUpdate(false)])}
+async function refreshAll(){await Promise.allSettled([loadServers(),refreshJobs(false),...(ACTIVE_HOST_ID==='all'?[]:[checkForUpdate(false)])])}
 async function loadServers(){try{const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;renderServers()}catch(e){toast('Refresh failed: '+e.message,'err')}}
 function profileFor(d){return PROFILES.find(g=>g.appId&&g.appId===d.steamAppId)||PROFILES.find(g=>g.gameType===d.gameType&&g.gameType!=='SteamGeneric')||null}
 function serverMeta(d){const g=profileFor(d);return g?{icon:g.icon,label:g.label,profile:g}:{icon:'🖥',label:d.gameType||'Server',profile:{caps:{}}}}
@@ -505,13 +511,13 @@ toast=function(msg,kind=''){
 boot=async function(){
   if(GSCUX.booted)return;GSCUX.booted=true;
   $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
-  try{ACTIVE_HOST_ID=sessionStorage.getItem(HOST_KEY)||'local';await refreshManagedHosts()}catch(e){ACTIVE_HOST_ID='local';setNotice('Host list unavailable: '+e.message,'err',true)}
-  try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
+  try{ACTIVE_HOST_ID=sessionStorage.getItem(HOST_KEY)||(window.GSC_CLOUD_MODE?'all':'local');await refreshManagedHosts()}catch(e){ACTIVE_HOST_ID=window.GSC_CLOUD_MODE?'all':'local';setNotice('Host list unavailable: '+e.message,'err',true)}
+  if(ACTIVE_HOST_ID!=='all')try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
   await Promise.allSettled([loadServers(),refreshJobs(false)]);
-  await checkForUpdate(false);
+  if(ACTIVE_HOST_ID!=='all')await checkForUpdate(false);
   setInterval(()=>loadServers(true),2000);
   setInterval(()=>{try{const active=loadJobRefs().some(r=>!(JOB_CACHE[r.jobId]?.finished));if(CURRENT_VIEW==='installs'||active)refreshJobs(false)}catch{}},1000);
-  setInterval(()=>checkForUpdate(false),30*60*1000);
+  setInterval(()=>{if(ACTIVE_HOST_ID!=='all')checkForUpdate(false)},30*60*1000);
 };
 
 loadServers=async function(silent=false){
