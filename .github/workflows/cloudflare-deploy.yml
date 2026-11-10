@@ -4,12 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       panel_hostname:
-        description: 'Cloudflare Access-protected Worker hostname, e.g. panel.example.com'
+        description: 'Cloudflare Access-protected Worker hostname'
         required: true
+        default: panel.overcore.eu
         type: string
       gateway_origin:
-        description: 'Public HTTPS hostname of the VPS Caddy gateway, e.g. https://gateway.example.com'
+        description: 'Public HTTPS hostname of the VPS Caddy forwarding gateway'
         required: true
+        default: https://server.overcore.eu
         type: string
       access_team_domain:
         description: 'https://example.cloudflareaccess.com'
@@ -54,7 +56,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          HOSTS_DB_ID: ${{ secrets.GSC_CF_HOSTS_DB_ID }}
           HOSTS_ENCRYPTION_KEY: ${{ secrets.GSC_CF_HOSTS_ENCRYPTION_KEY }}
           GATEWAY_SHARED_KEY: ${{ secrets.GSC_CF_GATEWAY_SHARED_KEY }}
           ACCESS_ADMIN_EMAILS: ${{ secrets.GSC_CF_ACCESS_ADMIN_EMAILS }}
@@ -64,7 +65,7 @@ jobs:
           ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
         run: |
           set -euo pipefail
-          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN HOSTS_DB_ID HOSTS_ENCRYPTION_KEY \
+          for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN HOSTS_ENCRYPTION_KEY \
               GATEWAY_SHARED_KEY ACCESS_ADMIN_EMAILS PANEL_HOSTNAME GATEWAY_ORIGIN \
               ACCESS_TEAM_DOMAIN ACCESS_POLICY_AUD; do
             if [ -z "${!name:-}" ]; then
@@ -90,8 +91,10 @@ jobs:
               access.username || access.password || access.port || access.pathname !== '/' ||
               access.search || access.hash)
             fail('access_team_domain must be a plain Cloudflare Access team HTTPS hostname.');
-          if (!/^[0-9a-f-]{36}$/i.test(process.env.HOSTS_DB_ID))
-            fail('GSC_CF_HOSTS_DB_ID must be a D1 database UUID.');
+          const config = JSON.parse(require('node:fs').readFileSync('src/GameServerControl.Cloud/wrangler.jsonc', 'utf8'));
+          const databaseId = config.d1_databases?.find(db => db.binding === 'HOSTS_DB')?.database_id;
+          if (!/^[0-9a-f-]{36}$/i.test(databaseId || '') || databaseId === '00000000-0000-0000-0000-000000000000')
+            fail('wrangler.jsonc must bind the provisioned Cloudflare D1 database.');
           if (Buffer.from(process.env.HOSTS_ENCRYPTION_KEY, 'base64').length !== 32)
             fail('GSC_CF_HOSTS_ENCRYPTION_KEY must be 32 random base64-encoded bytes.');
           if (process.env.GATEWAY_SHARED_KEY.length < 32)
@@ -156,7 +159,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          HOSTS_DB_ID: ${{ secrets.GSC_CF_HOSTS_DB_ID }}
           HOSTS_ENCRYPTION_KEY: ${{ secrets.GSC_CF_HOSTS_ENCRYPTION_KEY }}
           GATEWAY_SHARED_KEY: ${{ secrets.GSC_CF_GATEWAY_SHARED_KEY }}
           ACCESS_ADMIN_EMAILS: ${{ secrets.GSC_CF_ACCESS_ADMIN_EMAILS }}
@@ -173,7 +175,6 @@ jobs:
           node - "$config_file" "$secrets_file" <<'NODE'
           const fs = require('node:fs');
           const cfg = JSON.parse(fs.readFileSync('wrangler.jsonc', 'utf8'));
-          cfg.d1_databases[0].database_id = process.env.HOSTS_DB_ID;
           fs.writeFileSync(process.argv[2], JSON.stringify(cfg), { mode: 0o600 });
           const names = ['GATEWAY_ORIGIN', 'GATEWAY_SHARED_KEY', 'HOSTS_ENCRYPTION_KEY',
             'ACCESS_TEAM_DOMAIN', 'ACCESS_POLICY_AUD', 'ACCESS_ADMIN_EMAILS'];
