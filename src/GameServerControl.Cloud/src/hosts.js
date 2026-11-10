@@ -25,6 +25,7 @@ export function validateGatewayConfig(env) {
       origin.pathname !== '/' || origin.search || origin.hash ||
       !/^[a-z0-9.-]+$/i.test(origin.hostname) ||
       origin.hostname === 'localhost' || !origin.hostname.includes('.') ||
+      /^\\d{1,3}(?:\\.\\d{1,3}){3}$/.test(origin.hostname) ||
       origin.port)
     throw new Error('GATEWAY_ORIGIN must be a public HTTPS hostname without a path or port.');
   if (String(env.GATEWAY_SHARED_KEY || '').length < 32)
