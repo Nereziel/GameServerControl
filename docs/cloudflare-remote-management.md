@@ -1,5 +1,7 @@
 # Cloudflare WebUI: independent Agents behind VPS Tailscale proxy
 
+**Current deployment targets:** `panel.overcore.eu` (Cloudflare Worker + Access + D1) and `server.overcore.eu` (HTTPS-only forwarding on VPS). DNS and VPS routes must be verified before cutover; the domain choices alone do not mean the panel is deployed.
+
 **Current architecture:** Cloudflare Worker + Cloudflare Access + Cloudflare D1 (administration), one VPS running Caddy (HTTPS/WebSocket forwarding only), and an independent GameServerControl Agent on each PC. The existing `GameServerControl.Relay` continues to handle **game traffic only** and is not an administration coordinator.
 
 There is **no `cloudflared` requirement** on either PC or on the VPS. Agents have no public Internet listeners. Every remote administration request goes:
@@ -26,7 +28,7 @@ Cloudflare Worker does **not** send requests through PC1 to reach PC2. If PC1 is
 
 ## 1. Set up the forwarding-only VPS
 
-The VPS needs a public DNS name and HTTPS listener, e.g. `gsc-gateway.example.com`. This is a **separate** hostname from the human-facing Worker panel, e.g. `panel.example.com`. Point the gateway DNS name to the VPS public IP; DNS-only is simplest. Install Caddy on the VPS (or add equivalent rules to an existing TLS reverse proxy).
+The GSC VPS gateway is `server.overcore.eu` (public HTTPS). The Cloudflare Worker panel is `panel.overcore.eu` (different hostname). Point **server.overcore.eu** directly at the actual VPS public IP, preferably DNS-only; do not guess the address from other DNS records. Install Caddy on the VPS (or add equivalent rules to an existing TLS reverse proxy).
 
 1. Copy [the example Caddyfile](../deploy/relay/admin-gateway/Caddyfile.example) to the VPS configuration. Replace the gateway hostname with your real domain. Replace `100.100.10.1` and `100.100.10.2` with the **actual Tailscale IPv4** addresses of PC1 and PC2.
 2. Generate a random gateway secret on the VPS with `openssl rand -hex 32`. Put it into a root-owned, restricted systemd EnvironmentFile (`GSC_ADMIN_GATEWAY_KEY=<secret>`), readable by Caddy. The Cloudflare Worker uses the **same value** as `GATEWAY_SHARED_KEY`, stored as a Worker secret.
@@ -83,8 +85,8 @@ Use `pc2` on the second PC. Relay entries become `pc1-valheim` and `pc2-valheim`
 
 The Cloudflare Worker serves the existing responsive Agent WebUI as static assets and uses the **Cloudflare Access** login. It stores a list of PCs in Cloudflare D1, with per-PC tokens encrypted by AES-256-GCM using a *separate* Worker encryption-key secret.
 
-1. Create a D1 database named `gameservercontrol-hosts`, for example using `wrangler d1 create gameservercontrol-hosts`. Copy its UUID into the GitHub Actions secret `GSC_CF_HOSTS_DB_ID`. The Worker deployment action applies `migrations/0001_registered_hosts.sql`.
-2. Create two DNS hostnames on your Cloudflare-managed domain: `panel.<domain>` (Worker Custom Domain) and `gateway.<domain>` (HTTPS endpoint on VPS).
+1. The D1 database `gameservercontrol-hosts` is already provisioned in Cloudflare, and its non-secret database ID is configured in `src/GameServerControl.Cloud/wrangler.jsonc`. No GitHub secret is needed for the D1 ID. The Worker deployment action applies `migrations/0001_registered_hosts.sql`.
+2. Use `panel.overcore.eu` for the Worker Custom Domain and `server.overcore.eu` for the HTTPS VPS gateway. **Important:** `panel.overcore.eu` already has an older proxied A record. Before switching it to the Worker, verify that the existing site is no longer needed. The deploy must not silently repurpose the old DNS record. `server.overcore.eu` currently has no explicit DNS record and would match the existing wildcard until an explicit record is configured.
 3. Protect the exact panel hostname with a Cloudflare Access application and an allow policy for intended users. Note its audience (`AUD`) and team domain (`https://<team>.cloudflareaccess.com`). The deployment action checks that Access protection is already in place, then deploys. `workers.dev` and preview URLs remain disabled.
 4. Set the required **GitHub Actions secrets** (values remain private, never committed):
 
@@ -92,12 +94,11 @@ The Cloudflare Worker serves the existing responsive Agent WebUI as static asset
 |---|---|
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account |
 | `CLOUDFLARE_API_TOKEN` | Scoped Worker deploy, D1 migrations and Access-app read permissions |
-| `GSC_CF_HOSTS_DB_ID` | Existing D1 database UUID |
 | `GSC_CF_HOSTS_ENCRYPTION_KEY` | 32 random bytes encoded as base64 (`openssl rand -base64 32`) |
 | `GSC_CF_GATEWAY_SHARED_KEY` | Random secret identical to VPS Caddy `GSC_ADMIN_GATEWAY_KEY` |
 | `GSC_CF_ACCESS_ADMIN_EMAILS` | Comma-separated allowlist for Cloudflare users permitted to administer servers and register PCs |
 
-5. Run GitHub Actions **Deploy Cloudflare panel** with `panel_hostname`, `gateway_origin`, `access_team_domain` and `access_policy_aud`. No per-PC Agent tokens are deployment secrets: add them through the authenticated WebUI instead.
+5. Run GitHub Actions **Deploy Cloudflare panel** with `panel_hostname=panel.overcore.eu`, `gateway_origin=https://server.overcore.eu`, `access_team_domain` and `access_policy_aud`. No per-PC Agent tokens are deployment secrets: add them through the authenticated WebUI instead.
 
 The Worker also needs runtime variables `GATEWAY_ORIGIN`, `GATEWAY_SHARED_KEY`, `HOSTS_ENCRYPTION_KEY`, `ACCESS_TEAM_DOMAIN`, `ACCESS_POLICY_AUD`, `ACCESS_ADMIN_EMAILS`, plus the `HOSTS_DB` D1 binding. The action configures them when it deploys.
 
@@ -105,7 +106,7 @@ The deploy workflow performs a positive HTTPS gateway health probe **and** a neg
 
 ## 4. Register and manage computers
 
-Open `https://panel.<domain>` and log in through Cloudflare Access.
+Open `https://panel.overcore.eu` and log in through Cloudflare Access.
 
 - The starting view is **All computers**, even when none have been registered.
 - Click **+ Connect computer**. Enter a stable lowercase ID that matches the VPS Caddy route (`pc1`, `pc2`, etc.), a display name and that computer's dedicated Admin and ReadOnly Agent tokens.
