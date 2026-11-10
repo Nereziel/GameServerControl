@@ -1,248 +1,111 @@
-# Cloudflare remote management
+# Cloudflare WebUI: independent Agents behind VPS Tailscale proxy
 
-GameServerControl keeps the Agent as the source of truth. Cloudflare is an optional remote-management layer; local Agent Web UI remains available even if Cloudflare or the public VPS relay is unavailable.
+**Current architecture:** Cloudflare Worker + Cloudflare Access + Cloudflare D1 (administration), one VPS running Caddy (HTTPS/WebSocket forwarding only), and an independent GameServerControl Agent on each PC. The existing `GameServerControl.Relay` continues to handle **game traffic only** and is not an administration coordinator.
 
-## Architecture
-
-```text
-Remote administration
-Browser
-  -> Cloudflare Access
-  -> GameServerControl Cloud Worker
-       -> Cloudflare Access service token
-       -> Cloudflare Tunnel origin
-       -> GameServerControl Agent on 127.0.0.1:5099
-
-Local administration
-Browser on LAN / Tailscale
-  -> GameServerControl Agent directly
-
-Game traffic
-Player
-  -> public VPS
-  -> GameServerControl.Relay
-  -> Tailscale
-  -> game server
-```
-
-The VPS relay is deliberately independent from remote administration. Losing the VPS therefore does not remove local or Cloudflare administration as long as the Agent host still has Internet access.
-
-## Shared Web UI
-
-`src/GameServerControl.Cloud/scripts/build.mjs` stages the current Agent Web UI into the Cloudflare Worker static-assets directory. There is no separate cloud dashboard to maintain.
-
-The cloud build injects a small adapter which:
-
-- points the existing UI at the same-origin Worker gateway,
-- uses only a non-secret placeholder token in the browser,
-- labels the session as Cloudflare remote,
-- sends sign-out to Cloudflare Access,
-- keeps the Agent's normal local login/token flow unchanged.
-
-The Worker replaces the placeholder credentials server-side with the role-appropriate Agent token. The real Agent Admin/ReadOnly tokens never need to be stored in browser storage or sent to browser JavaScript.
-
-The same API path also carries the server config-file workspace. Config files and mod/plugin configs stay on the Agent host; the Worker only transports their text contents and control requests.
-
-## Security boundaries
-
-The Worker only proxies `/api/*` and `/hubs/*`. Static assets are served from Workers Static Assets.
-
-Remote API and SignalR/WebSocket requests require a valid Cloudflare Access JWT for the panel application. The Worker validates the JWT signature, issuer and audience using the Cloudflare Access JWKS endpoint.
-
-The private Agent origin must use a separate Tunnel hostname protected by a Cloudflare Access `Service Auth` policy. The Worker authenticates to that hostname with an Access service token, then authenticates to GameServerControl with an Agent token selected for the resolved Access role.
-
-The checked-in Wrangler configuration contains no production hostnames, tokens or audience IDs. All seven required runtime values are declared as required secrets so a production deploy fails instead of silently using example values:
-
-- `AGENT_ORIGIN` - HTTPS hostname routed by Cloudflare Tunnel to the Agent, for example `https://gsc-origin.example.com`.
-- `ACCESS_TEAM_DOMAIN` - Cloudflare Access team domain, for example `https://example.cloudflareaccess.com`.
-- `ACCESS_POLICY_AUD` - audience tag for the Access application protecting the panel.
-- `AGENT_ADMIN_TOKEN` - GameServerControl Agent token with the Admin role.
-- `AGENT_READONLY_TOKEN` - GameServerControl Agent token with the ReadOnly role.
-- `ORIGIN_ACCESS_CLIENT_ID` - Access service-token client ID for the private Tunnel origin.
-- `ORIGIN_ACCESS_CLIENT_SECRET` - Access service-token client secret for the private Tunnel origin.
-
-`workers_dev` and Worker preview URLs are disabled in the checked-in Wrangler configuration so the gateway is not accidentally exposed through an unprotected default Workers hostname.
-
-For mutating API requests the Worker forwards the authenticated Access user identity to the Agent as audit metadata. Agent audit entries therefore retain both the Agent bearer identity and the remote Access user when the request came through the Cloudflare gateway.
-
-The Worker also rejects cross-origin `POST`, `PUT`, `PATCH` and `DELETE` requests before proxying them to the Agent.
-
-## Cloudflare Tunnel origin
-
-The Tunnel runs on the Agent host and forwards only to the local Agent listener:
+There is **no `cloudflared` requirement** on either PC or on the VPS. Agents have no public Internet listeners. Every remote administration request goes:
 
 ```text
-gsc-origin.example.com -> http://127.0.0.1:5099
+Browser ──HTTPS──> Cloudflare Access ──> Worker static WebUI
+                                                |
+                                      encrypted D1 host registry
+                                                |
+                                      fixed VPS public HTTPS hostname
+                                                |
+                                 authenticated Caddy reverse proxy
+                                       /               \
+                                      /                 \
+                          Tailscale to PC1         Tailscale to PC2
+                          Agent API/SignalR       Agent API/SignalR
+                          local WebUI             local WebUI
+
+Game players ──public TCP/UDP──> VPS GameServerControl.Relay
+                                    └──Tailscale──> game server on PC1 or PC2
 ```
 
-The Agent does not need an inbound Internet firewall rule. `cloudflared` establishes the connection outbound to Cloudflare.
+Cloudflare Worker does **not** send requests through PC1 to reach PC2. If PC1 is powered down, the Worker still serves the dashboard, marks PC1 offline and connects directly to PC2 through the VPS proxy.
 
-The origin hostname is not the human-facing panel. Protect it with a Service Auth policy that only accepts the Worker service token.
+## 1. Set up the forwarding-only VPS
 
-### Windows connector bootstrap
+The VPS needs a public DNS name and HTTPS listener, e.g. `gsc-gateway.example.com`. This is a **separate** hostname from the human-facing Worker panel, e.g. `panel.example.com`. Point the gateway DNS name to the VPS public IP; DNS-only is simplest. Install Caddy on the VPS (or add equivalent rules to an existing TLS reverse proxy).
 
-For a remotely-managed tunnel, first create the tunnel and its published application in Cloudflare. Copy the tunnel token from **Networking > Tunnels > Add a replica**. Treat the token like a password: anyone holding it can run a connector for that tunnel.
+1. Copy [the example Caddyfile](../deploy/relay/admin-gateway/Caddyfile.example) to the VPS configuration. Replace the gateway hostname with your real domain. Replace `100.100.10.1` and `100.100.10.2` with the **actual Tailscale IPv4** addresses of PC1 and PC2.
+2. Generate a random gateway secret on the VPS with `openssl rand -hex 32`. Put it into a root-owned, restricted systemd EnvironmentFile (`GSC_ADMIN_GATEWAY_KEY=<secret>`), readable by Caddy. The Cloudflare Worker uses the **same value** as `GATEWAY_SHARED_KEY`, stored as a Worker secret.
+3. Configure `caddy.service` to read the EnvironmentFile. Validate with `caddy validate --config /etc/caddy/Caddyfile` before reloading the service.
+4. The site has only a few explicit routes: `/gsc-agent/pc1/*`, `/gsc-agent/pc2/*`, etc. Every request must contain the gateway secret in `X-GSC-Proxy-Key`; requests without it return HTTP 403. Caddy strips that header before forwarding to Agent. Caddy supports WebSocket upgrades, required for the live console.
+5. The authenticated check `GET /_gsc_gateway/health` returns HTTP 200; **without the secret it must return HTTP 403**. The deployment workflow tests both.
+6. Open only HTTPS/TLS ports necessary for the gateway on the VPS. Keep the existing `GameServerControl.Relay` TCP/UDP rules separate. Never expose the Agent API port 5099 publicly.
 
-On the Windows Agent host, run an elevated PowerShell session:
+Example systemd override for the existing Caddy service:
 
-```powershell
-.\deploy\cloudflare\install-tunnel-windows.ps1 -TunnelToken '<TUNNEL_TOKEN>'
+```ini
+[Service]
+EnvironmentFile=/etc/caddy/gsc-admin-gateway.env
 ```
 
-The script:
+The sample Caddyfile is a configuration **example** and is not deployed automatically. Host IDs in the Caddyfile must exactly match the IDs added later in the WebUI. Adding a new PC requires a new VPS forwarding route (reload Caddy) plus adding that PC in the Cloudflare UI.
 
-- verifies that the local Agent listener is reachable,
-- installs the current Windows amd64 `cloudflared` executable under `Program Files\GameServerControl\cloudflared`,
-- installs it as the `cloudflared` Windows service using the remotely-managed tunnel token,
-- sets automatic startup,
-- verifies that the service reaches the `Running` state.
+The shared gateway secret restricts access to your forwarding proxy; each destination Agent additionally requires its own bearer token and enforces Admin/ReadOnly. Keep that secret out of source code and out of proxy access logs.
 
-If a `cloudflared` service already exists, the script refuses to overwrite it. Use `-ReplaceExisting` only when the existing connector is intentionally being replaced by the GameServerControl tunnel.
+## 2. Give each Agent a Tailscale listener
 
-The remotely-managed Tunnel configuration in Cloudflare must publish the origin hostname to:
-
-```text
-http://127.0.0.1:5099
-```
-
-Do not configure the Tunnel to reach the Agent through a public/LAN listener when the local loopback listener is available.
-
-## Panel application
-
-The human-facing hostname, for example `panel.example.com`, is a Worker Custom Domain and must be protected by a hostname-based Cloudflare Access application before the deployment workflow is run.
-
-The Access application should allow only the users/groups that administer or view the game servers. The deployment workflow checks that an exact Access application already exists for the requested panel hostname and that its `aud` matches the supplied `access_policy_aud`. This prevents the workflow from creating a new public Worker hostname before Access protection exists.
-
-The Worker proxies both normal REST calls and `/hubs/status` SignalR WebSocket traffic. The browser therefore uses the same console, live logs, status, file/config editor and server controls remotely as it does locally, subject to the resolved Admin/ReadOnly role.
-
-## Authenticated diagnostics
-
-Two Worker diagnostics endpoints exist:
-
-```text
-GET /gateway/health
-GET /gateway/status
-```
-
-`/gateway/health` only reports whether the Worker has all required bindings. It does not contact the Agent.
-
-`/gateway/status` requires the normal panel Cloudflare Access identity. It then performs a server-to-server health probe through the origin Access Service Auth policy and Tunnel to `Agent /api/health` using the ReadOnly Agent token. The response contains only safe status metadata:
+Each PC retains the local loopback UI `http://127.0.0.1:5099`. You can add a **second** restricted listener in Agent configuration:
 
 ```json
 {
-  "ok": true,
-  "mode": "cloudflare",
-  "user": "admin@example.com",
-  "agent": {
-    "reachable": true,
-    "status": 200,
-    "timestamp": "2026-11-02T10:00:00Z"
+  "Agent": {
+    "Bind": "http://127.0.0.1:5099",
+    "BindTailscale": "http://100.100.10.1:5099"
   }
 }
 ```
 
-No Agent token or Access service-token credential is returned.
+Use that PC's *actual* Tailscale address. `Agent:BindTailscale` is optional; the Agent rejects non-Tailscale IPv4, an arbitrary port or a public interface. Restart the Agent after changing its listener. Restrict host firewall rules so that **only the VPS Tailscale address** can reach the Agent's Tailscale listener on TCP 5099. Do not bind Agent to `0.0.0.0` to make it reachable.
 
-## Build and validation
+On every PC, create **two distinct Agent managed tokens** in its local WebUI: one `Admin`, one `ReadOnly`. Avoid using the bootstrap token for cross-host automation.
 
-From the repository root:
+## 3. Provision Cloudflare
 
-```bash
-cd src/GameServerControl.Cloud
-npm install
-npm test
-npm run build
-```
+The Cloudflare Worker serves the existing responsive Agent WebUI as static assets and uses the **Cloudflare Access** login. It stores a list of PCs in Cloudflare D1, with per-PC tokens encrypted by AES-256-GCM using a *separate* Worker encryption-key secret.
 
-The build output is generated under `src/GameServerControl.Cloud/dist/` and is intentionally ignored by Git.
+1. Create a D1 database named `gameservercontrol-hosts`, for example using `wrangler d1 create gameservercontrol-hosts`. Copy its UUID into the GitHub Actions secret `GSC_CF_HOSTS_DB_ID`. The Worker deployment action applies `migrations/0001_registered_hosts.sql`.
+2. Create two DNS hostnames on your Cloudflare-managed domain: `panel.<domain>` (Worker Custom Domain) and `gateway.<domain>` (HTTPS endpoint on VPS).
+3. Protect the exact panel hostname with a Cloudflare Access application and an allow policy for intended users. Note its audience (`AUD`) and team domain (`https://<team>.cloudflareaccess.com`). The deployment action checks that Access protection is already in place, then deploys. `workers.dev` and preview URLs remain disabled.
+4. Set the required **GitHub Actions secrets** (values remain private, never committed):
 
-For local Worker development, create an uncommitted `src/GameServerControl.Cloud/.dev.vars` containing the seven required runtime values listed above, then run:
+| Secret | Purpose |
+|---|---|
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account |
+| `CLOUDFLARE_API_TOKEN` | Scoped Worker deploy, D1 migrations and Access-app read permissions |
+| `GSC_CF_HOSTS_DB_ID` | Existing D1 database UUID |
+| `GSC_CF_HOSTS_ENCRYPTION_KEY` | 32 random bytes encoded as base64 (`openssl rand -base64 32`) |
+| `GSC_CF_GATEWAY_SHARED_KEY` | Random secret identical to VPS Caddy `GSC_ADMIN_GATEWAY_KEY` |
+| `GSC_CF_ACCESS_ADMIN_EMAILS` | Comma-separated allowlist for Cloudflare users permitted to administer servers and register PCs |
 
-```bash
-npm run dev
-```
+5. Run GitHub Actions **Deploy Cloudflare panel** with `panel_hostname`, `gateway_origin`, `access_team_domain` and `access_policy_aud`. No per-PC Agent tokens are deployment secrets: add them through the authenticated WebUI instead.
 
-`.dev.vars` is ignored by Git.
+The Worker also needs runtime variables `GATEWAY_ORIGIN`, `GATEWAY_SHARED_KEY`, `HOSTS_ENCRYPTION_KEY`, `ACCESS_TEAM_DOMAIN`, `ACCESS_POLICY_AUD`, `ACCESS_ADMIN_EMAILS`, plus the `HOSTS_DB` D1 binding. The action configures them when it deploys.
 
-## Production handoff order
+The deploy workflow performs a positive HTTPS gateway health probe **and** a negative probe without credentials. It does not need PC1 or PC2 to be online to deploy the initial panel.
 
-Do the account-specific setup in this order so there is never an intentionally public administration endpoint:
+## 4. Register and manage computers
 
-1. Enable Cloudflare Zero Trust for the account if it is not already enabled.
-2. Create a remotely-managed Tunnel, publish `gsc-origin.<domain>` to `http://127.0.0.1:5099`, and install the connector on the Windows Agent host.
-3. Create an Access Service Token for the private origin.
-4. Protect `gsc-origin.<domain>` with a Service Auth Access application/policy that accepts that service token.
-5. Test the origin with the service token plus the GameServerControl ReadOnly Agent token.
-6. Create the hostname-based Access application for `panel.<domain>` and allow only the intended users.
-7. Copy the panel Access application `aud` value.
-8. Configure the six GitHub Actions secrets listed below.
-9. Run **Deploy Cloudflare panel** with the four non-secret deployment inputs.
-10. Sign in to the panel and open `https://panel.<domain>/gateway/status` to verify the complete path.
+Open `https://panel.<domain>` and log in through Cloudflare Access.
 
-The public VPS/GameServerControl Relay is not part of these steps.
+- The starting view is **All computers**, even when none have been registered.
+- Click **+ Connect computer**. Enter a stable lowercase ID that matches the VPS Caddy route (`pc1`, `pc2`, etc.), a display name and that computer's dedicated Admin and ReadOnly Agent tokens.
+- Cloudflare tests each token's real `/api/auth/me` role **through the VPS** before encrypting and saving the host. If the route is missing/offline, registration fails safely.
+- The dashboard reads both Agents independently. Choose one PC or a game server to manage starts, stops, backups, logs, configs, installs or console.
+- When one Agent goes offline, only that PC is shown offline. The other PC is still controllable. Local UI keeps working regardless of Cloudflare.
+- Removing a PC deletes its central credentials and record. It **does not** uninstall Agent, delete games or stop processes. Revoke remote managed tokens locally when they are no longer needed.
 
-## Manual production deployment from GitHub Actions
+## Security boundary and limits
 
-The repository contains `.github/workflows/cloudflare-deploy.yml`. It is intentionally `workflow_dispatch` only: pushes to `main` never publish the panel automatically.
+- Worker validates the Cloudflare Access JWT (issuer, audience, signature) and maps logged-in users to Admin or ReadOnly according to the explicit admin email allowlist. It checks state-changing requests for same-origin CSRF and forwards the correct per-host credential. ReadOnly cannot mutate remote state.
+- Worker never accepts an arbitrary upstream URL from a browser. Its target hostname comes **only** from the `GATEWAY_ORIGIN` secret, with a syntactically restricted host ID/path. VPS Caddy resolves the host ID to a preconfigured Tailscale IP. No request-controlled destination IP or unrestricted proxy is allowed.
+- Worker does not expose D1 credentials, VPS gateway key or host tokens to the browser. Tokens are encrypted separately from the D1 database using a Worker secret. Rotating the encryption key requires a credential migration or re-registering the PCs.
+- VPS sees forwarded request headers and Agent bearer credentials while handling the request but does not persist them; do not enable verbose sensitive header logging. TLS protects Cloudflare→VPS, Tailscale protects VPS→PC. Agent and Caddy each enforce their own authentication boundaries.
+- Limit of 20 registered PCs and 200 displayed game servers per PC. No host-to-host failover is necessary to keep online PCs manageable.
 
-### GitHub Actions secrets
+**This is the target deployment procedure, not a claim that it has been deployed to your VPS or Cloudflare account.** A real-network smoke test is still required.
 
-Configure only credentials/account identifiers as repository or environment secrets:
-
-```text
-CLOUDFLARE_ACCOUNT_ID
-CLOUDFLARE_API_TOKEN
-GSC_CF_AGENT_ADMIN_TOKEN
-GSC_CF_AGENT_READONLY_TOKEN
-GSC_CF_ORIGIN_ACCESS_CLIENT_ID
-GSC_CF_ORIGIN_ACCESS_CLIENT_SECRET
-```
-
-Do not commit any of these values.
-
-The two Agent secrets must belong to distinct Agent tokens with the matching `Admin` and `ReadOnly` roles. Do not reuse an Admin token for the ReadOnly binding.
-
-The Cloudflare API token is used both by Wrangler and by the deployment preflight. It must be scoped to the intended account/zone and have enough permission to deploy the Worker, manage the selected Worker Custom Domain, and list the Access application protecting the panel. Cloudflare currently requires Worker Editor access plus Zone `Workers Routes Write` when adding or changing a Custom Domain; do not use a global API key when a scoped token is sufficient.
-
-### Workflow inputs
-
-Values that identify the selected deployment are normal manual workflow inputs rather than long-lived GitHub secrets:
-
-```text
-panel_hostname       panel.example.com
-agent_origin         https://gsc-origin.example.com
-access_team_domain   https://your-team.cloudflareaccess.com
-access_policy_aud    <panel Access application AUD>
-```
-
-The workflow rejects malformed URLs/hostnames and rejects using the same hostname for the panel and private Agent origin.
-
-### What the workflow verifies
-
-Before any Worker custom domain is deployed, the workflow:
-
-1. builds the current shared Agent Web UI,
-2. validates all required input and secret values,
-3. asks the Cloudflare Access API for an exact application matching `panel_hostname`,
-4. verifies the supplied `access_policy_aud` matches that application,
-5. calls `${agent_origin}/api/health` using both the origin Access service token and ReadOnly Agent token,
-6. aborts if the Tunnel, Service Auth policy, service token or Agent authentication is not working,
-7. uploads the seven Worker runtime values as encrypted Worker secrets,
-8. runs `wrangler deploy --strict --domain <panel_hostname>`.
-
-Using Wrangler's Custom Domain deployment means Cloudflare creates/manages the Worker DNS record and certificate for the selected panel hostname. The hostname must belong to an active Cloudflare zone and must not already have a conflicting CNAME record.
-
-## What is intentionally left for the real account
-
-No Cloudflare account resources are silently created by a normal repository push. The remaining values are environment-specific and cannot be selected safely from source code alone:
-
-- the Cloudflare account/zone,
-- `panel.<domain>`,
-- `gsc-origin.<domain>`,
-- which administrator/viewer identities are allowed by Access,
-- the Tunnel token,
-- the origin Access service token,
-- the panel Access application AUD,
-- the Agent Admin and ReadOnly tokens.
-
-Once those concrete values are chosen, the repository is prepared to verify and deploy the panel without changing or disabling local Agent administration.
+For local-only Multi-Agent management without Cloudflare, see [Multi-Agent management](multi-agent-management.md).
