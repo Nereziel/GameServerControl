@@ -23,6 +23,25 @@ var bind = builder.Configuration["Agent:Bind"] ?? "http://127.0.0.1:5099";
 var bindHttps = builder.Configuration["Agent:BindHttps"];
 var bindUrls = new List<string> { bind };
 if (!string.IsNullOrWhiteSpace(bindHttps)) bindUrls.Add(bindHttps);
+
+// Keep loopback WebUI available while giving the VPS gateway a dedicated
+// Tailscale-only listener. Never bind a second administrative listener to
+// 0.0.0.0 or an arbitrary public interface.
+var bindTailscale = builder.Configuration["Agent:BindTailscale"];
+if (!string.IsNullOrWhiteSpace(bindTailscale))
+{
+    if (!Uri.TryCreate(bindTailscale, UriKind.Absolute, out var vpnUri) ||
+        vpnUri.Scheme != Uri.UriSchemeHttp || vpnUri.AbsolutePath != "/" ||
+        vpnUri.Query.Length != 0 || vpnUri.Fragment.Length != 0 ||
+        !string.IsNullOrEmpty(vpnUri.UserInfo) || vpnUri.Port != 5099 ||
+        !System.Net.IPAddress.TryParse(vpnUri.Host, out var vpnIp) ||
+        vpnIp.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
+        throw new InvalidOperationException("Agent:BindTailscale must be http://<Tailscale IPv4>:5099.");
+    var bytes = vpnIp.GetAddressBytes();
+    if (bytes[0] != 100 || bytes[1] is < 64 or > 127)
+        throw new InvalidOperationException("Agent:BindTailscale must use Tailscale's 100.64.0.0/10 address range.");
+    bindUrls.Add(bindTailscale.TrimEnd('/'));
+}
 builder.WebHost.UseUrls(bindUrls.ToArray());
 
 if (!string.IsNullOrWhiteSpace(bindHttps))
