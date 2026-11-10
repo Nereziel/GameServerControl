@@ -1,6 +1,5 @@
-# Copy this configuration to /etc/caddy/Caddyfile. The GSC hostname is
-# server.overcore.eu; replace both EXAMPLE Tailscale IPv4 addresses with actual
-# addresses for the two Agents, and verify the DNS points to the real VPS. The gateway forwards ONLY
+# Copy this configuration to /etc/caddy/Caddyfile and replace the example
+# hostname and private Tailscale IPv4 addresses. The gateway forwards ONLY
 # authenticated HTTPS requests to Agents; it never serves a WebUI.
 #
 # Set GSC_ADMIN_GATEWAY_KEY in Caddy's protected systemd EnvironmentFile.
@@ -9,7 +8,7 @@
 # Each Caddy route ID MUST match its ID registered in the Cloudflare WebUI.
 # Never expose Agent port 5099 on a public interface.
 
-server.overcore.eu {
+gsc-gateway.example.com {
     # Caddy obtains/renews HTTPS certificates. Use DNS pointing to the VPS.
     # All clients, including Cloudflare Worker, must use trusted HTTPS.
     @health {
