@@ -123,7 +123,7 @@ fi
 if [[ -d "$INSTALL_DIR" ]]; then
     step "Restricting existing Agent state before upgrade"
     chmod 700 "$INSTALL_DIR"
-    for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key appsettings.json.bak servers.json.bak; do
+    for f in appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key appsettings.json.bak servers.json.bak; do
         [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
     done
     ok "Existing Agent state permissions restricted."
@@ -132,7 +132,7 @@ fi
 step "Installing into $INSTALL_DIR"
 preserve_dir="$tmp_dir/preserved"
 mkdir -p "$preserve_dir"
-for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+for f in appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key; do
     if [[ -f "$INSTALL_DIR/$f" ]]; then
         cp "$INSTALL_DIR/$f" "$preserve_dir/$f"
         skip "Preserving $f"
@@ -151,7 +151,7 @@ mkdir -p "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
 tar -xzf "$tmp_dir/agent.tar.gz" -C "$INSTALL_DIR"
 
-for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+for f in appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key; do
     if [[ -f "$preserve_dir/$f" ]]; then
         cp "$preserve_dir/$f" "$INSTALL_DIR/$f"
     fi
@@ -189,7 +189,7 @@ else
 fi
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
-for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+for f in appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key; do
     [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
 done
 

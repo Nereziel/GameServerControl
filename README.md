@@ -136,6 +136,12 @@ When an enabled game server starts, the Agent sends the desired route to the VPS
 
 The VPS provider/cloud firewall must still allow the selected public game ports.
 
+## Multiple physical computers (Multi-Agent)
+
+Run one Agent per computer and register additional Agents with the main coordinator through the WebUI **+ Connect computer** menu. The **All computers** dashboard then shows game servers across hosts. Selecting a remote server opens its normal controls, configuration, backups and live console using authenticated server-to-server proxying. Remote tokens stay encrypted on the coordinator, not in the browser.
+
+For installation, network and Admin/ReadOnly setup, see [Multi-Agent management](docs/multi-agent-management.md). This feature requires reachable, explicitly registered remote Agents on a private Tailscale network or trusted HTTPS endpoint. A single Cloudflare Worker can continue to use the coordinator Agent as its sole origin.
+
 ## Web UI
 
 The Web UI is the primary control surface. It supports:

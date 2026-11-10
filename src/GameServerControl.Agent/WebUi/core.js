@@ -58,6 +58,124 @@ let CFG={url:'',token:''};
 let SERVERS=[],STATUS={},CURRENT_VIEW='servers',JOB_CACHE={},MOD_CTX=null,MOD_RESULTS=[],MOD_UPDATES=[],MODAL_CLEANUP=null;
 let PROFILES=[],GAMES=[],UPDATE_STATUS=null;
 const CFG_KEY='gsc.connection.v2';
+const HOST_KEY='gsc.activeHost.v1';
+let ACTIVE_HOST_ID='local',HOST_DIRECTORY=[],HOST_OVERVIEW=[],HOST_SWITCH_EPOCH=0,LAST_HOST_OVERVIEW=0;
+
+function agentApiPath(path){
+  if(ACTIVE_HOST_ID==='local'||ACTIVE_HOST_ID==='all'||!path.startsWith('/api/')||
+      path==='/api/hosts'||path.startsWith('/api/hosts/')||path==='/api/auth/me')
+    return path;
+  return '/api/hosts/'+encodeURIComponent(ACTIVE_HOST_ID)+path;
+}
+
+function setHostChrome(){
+  const all=ACTIVE_HOST_ID==='all';
+  for(const id of ['createServerBtn','discoverBtn','addExistingBtn']){
+    const button=$('#'+id);
+    if(button){
+      button.disabled=all||!!(typeof isReadOnly==='function'&&isReadOnly());
+      button.title=all?'Select a specific computer to change its servers.':'';
+    }
+  }
+  const select=$('#hostSwitch');
+  if(select&&select.value!==ACTIVE_HOST_ID)select.value=ACTIVE_HOST_ID;
+}
+
+async function refreshManagedHosts(){
+  const hosts=await api('/api/hosts');
+  HOST_DIRECTORY=Array.isArray(hosts)?hosts:[];
+  if(ACTIVE_HOST_ID!=='all'&&ACTIVE_HOST_ID!=='local'&&!HOST_DIRECTORY.some(h=>h.id===ACTIVE_HOST_ID))
+    ACTIVE_HOST_ID='local';
+  const select=$('#hostSwitch');
+  if(select){
+    select.innerHTML='<option value="all">All computers</option>'+HOST_DIRECTORY.map(h=>
+      `<option value="${esc(h.id)}">${esc(h.isLocal?'This computer · '+h.name:h.name)}</option>`).join('');
+    select.value=ACTIVE_HOST_ID;
+  }
+  setHostChrome();
+}
+
+async function selectHost(id){
+  if(id!=='all'&&!HOST_DIRECTORY.some(h=>h.id===id))return toast('Unknown computer.','err');
+  if(id===ACTIVE_HOST_ID)return;
+  ACTIVE_HOST_ID=id;
+  HOST_SWITCH_EPOCH++;
+  LAST_HOST_OVERVIEW=0;
+  sessionStorage.setItem(HOST_KEY,id);
+  if(typeof serverWorkspaceCleanupConsole==='function')serverWorkspaceCleanupConsole();
+  if(typeof SERVER_WORKSPACE!=='undefined'){SERVER_WORKSPACE.serverId=null;SERVER_WORKSPACE.tab='overview';}
+  SERVERS=[];STATUS={};HOST_OVERVIEW=[];JOB_CACHE={};GSCUX.actions={};
+  GSCUX.selected=null;
+  if(location.hash!=='#servers')location.hash='servers';
+  showView('servers');
+  setHostChrome();
+  try{
+    if(id!=='all')try{await loadProfiles()}catch(e){setNotice('Profile refresh failed: '+e.message,'err',false)}
+    await loadServers(false);
+    await refreshJobs(false);
+  }catch(e){setNotice('Computer connection failed: '+e.message,'err',false)}
+}
+async function selectHostAndOpen(hostId,serverId){
+  await selectHost(hostId);
+  const found=SERVERS.some(s=>s.id===serverId);
+  if(found)openServerPage(serverId,'overview');
+  else toast('The selected computer is unavailable or the server was removed.','err');
+}
+async function openManagedHosts(){
+  try{await refreshManagedHosts()}catch(e){return toast(e.message,'err')}
+  const rows=HOST_DIRECTORY.filter(h=>!h.isLocal).map(h=>
+    `<div class="host-managed-row"><span><b>${esc(h.name)}</b><small class="mono">${esc(h.id)}</small></span><button class="btn danger" ${uiAction('removeManagedHost',[h.id])}>Remove</button></div>`).join('')||
+    '<div class="tiny muted">No additional computers registered yet.</div>';
+  const form=`<div class="host-security-note">Install GameServerControl Agent on the second PC first. Create one Admin and one ReadOnly token there. Connect via Tailscale or a TLS-protected private Agent URL. Tokens stay encrypted on this coordinating Agent, never in your browser after saving.</div>
+    <div class="host-form"><div class="formgrid"><div class="field"><label>Computer ID</label><input id="hostNewId" placeholder="gaming-pc-2" maxlength="40" autocomplete="off"></div>
+    <div class="field"><label>Display name</label><input id="hostNewName" placeholder="Gaming PC 2" maxlength="80" autocomplete="off"></div></div>
+    <div class="field"><label>Agent address</label><input id="hostNewOrigin" type="url" placeholder="https://pc2.example.ts.net:5100 or http://100.100.1.2:5099" autocomplete="off"></div>
+    <div class="formgrid"><div class="field"><label>Agent Admin token</label><input id="hostNewAdmin" type="password" autocomplete="new-password" spellcheck="false"></div>
+    <div class="field"><label>Agent ReadOnly token</label><input id="hostNewReadonly" type="password" autocomplete="new-password" spellcheck="false"></div></div>
+    <div class="help">Credentials are verified against the remote Agent before the connection is saved. No unauthenticated or unencrypted public HTTP connection is allowed.</div>
+    <button class="btn primary" ${uiAction('saveManagedHost')}>Connect computer</button></div>`;
+  openModal('Manage computers',
+    '<div class="sw-section"><h3>Connected computers</h3>'+rows+'</div><div class="sw-section"><h3>Add a physical computer</h3>'+form+'</div>',
+    `<button class="btn" ${uiAction('closeModal')}>Close</button>`,true);
+}
+async function saveManagedHost(){
+  const id=$('#hostNewId')?.value.trim()||'';
+  const name=$('#hostNewName')?.value.trim()||'';
+  const origin=$('#hostNewOrigin')?.value.trim()||'';
+  const adminToken=$('#hostNewAdmin')?.value.trim()||'';
+  const readOnlyToken=$('#hostNewReadonly')?.value.trim()||'';
+  if(!id||!name||!origin||!adminToken||!readOnlyToken)
+    return toast('All computer connection fields are required.','err');
+  const button=$('#hostNewAdmin')?.closest('.host-form')?.querySelector('button.primary');
+  if(button)button.disabled=true;
+  try{
+    await api('/api/hosts',{method:'POST',body:JSON.stringify({id,name,origin,adminToken,readOnlyToken})});
+    for(const inputId of ['hostNewAdmin','hostNewReadonly']){
+      const input=$('#'+inputId);if(input)input.value='';
+    }
+    await refreshManagedHosts();
+    closeModal();
+    toast('Computer registered.','ok');
+    await selectHost(id);
+  }catch(e){toast('Unable to register computer: '+e.message,'err')}
+  finally{if(button)button.disabled=false}
+}
+async function removeManagedHost(id){
+  if(!confirm('Remove '+id+' from the panel? The remote Agent and its game servers will not be stopped.'))return;
+  try{
+    await api('/api/hosts/'+encodeURIComponent(id),{method:'DELETE'});
+    await refreshManagedHosts();
+    if(ACTIVE_HOST_ID===id)await selectHost('all');
+    else {LAST_HOST_OVERVIEW=0;await loadServers(true)}
+    closeModal();
+    toast('Computer disconnected from the panel.','ok');
+  }catch(e){toast('Remove failed: '+e.message,'err')}
+}
+window.selectHostAndOpen=selectHostAndOpen;
+window.saveManagedHost=saveManagedHost;
+window.removeManagedHost=removeManagedHost;
+
+
 
 function toast(msg,kind=''){
   const t=$('#toast');
@@ -69,7 +187,7 @@ function toast(msg,kind=''){
 async function api(path,opts={}){
   const h={Authorization:'Bearer '+CFG.token,...(opts.headers||{})};
   if(opts.body)h['Content-Type']='application/json';
-  const r=await fetch(CFG.url+path,{...opts,headers:h});
+  const r=await fetch(CFG.url+agentApiPath(path),{...opts,headers:h});
   const txt=await r.text();let d=null;
   try{d=txt?JSON.parse(txt):null}catch{d=txt}
   if(!r.ok)throw new Error((d&&d.error)||d?.message||d||`${r.status} ${r.statusText}`);
@@ -387,6 +505,7 @@ toast=function(msg,kind=''){
 boot=async function(){
   if(GSCUX.booted)return;GSCUX.booted=true;
   $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
+  try{ACTIVE_HOST_ID=sessionStorage.getItem(HOST_KEY)||'local';await refreshManagedHosts()}catch(e){ACTIVE_HOST_ID='local';setNotice('Host list unavailable: '+e.message,'err',true)}
   try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
   await Promise.allSettled([loadServers(),refreshJobs(false)]);
   await checkForUpdate(false);
@@ -396,13 +515,28 @@ boot=async function(){
 };
 
 loadServers=async function(silent=false){
-  if(GSCUX.refreshing)return;GSCUX.refreshing=true;
+  if(GSCUX.refreshing&&GSCUX.refreshEpoch===HOST_SWITCH_EPOCH)return;
+  if(ACTIVE_HOST_ID==='all'&&Date.now()-LAST_HOST_OVERVIEW<12000)return;
+  GSCUX.refreshing=true;
+  const selected=ACTIVE_HOST_ID,epoch=HOST_SWITCH_EPOCH;
+  GSCUX.refreshEpoch=epoch;
   try{
-    const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;
-    if(GSCUX.selected&&!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=null;
-    if(!GSCUX.selected&&SERVERS.length)GSCUX.selected=SERVERS[0].id;
+    if(selected==='all'){
+      const overview=await api('/api/hosts/overview');
+      if(epoch!==HOST_SWITCH_EPOCH)return;
+      HOST_OVERVIEW=Array.isArray(overview)?overview:[];
+      LAST_HOST_OVERVIEW=Date.now();
+      SERVERS=[];STATUS={};
+    }else{
+      const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);
+      if(epoch!==HOST_SWITCH_EPOCH)return;
+      SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;
+      if(GSCUX.selected&&!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=null;
+      if(!GSCUX.selected&&SERVERS.length)GSCUX.selected=SERVERS[0].id;
+    }
     renderServers();
-  }catch(e){if(!silent)setNotice('Refresh failed: '+e.message,'err',false)}finally{GSCUX.refreshing=false}
+  }catch(e){if(!silent)setNotice('Refresh failed: '+e.message,'err',false)}
+  finally{if(GSCUX.refreshEpoch===epoch)GSCUX.refreshing=false}
 };
 
 window.selectServer=function(id){GSCUX.selected=id;renderServers()};
@@ -470,6 +604,8 @@ function bindStaticUi(){
   document.addEventListener('keydown',event=>{
     if(event.key==='Escape')closeMobileNavigation();
   });
+  bind('#hostSwitch','change',()=>selectHost($('#hostSwitch')?.value||'local'));
+  bind('#manageHostsBtn','click',openManagedHosts);
   bind('#loginConnectBtn','click',()=>login());
   bind('#updateBtn','click',()=>openUpdate());
   bind('#createServerBtn','click',()=>openCreate());

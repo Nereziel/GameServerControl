@@ -317,7 +317,9 @@ async function openLog(id) {
   let ws = null;
   let ping = null;
   try {
-    const nr = await fetch(CFG.url + '/hubs/status/negotiate?negotiateVersion=1', {
+    const hubPath = ACTIVE_HOST_ID==='local'||ACTIVE_HOST_ID==='all'
+      ? '/hubs/status' : '/api/hosts/'+encodeURIComponent(ACTIVE_HOST_ID)+'/hubs/status';
+    const nr = await fetch(CFG.url + hubPath + '/negotiate?negotiateVersion=1', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + CFG.token }
     });
@@ -326,7 +328,7 @@ async function openLog(id) {
     const n = await nr.json();
     const u = new URL(CFG.url);
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
-    u.pathname = u.pathname.replace(/\/$/, '') + '/hubs/status';
+    u.pathname = u.pathname.replace(/\/$/, '') + hubPath;
     u.search = '';
     u.searchParams.set('id', n.connectionToken);
     u.searchParams.set('access_token', CFG.token);

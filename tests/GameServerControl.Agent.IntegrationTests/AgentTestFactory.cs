@@ -17,9 +17,11 @@ namespace GameServerControl.Agent.IntegrationTests;
 public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
 {
     public const string AdminToken = "integration-admin-token-0123456789abcdef";
+    private readonly HttpMessageHandler? _managedHostHandler;
 
-    public AgentTestFactory(bool alphaUsesStdinProfile = false, bool alphaUsesLogProfile = false)
+    public AgentTestFactory(bool alphaUsesStdinProfile = false, bool alphaUsesLogProfile = false, HttpMessageHandler? managedHostHandler = null)
     {
+        _managedHostHandler = managedHostHandler;
         TempRoot = Path.Combine(Path.GetTempPath(), "gsc-integration-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TempRoot);
         Directory.CreateDirectory(Path.Combine(TempRoot, "alpha-game"));
@@ -90,6 +92,8 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
             services.RemoveAll<IWindowsRunnerServiceManager>();
             services.AddSingleton(FakeRunner);
             services.AddSingleton<IWindowsRunnerServiceManager>(sp => sp.GetRequiredService<FakeWindowsRunnerServiceManager>());
+            if (_managedHostHandler is not null)
+                services.AddHttpClient("managed-hosts").ConfigurePrimaryHttpMessageHandler(() => _managedHostHandler);
         });
     }
 

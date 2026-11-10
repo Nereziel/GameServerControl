@@ -59,7 +59,7 @@ fi
 # master key must travel with its ciphertext or existing encrypted state becomes unrecoverable.
 if [[ -d "$INSTALL_DIR" ]]; then
   chmod 700 "$INSTALL_DIR"
-  for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+  for f in appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key; do
     if [[ -f "$INSTALL_DIR/$f" ]]; then
       chmod 600 "$INSTALL_DIR/$f"
       cp "$INSTALL_DIR/$f" "$STATE_TMP/$f"
@@ -74,7 +74,7 @@ rm -rf "$INSTALL_DIR"
 mv "$INSTALL_DIR.tmp" "$INSTALL_DIR"
 chmod +x "$INSTALL_DIR/GameServerControl.Agent" 2>/dev/null || true
 
-for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+for f in appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key; do
   [[ -f "$STATE_TMP/$f" ]] && cp "$STATE_TMP/$f" "$INSTALL_DIR/$f"
 done
 
@@ -93,7 +93,7 @@ fi
 
 chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
-for f in appsettings.json servers.json tokens.json public-relay.json secret-protection.key; do
+for f in appsettings.json servers.json tokens.json public-relay.json managed-hosts.json managed-hosts.json.bak secret-protection.key; do
   [[ -f "$INSTALL_DIR/$f" ]] && chmod 600 "$INSTALL_DIR/$f"
 done
 
