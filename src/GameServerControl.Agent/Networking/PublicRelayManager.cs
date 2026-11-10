@@ -22,6 +22,7 @@ public sealed class PublicRelayManager
     };
 
     private readonly ServerRegistry _registry;
+    private readonly string _relayNodeId;
     private readonly ILogger<PublicRelayManager> _logger;
     private readonly SecretProtector _protector;
     private string _baseUrl;
@@ -59,6 +60,9 @@ public sealed class PublicRelayManager
     {
         _registry = registry;
         _logger = logger;
+        _relayNodeId = (cfg["Agent:PublicRelay:NodeId"] ?? "").Trim().ToLowerInvariant();
+        if (_relayNodeId.Length != 0 && !System.Text.RegularExpressions.Regex.IsMatch(_relayNodeId, "^[a-z0-9][a-z0-9-]{0,31}$"))
+            throw new InvalidOperationException("Agent:PublicRelay:NodeId must contain only lowercase letters, digits and hyphens (max 32 chars).");
         var dataDir = cfg["Agent:DataDir"] ?? env.ContentRootPath;
         _protector = new SecretProtector(dataDir);
         var configuredState = cfg["Agent:PublicRelay:StatePath"] ?? "public-relay.json";
@@ -255,7 +259,7 @@ public sealed class PublicRelayManager
             _lastApplied.TryRemove(serverId, out _);
             var global = SnapshotGlobal();
             if (!global.Configured) return;
-            try { using var _ = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(serverId)}", null, global, ct); }
+            try { using var _ = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(RelayRouteId(serverId))}", null, global, ct); }
             catch (Exception ex) { _logger.LogWarning(ex, "Could not remove public relay route for {ServerId}", serverId); }
         }
         finally { _mutationGate.Release(); }
@@ -271,7 +275,7 @@ public sealed class PublicRelayManager
             if (_lastApplied.TryGetValue(def.Id, out var previous) && previous == desired) return;
             if (global.Configured)
             {
-                using var response = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(def.Id)}", null, global, ct);
+                using var response = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(RelayRouteId(def.Id))}", null, global, ct);
                 if (!response.IsSuccessStatusCode)
                     throw new InvalidOperationException(await ResponseErrorAsync(response, ct));
             }
@@ -287,11 +291,14 @@ public sealed class PublicRelayManager
         var desiredHash = JsonSerializer.Serialize(route, JsonOptions);
         if (_lastApplied.TryGetValue(def.Id, out var last) && last == desiredHash) return;
 
-        using var put = await SendAsync(HttpMethod.Put, $"/api/routes/{Uri.EscapeDataString(def.Id)}", route, global, ct);
+        using var put = await SendAsync(HttpMethod.Put, $"/api/routes/{Uri.EscapeDataString(RelayRouteId(def.Id))}", route, global, ct);
         if (!put.IsSuccessStatusCode)
             throw new InvalidOperationException(await ResponseErrorAsync(put, ct));
         _lastApplied[def.Id] = desiredHash;
     }
+
+    private string RelayRouteId(string gameServerId)
+        => string.IsNullOrEmpty(_relayNodeId) ? gameServerId : _relayNodeId + "-" + gameServerId;
 
     private RelayRouteDefinition BuildRoute(ServerDef def, PublicRelayServerSettings settings, string targetAddress)
     {
@@ -319,7 +326,7 @@ public sealed class PublicRelayManager
                 throw new ArgumentException($"Public relay override '{extra.Name}' does not match a current server network port.");
         }
 
-        return new RelayRouteDefinition(def.Id, targetAddress, routes.ToArray());
+        return new RelayRouteDefinition(RelayRouteId(def.Id), targetAddress, routes.ToArray());
     }
 
     private void ValidatePublicConflicts(string candidateId, PublicRelayServerSettings candidate, string targetAddress)
@@ -380,7 +387,7 @@ public sealed class PublicRelayManager
             if (!SettingsFor(def.Id).Enabled) continue;
             try
             {
-                using var response = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(def.Id)}", null, oldGlobal, ct);
+                using var response = await SendAsync(HttpMethod.Delete, $"/api/routes/{Uri.EscapeDataString(RelayRouteId(def.Id))}", null, oldGlobal, ct);
                 if (!response.IsSuccessStatusCode)
                     _logger.LogWarning("Old relay returned HTTP {Status} while removing {ServerId}", (int)response.StatusCode, def.Id);
             }
