@@ -10,8 +10,8 @@ import {
 
 const env = {
   ACCESS_ADMIN_EMAILS: 'admin@example.com; OPS@example.com\nowner@example.com',
-  AGENT_ADMIN_TOKEN: 'admin-agent-token',
-  AGENT_READONLY_TOKEN: 'readonly-agent-token'
+  ACCESS_TEAM_DOMAIN: 'https://team.cloudflareaccess.com',
+  ACCESS_POLICY_AUD: 'unit-audience'
 };
 
 test('verified Access email maps to Admin case-insensitively', () => {
@@ -26,10 +26,11 @@ test('Access users outside the explicit admin allowlist fail closed to ReadOnly'
 });
 
 test('gateway selects a different Agent token for each role', () => {
-  assert.equal(agentTokenForRole('Admin', env), 'admin-agent-token');
-  assert.equal(agentTokenForRole('ReadOnly', env), 'readonly-agent-token');
-  assert.throws(() => agentTokenForRole('Admin', { ...env, AGENT_ADMIN_TOKEN: '' }), /AGENT_ADMIN_TOKEN/);
-  assert.throws(() => agentTokenForRole('ReadOnly', { ...env, AGENT_READONLY_TOKEN: '' }), /AGENT_READONLY_TOKEN/);
+  const host = { adminToken: 'agent-admin-a', readOnlyToken: 'agent-readonly-b' };
+  assert.equal(agentTokenForRole('Admin', host), 'agent-admin-a');
+  assert.equal(agentTokenForRole('ReadOnly', host), 'agent-readonly-b');
+  assert.throws(() => agentTokenForRole('Admin', { readOnlyToken: 'a' }), /adminToken/);
+  assert.throws(() => agentTokenForRole('ReadOnly', { adminToken: 'b' }), /readOnlyToken/);
 });
 
 test('ReadOnly users cannot mutate through the cloud gateway', () => {
@@ -41,14 +42,14 @@ test('ReadOnly users cannot mutate through the cloud gateway', () => {
     });
   }
   assert.equal(authorizeGatewayRequest('GET', 'ReadOnly', '/api/servers').allowed, true);
-  assert.equal(authorizeGatewayRequest('POST', 'Admin', '/api/servers/example/start').allowed, true);
+  assert.equal(authorizeGatewayRequest('POST', 'Admin', '/api/hosts/pc1/api/servers/example/start').allowed, true);
 });
 
 test('ReadOnly users can negotiate SignalR and control read-only live-log subscriptions', () => {
-  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/hubs/status/negotiate').allowed, true);
-  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/logs/tail').allowed, true);
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/hosts/pc1/hubs/status/negotiate').allowed, true);
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/hosts/pc1/api/servers/example/logs/tail').allowed, true);
   assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/start').allowed, false);
-  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/rcon/command').allowed, false);
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/hosts/pc1/api/servers/example/rcon/command').allowed, false);
 });
 
 test('browser writes and WebSocket upgrades require the panel origin', () => {
