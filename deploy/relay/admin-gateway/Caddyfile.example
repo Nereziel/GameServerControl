@@ -11,6 +11,10 @@
 gsc-gateway.example.com {
     # Caddy obtains/renews HTTPS certificates. Use DNS pointing to the VPS.
     # All clients, including Cloudflare Worker, must use trusted HTTPS.
+    @health {
+        path /_gsc_gateway/health
+        header X-GSC-Proxy-Key {$GSC_ADMIN_GATEWAY_KEY}
+    }
     @pc1 {
         path /gsc-agent/pc1/*
         header X-GSC-Proxy-Key {$GSC_ADMIN_GATEWAY_KEY}
@@ -21,6 +25,9 @@ gsc-gateway.example.com {
     }
 
     route {
+        handle @health {
+            respond "ok" 200
+        }
         handle @pc1 {
             uri strip_prefix /gsc-agent/pc1
             reverse_proxy http://100.100.10.1:5099 {
