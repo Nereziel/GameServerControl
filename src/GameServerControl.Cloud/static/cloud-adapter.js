@@ -5,7 +5,13 @@
   };
 
   window.GSC_CLOUD_MODE = true;
-  try { sessionStorage.setItem('gsc.connection.v2', JSON.stringify(cloudCfg)); } catch {}
+  try {
+    sessionStorage.setItem('gsc.connection.v2', JSON.stringify(cloudCfg));
+    if (!sessionStorage.getItem('gsc.cloud.multi-host.initialized')) {
+      sessionStorage.setItem('gsc.activeHost.v1', 'all');
+      sessionStorage.setItem('gsc.cloud.multi-host.initialized', '1');
+    }
+  } catch {}
 
   if (typeof boot === 'function') {
     const localBoot = boot;
@@ -39,7 +45,7 @@
       loginBox.innerHTML = `
         <h1>GameServerControl</h1>
         <div class="muted">Cloud gateway could not reach the Agent.</div>
-        <div class="callout" style="margin-top:16px">Check Cloudflare Tunnel, Access service credentials and the Agent service.</div>
+        <div class="callout" style="margin-top:16px">Check Cloudflare Access, the VPS HTTPS gateway and the host registry configuration.</div>
         <button id="cloudRetryBtn" class="btn primary" style="width:100%;margin-top:12px">Retry</button>`;
       document.querySelector('#cloudRetryBtn')?.addEventListener('click', () => location.reload());
     }, 1200);
