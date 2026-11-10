@@ -63,6 +63,22 @@ Use that PC's *actual* Tailscale address. `Agent:BindTailscale` is optional; the
 
 On every PC, create **two distinct Agent managed tokens** in its local WebUI: one `Admin`, one `ReadOnly`. Avoid using the bootstrap token for cross-host automation.
 
+## Shared GameServerControl.Relay on the VPS
+
+The **public game port Relay** is separate from the Caddy HTTPS administration gateway and remains installed as before. For multiple PCs sharing the same VPS Relay, configure a **unique** `Agent:PublicRelay:NodeId` on each Agent before enabling routes:
+
+```json
+{
+  "Agent": {
+    "PublicRelay": {
+      "NodeId": "pc1"
+    }
+  }
+}
+```
+
+Use `pc2` on the second PC. Relay entries become `pc1-valheim` and `pc2-valheim`, so identical local server IDs cannot overwrite one another. Existing Agents without `NodeId` retain legacy route IDs for backwards compatibility. **Before enabling NodeId on an existing Relay installation, remove the old non-prefixed routes from the VPS** using the existing protected Relay API or by disabling the old mappings, otherwise the legacy routes can linger. Two servers cannot expose the same public TCP/UDP port simultaneously; the VPS Relay rejects global port conflicts across nodes.
+
 ## 3. Provision Cloudflare
 
 The Cloudflare Worker serves the existing responsive Agent WebUI as static assets and uses the **Cloudflare Access** login. It stores a list of PCs in Cloudflare D1, with per-PC tokens encrypted by AES-256-GCM using a *separate* Worker encryption-key secret.
