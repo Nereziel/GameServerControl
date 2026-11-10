@@ -1,12 +1,19 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import {
+  validateGatewayConfig, validateHostRegistration, listHosts, getHost,
+  saveHost, deleteHost, fetchFromHost, verifyHostTokens, hostOverview
+} from './hosts.js';
 
 let jwks = null;
 let jwksFor = '';
-
-const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const ADMIN_ROLE = 'Admin';
 const READONLY_ROLE = 'ReadOnly';
+const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const BROWSER_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; script-src-attr 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:";
+
+function jsonError(status, error) {
+  return Response.json({ error }, { status, headers: { 'cache-control': 'no-store' } });
+}
 
 export function withBrowserSecurityHeaders(response) {
   const headers = new Headers(response.headers);
@@ -16,49 +23,24 @@ export function withBrowserSecurityHeaders(response) {
   headers.set('x-frame-options', 'DENY');
   headers.set('permissions-policy', 'camera=(), microphone=(), geolocation=()');
   return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
+    status: response.status, statusText: response.statusText, headers
   });
-}
-
-function jsonError(status, error, detail = null) {
-  return Response.json(detail ? { error, detail } : { error }, {
-    status,
-    headers: { 'cache-control': 'no-store' }
-  });
-}
-
-function normalizedOrigin(value) {
-  const url = new URL(String(value || ''));
-  if (url.protocol !== 'https:') throw new Error('AGENT_ORIGIN must use https://');
-  url.pathname = '/';
-  url.search = '';
-  url.hash = '';
-  return url;
 }
 
 function requiredConfig(env) {
-  const missing = [];
-  for (const key of [
-    'AGENT_ORIGIN',
-    'AGENT_ADMIN_TOKEN',
-    'AGENT_READONLY_TOKEN',
-    'ORIGIN_ACCESS_CLIENT_ID',
-    'ORIGIN_ACCESS_CLIENT_SECRET',
-    'ACCESS_TEAM_DOMAIN',
-    'ACCESS_POLICY_AUD'
-  ]) {
-    if (!env[key]) missing.push(key);
+  const missing = ['ACCESS_TEAM_DOMAIN', 'ACCESS_POLICY_AUD', 'GATEWAY_ORIGIN',
+    'GATEWAY_SHARED_KEY', 'HOSTS_ENCRYPTION_KEY'].filter(name => !env[name]);
+  if (!env.HOSTS_DB) missing.push('HOSTS_DB');
+  if (!missing.length) {
+    try { validateGatewayConfig(env); }
+    catch { missing.push('invalid gateway configuration'); }
   }
   return missing;
 }
 
 function adminEmails(env) {
   return new Set(String(env.ACCESS_ADMIN_EMAILS || '')
-    .split(/[,;\n\r]+/)
-    .map(value => value.trim().toLowerCase())
-    .filter(Boolean));
+    .split(/[,;\n\r]+/).map(value => value.trim().toLowerCase()).filter(Boolean));
 }
 
 export function resolveAccessRole(payload, env) {
@@ -66,50 +48,49 @@ export function resolveAccessRole(payload, env) {
   return email && adminEmails(env).has(email) ? ADMIN_ROLE : READONLY_ROLE;
 }
 
-export function agentTokenForRole(role, env) {
-  const key = role === ADMIN_ROLE ? 'AGENT_ADMIN_TOKEN' : 'AGENT_READONLY_TOKEN';
-  const value = env[key];
-  if (!value) throw new Error(`${key} is required for ${role} gateway access.`);
+// Kept as a pure helper for role tests. Remote host tokens are selected from
+// encrypted host records, not Worker-wide Agent secrets.
+export function agentTokenForRole(role, tokens) {
+  const key = role === ADMIN_ROLE ? 'adminToken' : 'readOnlyToken';
+  const value = tokens?.[key];
+  if (!value) throw new Error(key + ' is required for the selected computer.');
   return value;
 }
 
 function isReadOnlyControlPost(method, pathname) {
-  if (String(method || '').toUpperCase() !== 'POST') return false;
-  const path = String(pathname || '');
-  if (path === '/hubs/status/negotiate') return true;
-  if (/^\/api\/hosts\/[a-z][a-z0-9-]{0,39}\/hubs\/status\/negotiate$/i.test(path)) return true;
-  return /^\/api\/(?:hosts\/[a-z][a-z0-9-]{0,39}\/api\/)?servers\/[^/]+\/logs\/tail$/i.test(path);
+  if (String(method).toUpperCase() !== 'POST') return false;
+  return /^\/api\/hosts\/[a-z][a-z0-9-]{0,39}\/hubs\/status\/negotiate$/i.test(pathname)
+    || /^\/api\/hosts\/[a-z][a-z0-9-]{0,39}\/api\/servers\/[^/]+\/logs\/tail$/i.test(pathname);
 }
 
 export function authorizeGatewayRequest(method, role, pathname = '') {
   const normalizedMethod = String(method || '').toUpperCase();
-  if (!WRITE_METHODS.has(normalizedMethod) || role === ADMIN_ROLE || isReadOnlyControlPost(normalizedMethod, pathname))
+  if (!WRITE_METHODS.has(normalizedMethod) || role === ADMIN_ROLE ||
+      isReadOnlyControlPost(normalizedMethod, pathname))
     return { allowed: true, status: 200, error: null };
+  return { allowed: false, status: 403,
+    error: 'Read-only access cannot modify GameServerControl.' };
+}
 
-  return {
-    allowed: false,
-    status: 403,
-    error: 'Read-only access cannot modify GameServerControl.'
-  };
+export function hasValidBrowserOrigin(request) {
+  const method = String(request.method || '').toUpperCase();
+  const webSocket = String(request.headers.get('upgrade') || '').toLowerCase() === 'websocket';
+  if (!WRITE_METHODS.has(method) && !webSocket) return true;
+  return request.headers.get('origin') === new URL(request.url).origin;
 }
 
 async function verifyPanelAccess(request, env) {
   const token = request.headers.get('cf-access-jwt-assertion');
   if (!token) throw new Error('Cloudflare Access JWT is missing.');
-
   const issuer = String(env.ACCESS_TEAM_DOMAIN || '').replace(/\/+$/, '');
-  if (!issuer.startsWith('https://')) throw new Error('ACCESS_TEAM_DOMAIN must use https://');
-
+  if (!issuer.startsWith('https://')) throw new Error('Invalid Access team domain.');
   if (!jwks || jwksFor !== issuer) {
-    jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
+    jwks = createRemoteJWKSet(new URL(issuer + '/cdn-cgi/access/certs'));
     jwksFor = issuer;
   }
-
   const { payload } = await jwtVerify(token, jwks, {
-    issuer,
-    audience: env.ACCESS_POLICY_AUD
+    issuer, audience: env.ACCESS_POLICY_AUD
   });
-
   return payload;
 }
 
@@ -117,57 +98,11 @@ function isGatewayPath(pathname) {
   return pathname === '/api' || pathname.startsWith('/api/') || pathname.startsWith('/hubs/');
 }
 
-export function hasValidBrowserOrigin(request) {
-  const method = String(request.method || '').toUpperCase();
-  const isWebSocketUpgrade = String(request.headers.get('upgrade') || '').toLowerCase() === 'websocket';
-  if (!WRITE_METHODS.has(method) && !isWebSocketUpgrade) return true;
-  const requestUrl = new URL(request.url);
-  return request.headers.get('origin') === requestUrl.origin;
-}
-
-export async function fetchAgentHealth(env) {
-  const target = new URL('/api/health', normalizedOrigin(env.AGENT_ORIGIN));
-  const token = env.AGENT_READONLY_TOKEN;
-  if (!token) return { ok: false, status: 0, ts: null };
-
-  const headers = new Headers();
-  headers.set('authorization', `Bearer ${token}`);
-  headers.set('cf-access-client-id', env.ORIGIN_ACCESS_CLIENT_ID);
-  headers.set('cf-access-client-secret', env.ORIGIN_ACCESS_CLIENT_SECRET);
-  headers.set('accept', 'application/json');
-
-  let response;
-  try {
-    response = await fetch(target.toString(), {
-      method: 'GET',
-      headers,
-      redirect: 'manual'
-    });
-  } catch {
-    return { ok: false, status: 0, ts: null };
-  }
-
-  if (!response.ok) return { ok: false, status: response.status, ts: null };
-
-  let body;
-  try { body = await response.json(); }
-  catch { return { ok: false, status: response.status, ts: null }; }
-
-  return {
-    ok: body?.ok === true,
-    status: response.status,
-    ts: typeof body?.ts === 'string' ? body.ts : null
-  };
-}
-
 function relayWebSocket(upstreamResponse) {
   const upstream = upstreamResponse.webSocket;
   if (!upstream) return upstreamResponse;
-
   const pair = new WebSocketPair();
-  const client = pair[0];
-  const server = pair[1];
-
+  const client = pair[0], server = pair[1];
   upstream.binaryType = 'arraybuffer';
   server.binaryType = 'arraybuffer';
   upstream.accept();
@@ -186,134 +121,173 @@ function relayWebSocket(upstreamResponse) {
       try { to.close(1011, 'WebSocket relay error'); } catch {}
     });
   };
-
   pipe(server, upstream);
   pipe(upstream, server);
-
   const headers = new Headers();
   const protocol = upstreamResponse.headers.get('sec-websocket-protocol');
   if (protocol) headers.set('sec-websocket-protocol', protocol);
-
   return new Response(null, { status: 101, webSocket: client, headers });
 }
 
-async function proxyToAgent(request, env, accessPayload, role) {
-  const incoming = new URL(request.url);
-  const origin = normalizedOrigin(env.AGENT_ORIGIN);
-  const target = new URL(origin);
-  target.pathname = incoming.pathname;
-  target.search = incoming.search;
-  target.searchParams.delete('access_token');
-
-  const headers = new Headers(request.headers);
-  headers.delete('authorization');
-  headers.delete('cookie');
-  headers.delete('cf-access-jwt-assertion');
-  headers.delete('cf-access-authenticated-user-email');
-  headers.delete('x-gameservercontrol-gateway');
-  headers.delete('x-gameservercontrol-remote-user');
-  headers.set('authorization', `Bearer ${agentTokenForRole(role, env)}`);
-  headers.set('cf-access-client-id', env.ORIGIN_ACCESS_CLIENT_ID);
-  headers.set('cf-access-client-secret', env.ORIGIN_ACCESS_CLIENT_SECRET);
-  headers.set('x-gameservercontrol-gateway', 'cloudflare-worker');
-
-  const remoteUser = accessPayload?.email || accessPayload?.sub;
-  if (remoteUser) headers.set('x-gameservercontrol-remote-user', String(remoteUser).slice(0, 320));
-
-  const init = {
-    method: request.method,
-    headers,
-    redirect: 'manual'
-  };
-  if (request.method !== 'GET' && request.method !== 'HEAD') init.body = request.body;
-
-  let upstreamResponse;
+export async function fetchAgentHealth(env) {
   try {
-    upstreamResponse = await fetch(new Request(target.toString(), init));
-  } catch (error) {
-    return jsonError(502, 'Agent origin is unreachable.', error instanceof Error ? error.message : String(error));
+    const hosts = await listHosts(env);
+    if (!hosts.length) return { ok: false, status: 0, ts: null };
+    const host = await getHost(env, hosts[0].id);
+    if (!host) return { ok: false, status: 0, ts: null };
+    const response = await fetchFromHost(env, host, 'ReadOnly', '/api/health', {
+      signal: AbortSignal.timeout(7000)
+    });
+    if (!response.ok) return { ok: false, status: response.status, ts: null };
+    const body = await response.json();
+    return { ok: body?.ok === true, status: response.status, ts: body?.ts || null };
+  } catch {
+    return { ok: false, status: 0, ts: null };
+  }
+}
+
+async function proxyToAgent(request, env, user, role, hostId, suffix) {
+  let host;
+  try { host = await getHost(env, hostId); }
+  catch { return jsonError(503, 'Stored host credentials are unavailable.'); }
+  if (!host) return jsonError(404, 'Computer is not registered.');
+
+  const incoming = new URL(request.url);
+  const upstreamPath = '/' + suffix;
+  const headers = new Headers();
+  for (const field of ['content-type', 'accept', 'range', 'if-none-match', 'if-match', 'upgrade']) {
+    const value = request.headers.get(field);
+    if (value) headers.set(field, value);
+  }
+  const webSocket = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+  if (webSocket && upstreamPath !== '/hubs/status')
+    return jsonError(400, 'Only the Agent status hub supports WebSocket upgrades.');
+
+  let upstream;
+  try {
+    upstream = await fetchFromHost(env, host, role, upstreamPath, {
+      method: request.method,
+      headers,
+      body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body,
+      remoteUser: user?.email || user?.sub,
+      signal: webSocket ? undefined : AbortSignal.timeout(180000)
+    }, incoming.search);
+  } catch {
+    return jsonError(502, 'Selected Agent is unreachable through the VPS gateway.');
   }
 
-  if (upstreamResponse.webSocket) return relayWebSocket(upstreamResponse);
-
-  const responseHeaders = new Headers(upstreamResponse.headers);
-  responseHeaders.set('cache-control', 'no-store');
-  responseHeaders.delete('set-cookie');
-
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
-    statusText: upstreamResponse.statusText,
-    headers: responseHeaders
+  if (upstream.webSocket) return relayWebSocket(upstream);
+  const responseHeaders = new Headers({ 'cache-control': 'no-store' });
+  for (const field of ['content-type', 'content-disposition', 'etag',
+      'last-modified', 'content-range', 'accept-ranges']) {
+    const value = upstream.headers.get(field);
+    if (value) responseHeaders.set(field, value);
+  }
+  return new Response(upstream.body, {
+    status: upstream.status, statusText: upstream.statusText, headers: responseHeaders
   });
 }
 
-async function authenticatedAccess(request, env) {
-  try {
-    return { payload: await verifyPanelAccess(request, env), error: null };
-  } catch (error) {
-    return {
-      payload: null,
-      error: jsonError(403, 'Cloudflare Access authentication failed.', error instanceof Error ? error.message : String(error))
-    };
+async function handleManagedHosts(request, env, role, user, pathname) {
+  if (pathname === '/api/health' && request.method === 'GET')
+    return Response.json({ ok: true, ts: new Date().toISOString() },
+      { headers: { 'cache-control': 'no-store' } });
+
+  if (pathname === '/api/auth/me' && request.method === 'GET')
+    return Response.json({
+      id: 'cloudflare', name: String(user?.email || user?.sub || 'Cloudflare'),
+      role
+    }, { headers: { 'cache-control': 'no-store' } });
+
+  if (pathname === '/api/hosts' && request.method === 'GET')
+    return Response.json(await listHosts(env), { headers: { 'cache-control': 'no-store' } });
+
+  if (pathname === '/api/hosts/overview' && request.method === 'GET') {
+    const hosts = await listHosts(env);
+    const results = await Promise.all(hosts.map(async metadata => {
+      try {
+        const credentials = await getHost(env, metadata.id);
+        if (!credentials) throw new Error('No host credentials');
+        return await hostOverview(env, credentials);
+      } catch {
+        return { ...metadata, online: false, servers: [], error: 'Computer unavailable.' };
+      }
+    }));
+    return Response.json(results, { headers: { 'cache-control': 'no-store' } });
   }
+
+  if (pathname === '/api/hosts' && request.method === 'POST') {
+    if (role !== ADMIN_ROLE) return jsonError(403, 'Admin access is required.');
+    let input;
+    try { input = validateHostRegistration(await request.json()); }
+    catch (error) { return jsonError(400, String(error?.message || 'Invalid computer details.')); }
+    try {
+      await verifyHostTokens(env, input);
+      const created = await saveHost(env, input);
+      return Response.json(created, {
+        status: 201, headers: { 'cache-control': 'no-store' }
+      });
+    } catch (error) {
+      const message = String(error?.message || '');
+      if (message.includes('UNIQUE constraint') || message.includes('SQLITE_CONSTRAINT'))
+        return jsonError(409, 'Computer ID already exists.');
+      if (message.includes('Maximum of 20')) return jsonError(409, message);
+      return jsonError(400, 'Cannot register host. Check its VPS route and both Agent token roles.');
+    }
+  }
+
+  const deleteMatch = pathname.match(/^\/api\/hosts\/([a-z][a-z0-9-]{0,39})$/);
+  if (deleteMatch && request.method === 'DELETE') {
+    if (role !== ADMIN_ROLE) return jsonError(403, 'Admin access is required.');
+    return (await deleteHost(env, deleteMatch[1]))
+      ? new Response(null, { status: 204 })
+      : jsonError(404, 'Computer is not registered.');
+  }
+
+  const match = pathname.match(/^\/api\/hosts\/([a-z][a-z0-9-]{0,39})\/(api\/.*|hubs\/status(?:\/negotiate)?)$/);
+  if (match) return proxyToAgent(request, env, user, role, match[1], match[2]);
+  return jsonError(404, 'Unknown cloud endpoint. Select a computer first.');
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
-    if (url.pathname === '/gateway/health') {
+    if (url.pathname === '/gateway/health')
       return Response.json({
-        ok: true,
-        mode: 'cloudflare',
-        configured: requiredConfig(env).length === 0
+        ok: true, mode: 'cloudflare-multi-host', configured: requiredConfig(env).length === 0
+      }, { headers: { 'cache-control': 'no-store' } });
+
+    if (!isGatewayPath(url.pathname) && url.pathname !== '/gateway/status')
+      return withBrowserSecurityHeaders(await env.ASSETS.fetch(request));
+
+    const missing = requiredConfig(env);
+    if (missing.length)
+      return jsonError(503, 'Cloud gateway is not configured: ' + missing.join(', '));
+    if (!hasValidBrowserOrigin(request))
+      return jsonError(403, 'Cross-origin state-changing requests are not allowed.');
+
+    let user;
+    try { user = await verifyPanelAccess(request, env); }
+    catch { return jsonError(403, 'Cloudflare Access authentication failed.'); }
+    const role = resolveAccessRole(user, env);
+
+    if (url.pathname === '/gateway/status') {
+      const hosts = await listHosts(env);
+      const results = await Promise.all(hosts.map(async item => {
+        try { return await hostOverview(env, await getHost(env, item.id)); }
+        catch { return { online: false }; }
+      }));
+      return Response.json({
+        ok: true, mode: 'cloudflare-multi-host',
+        user: user.email || user.sub || null, role,
+        hosts: hosts.length, online: results.filter(item => item.online).length
       }, { headers: { 'cache-control': 'no-store' } });
     }
 
-    if (url.pathname === '/gateway/status') {
-      const missing = requiredConfig(env);
-      if (missing.length) return jsonError(503, 'Cloud gateway is not configured.', missing.join(', '));
-
-      const access = await authenticatedAccess(request, env);
-      if (access.error) return access.error;
-
-      const role = resolveAccessRole(access.payload, env);
-      const agent = await fetchAgentHealth(env);
-      const remoteUser = access.payload?.email || access.payload?.sub || null;
-      return Response.json({
-        ok: agent.ok,
-        mode: 'cloudflare',
-        user: remoteUser ? String(remoteUser) : null,
-        role,
-        agent: {
-          reachable: agent.ok,
-          status: agent.status,
-          timestamp: agent.ts
-        }
-      }, {
-        status: agent.ok ? 200 : 503,
-        headers: { 'cache-control': 'no-store' }
-      });
-    }
-
-    if (isGatewayPath(url.pathname)) {
-      const missing = requiredConfig(env);
-      if (missing.length) return jsonError(503, 'Cloud gateway is not configured.', missing.join(', '));
-
-      if (!hasValidBrowserOrigin(request))
-        return jsonError(403, 'Cross-origin state-changing requests are not allowed.');
-
-      const access = await authenticatedAccess(request, env);
-      if (access.error) return access.error;
-
-      const role = resolveAccessRole(access.payload, env);
-      const authorization = authorizeGatewayRequest(request.method, role, url.pathname);
-      if (!authorization.allowed)
-        return jsonError(authorization.status, authorization.error);
-
-      return proxyToAgent(request, env, access.payload, role);
-    }
-
-    return withBrowserSecurityHeaders(await env.ASSETS.fetch(request));
+    const authorization = authorizeGatewayRequest(request.method, role, url.pathname);
+    if (!authorization.allowed) return jsonError(authorization.status, authorization.error);
+    try { return await handleManagedHosts(request, env, role, user, url.pathname); }
+    catch { return jsonError(503, 'Cloud host storage or gateway operation failed.'); }
   }
 };
