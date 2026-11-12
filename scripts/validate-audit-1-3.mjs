@@ -8,6 +8,7 @@ const hosts = fs.readFileSync('src/GameServerControl.Cloud/src/hosts.js', 'utf8'
 const deploy = fs.readFileSync('.github/workflows/cloudflare-deploy.yml', 'utf8');
 const docs = fs.readFileSync('docs/cloudflare-remote-management.md', 'utf8');
 const agentProject = fs.readFileSync('src/GameServerControl.Agent/GameServerControl.Agent.csproj', 'utf8');
+const nginxGateway = fs.readFileSync('deploy/relay/admin-gateway/nginx-gateway.conf.example', 'utf8');
 
 function requireToken(source, token, message) {
   if (!source.includes(token)) throw new Error(`${message}: missing ${token}`);
@@ -51,5 +52,25 @@ rejectToken(worker, 'env.AGENT_ADMIN_TOKEN', 'Worker must not use a coordinator-
 rejectToken(deploy, 'GSC_CF_AGENT_API_TOKEN', 'Legacy single-token deploy mapping must be removed');
 
 requireToken(agentProject, '<PackageReference Include="System.Management.Automation" Version="7.4.21" />', 'Embedded PowerShell must be on the audited security patch level');
+
+
+for (const token of [
+  'include /etc/nginx/gsc-admin-gateway/secret.conf;',
+  'if ($http_x_gsc_proxy_key != $gsc_gateway_key)',
+  'location = /_gsc_gateway/health',
+  'location ^~ /gsc-agent/pc1/',
+  'location ^~ /gsc-agent/pc2/',
+  'proxy_pass http://PC1_TAILSCALE_IPV4:5099/;',
+  'proxy_pass http://PC2_TAILSCALE_IPV4:5099/;',
+  'proxy_set_header Authorization $http_authorization;',
+  'proxy_set_header X-GSC-Proxy-Key "";',
+  'proxy_set_header CF-Access-Jwt-Assertion "";',
+  'proxy_set_header Upgrade $http_upgrade;',
+  'proxy_set_header Connection $gsc_admin_connection_upgrade;',
+  'location / {'
+]) {
+  requireToken(nginxGateway, token, 'Nginx gateway must be fixed-route, key-protected and WebSocket-capable');
+}
+rejectToken(nginxGateway, '.overcore.eu', 'Nginx template must not reveal deployment hostnames');
 
 console.log('Audit fixes 1-3 contract OK.');
