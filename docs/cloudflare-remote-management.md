@@ -1,6 +1,6 @@
 # Cloudflare WebUI: independent Agents behind VPS Tailscale proxy
 
-**Current architecture:** Cloudflare Worker + Cloudflare Access + Cloudflare D1 (administration), one VPS running Caddy (HTTPS/WebSocket forwarding only), and an independent GameServerControl Agent on each PC. The existing `GameServerControl.Relay` continues to handle **game traffic only** and is not an administration coordinator.
+**Current architecture:** Cloudflare Worker + Cloudflare Access + Cloudflare D1 (administration), one VPS running Nginx or Caddy (HTTPS/WebSocket forwarding only), and an independent GameServerControl Agent on each PC. The existing `GameServerControl.Relay` continues to handle **game traffic only** and is not an administration coordinator.
 
 There is **no `cloudflared` requirement** on either PC or on the VPS. Agents have no public Internet listeners. Every remote administration request goes:
 
@@ -11,7 +11,7 @@ Browser ──HTTPS──> Cloudflare Access ──> Worker static WebUI
                                                 |
                                       fixed VPS public HTTPS hostname
                                                 |
-                                 authenticated Caddy reverse proxy
+                                 authenticated Nginx/Caddy proxy
                                        /               \
                                       /                 \
                           Tailscale to PC1         Tailscale to PC2
@@ -25,6 +25,8 @@ Game players ──public TCP/UDP──> VPS GameServerControl.Relay
 Cloudflare Worker does **not** send requests through PC1 to reach PC2. If PC1 is powered down, the Worker still serves the dashboard, marks PC1 offline and connects directly to PC2 through the VPS proxy.
 
 ## 1. Set up the forwarding-only VPS
+
+**Already running Nginx?** Follow the [Nginx gateway guide](nginx-admin-gateway.md) and [Nginx config template](../deploy/relay/admin-gateway/nginx-gateway.conf.example). It implements the same header, fixed-Tailscale-host routes, WebSocket support and deployment health checks. Do **not** install Caddy on top of an existing Nginx listener. The steps below describe the **Caddy alternative**.
 
 The VPS needs a public DNS name and HTTPS listener, e.g. `gsc-gateway.example.com`. This is a **separate** hostname from the human-facing Worker panel, e.g. `panel.example.com`. Point the gateway DNS name to the VPS public IP; DNS-only is simplest. Install Caddy on the VPS (or add equivalent rules to an existing TLS reverse proxy).
 
@@ -65,7 +67,7 @@ On every PC, create **two distinct Agent managed tokens** in its local WebUI: on
 
 ## Shared GameServerControl.Relay on the VPS
 
-The **public game port Relay** is separate from the Caddy HTTPS administration gateway and remains installed as before. For multiple PCs sharing the same VPS Relay, configure a **unique** `Agent:PublicRelay:NodeId` on each Agent before enabling routes:
+The **public game port Relay** is separate from the VPS HTTPS administration gateway and remains installed as before. For multiple PCs sharing the same VPS Relay, configure a **unique** `Agent:PublicRelay:NodeId` on each Agent before enabling routes:
 
 ```json
 {
@@ -94,7 +96,7 @@ The Cloudflare Worker serves the existing responsive Agent WebUI as static asset
 | `CLOUDFLARE_API_TOKEN` | Scoped Worker deploy, D1 migrations and Access-app read permissions |
 | `GSC_CF_HOSTS_DB_ID` | Existing D1 database UUID |
 | `GSC_CF_HOSTS_ENCRYPTION_KEY` | 32 random bytes encoded as base64 (`openssl rand -base64 32`) |
-| `GSC_CF_GATEWAY_SHARED_KEY` | Random secret identical to VPS Caddy `GSC_ADMIN_GATEWAY_KEY` |
+| `GSC_CF_GATEWAY_SHARED_KEY` | Random secret shared with VPS gateway (Caddy environment variable or private Nginx secret include) |
 | `GSC_CF_ACCESS_ADMIN_EMAILS` | Comma-separated allowlist for Cloudflare users permitted to administer servers and register PCs |
 
 5. Run GitHub Actions **Deploy Cloudflare panel** with `panel_hostname`, `gateway_origin`, `access_team_domain` and `access_policy_aud`. No per-PC Agent tokens are deployment secrets: add them through the authenticated WebUI instead.
@@ -117,9 +119,9 @@ Open `https://panel.<domain>` and log in through Cloudflare Access.
 ## Security boundary and limits
 
 - Worker validates the Cloudflare Access JWT (issuer, audience, signature) and maps logged-in users to Admin or ReadOnly according to the explicit admin email allowlist. It checks state-changing requests for same-origin CSRF and forwards the correct per-host credential. ReadOnly cannot mutate remote state.
-- Worker never accepts an arbitrary upstream URL from a browser. Its target hostname comes **only** from the `GATEWAY_ORIGIN` secret, with a syntactically restricted host ID/path. VPS Caddy resolves the host ID to a preconfigured Tailscale IP. No request-controlled destination IP or unrestricted proxy is allowed.
+- Worker never accepts an arbitrary upstream URL from a browser. Its target hostname comes **only** from the `GATEWAY_ORIGIN` secret, with a syntactically restricted host ID/path. The VPS gateway proxy resolves the host ID to a preconfigured Tailscale IP. No request-controlled destination IP or unrestricted proxy is allowed.
 - Worker does not expose D1 credentials, VPS gateway key or host tokens to the browser. Tokens are encrypted separately from the D1 database using a Worker secret. Rotating the encryption key requires a credential migration or re-registering the PCs.
-- VPS sees forwarded request headers and Agent bearer credentials while handling the request but does not persist them; do not enable verbose sensitive header logging. TLS protects Cloudflare→VPS, Tailscale protects VPS→PC. Agent and Caddy each enforce their own authentication boundaries.
+- VPS sees forwarded request headers and Agent bearer credentials while handling the request but does not persist them; do not enable verbose sensitive header logging. TLS protects Cloudflare→VPS, Tailscale protects VPS→PC. Agent and the VPS gateway proxy each enforce their own authentication boundaries.
 - Limit of 20 registered PCs and 200 displayed game servers per PC. No host-to-host failover is necessary to keep online PCs manageable.
 
 **This is the target deployment procedure, not a claim that it has been deployed to your VPS or Cloudflare account.** A real-network smoke test is still required.
