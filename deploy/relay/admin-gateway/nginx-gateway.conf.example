@@ -1,0 +1,78 @@
+# GameServerControl: HTTPS-only VPS forwarding gateway for independent Agents.
+# TEMPLATE ONLY. Replace GSC_GATEWAY_HOSTNAME, PC1_TAILSCALE_IPV4 and
+# PC2_TAILSCALE_IPV4 on the VPS. Never commit real addresses or credentials.
+#
+# Install as a separate site file included inside nginx's "http" block,
+# e.g. /etc/nginx/sites-available/gsc-admin-gateway (symlink to sites-enabled).
+# This does NOT replace any existing nginx virtual host or game Relay rules.
+#
+# The root-only secret file MUST exist before nginx -t succeeds:
+# /etc/nginx/gsc-admin-gateway/secret.conf
+# Its sole directive: set $gsc_gateway_key "<random-64-character-hex>";
+# The actual secret must match the Worker GATEWAY_SHARED_KEY (stored privately).
+#
+# Nginx's WebSocket upgrade map belongs in the "http" context.
+map $http_upgrade $gsc_admin_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 443 ssl;
+    server_name GSC_GATEWAY_HOSTNAME;
+
+    # Obtain a trusted TLS certificate for this hostname *before* enabling
+    # this site, using the existing ACME/Certbot mechanism on the VPS.
+    ssl_certificate     /etc/letsencrypt/live/GSC_GATEWAY_HOSTNAME/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/GSC_GATEWAY_HOSTNAME/privkey.pem;
+
+    # Do not log Agent API URLs, query strings or forwarded credentials.
+    access_log off;
+
+    # The included file is provisioned only on the VPS (mode 0600, root owned).
+    # Missing file => nginx -t fails CLOSED; no hardcoded/example secret is valid.
+    include /etc/nginx/gsc-admin-gateway/secret.conf;
+
+    # Apply to health checks, Agent HTTP requests AND WebSocket upgrades.
+    # A caller without the Worker-to-VPS shared secret is always rejected.
+    if ($http_x_gsc_proxy_key != $gsc_gateway_key) {
+        return 403;
+    }
+
+    # The deployment workflow checks 200 with the secret, 403 without it.
+    location = /_gsc_gateway/health {
+        default_type text/plain;
+        return 200 "ok";
+    }
+
+    # All upstreams are fixed Tailscale IPs. Never proxy a user-supplied URL.
+    # Authenticated Agent API bearer credentials are sent by the Worker.
+    # A trailing slash in proxy_pass strips the /gsc-agent/<id>/ prefix.
+    proxy_http_version 1.1;
+    proxy_set_header Host $proxy_host;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $gsc_admin_connection_upgrade;
+    proxy_set_header X-GSC-Proxy-Key "";
+    proxy_set_header CF-Access-Jwt-Assertion "";
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_connect_timeout 10s;
+    proxy_request_buffering off;
+    proxy_buffering off;
+    client_max_body_size 512m;
+
+    location ^~ /gsc-agent/pc1/ {
+        proxy_pass http://PC1_TAILSCALE_IPV4:5099/;
+    }
+
+    location ^~ /gsc-agent/pc2/ {
+        proxy_pass http://PC2_TAILSCALE_IPV4:5099/;
+    }
+
+    # No WebUI, directory listing, open proxy or other public endpoints.
+    location / {
+        return 403;
+    }
+}
