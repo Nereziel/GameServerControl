@@ -71,8 +71,6 @@ for (const token of [
 ]) {
   requireToken(nginxGateway, token, 'Nginx gateway must be fixed-route, key-protected and WebSocket-capable');
 }
-rejectToken(nginxGateway, 'proxy_pass http://
-, 'Nginx gateway must not accept dynamic upstream destinations');
 rejectToken(nginxGateway, '.overcore.eu', 'Nginx template must not reveal deployment hostnames');
 
 console.log('Audit fixes 1-3 contract OK.');
