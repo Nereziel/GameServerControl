@@ -78,8 +78,8 @@ Verify from a machine that can reach the VPS, replacing the **example** hostname
 curl -i https://gateway.example.com/_gsc_gateway/health
 
 # From the VPS: supply the private header through stdin, not the curl command line.
-sudo awk -F '"' '/^set \\$gsc_gateway_key / {print "header = \\"X-GSC-Proxy-Key: " $2 "\\""}' \
-  /etc/nginx/gsc-admin-gateway/secret.conf |
+sudo cut -d '"' -f2 /etc/nginx/gsc-admin-gateway/secret.conf |
+  awk '{print "header = \"X-GSC-Proxy-Key: " $0 "\""}' |
   curl --config - -i https://gateway.example.com/_gsc_gateway/health
 # Must be HTTP 200 and body: ok.
 ```
