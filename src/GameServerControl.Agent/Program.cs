@@ -12,6 +12,15 @@ using GameServerControl.Shared;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 
+// The Windows Task Scheduler invokes this narrowly-scoped command as SYSTEM.
+// Do not run a second web server; load the protected Agent credential only in
+// this transient process (never include it in the scheduled task definition).
+if (args.Length == 3 && args[0] == "--scheduled-maintenance")
+{
+    Environment.ExitCode = await ScheduledMaintenanceCommand.RunAsync(args[1], args[2]);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
@@ -577,14 +586,28 @@ api.MapGet("/servers/{id}/schedule", async (string id, ServerRegistry reg, Maint
 api.MapPost("/servers/{id}/schedule", async (string id, MaintenanceSchedule schedule, ServerRegistry reg, MaintenanceScheduler sched, CancellationToken ct) =>
 {
     if (reg.Get(id) is null) return Results.NotFound();
-    await sched.ApplyAsync(id, schedule, ct);
-    return Results.Ok(new { applied = true });
+    try
+    {
+        await sched.ApplyAsync(id, schedule, ct);
+        return Results.Ok(new { applied = true });
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or PlatformNotSupportedException)
+    {
+        return Results.BadRequest(new { applied = false, error = ex.Message });
+    }
 });
 api.MapDelete("/servers/{id}/schedule", async (string id, ServerRegistry reg, MaintenanceScheduler sched, CancellationToken ct) =>
 {
     if (reg.Get(id) is null) return Results.NotFound();
-    await sched.ApplyAsync(id, null, ct);
-    return Results.NoContent();
+    try
+    {
+        await sched.ApplyAsync(id, null, ct);
+        return Results.NoContent();
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or PlatformNotSupportedException)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 api.MapPost("/discord/test", async (DiscordWebhookTestRequest req, DiscordNotifier notifier, CancellationToken ct) =>
