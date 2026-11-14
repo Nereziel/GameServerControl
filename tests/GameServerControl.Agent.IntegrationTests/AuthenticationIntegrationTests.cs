@@ -65,6 +65,8 @@ public sealed class AuthenticationIntegrationTests
         Assert.Contains("alpha", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alpha-rcon-secret", body, StringComparison.Ordinal);
         Assert.DoesNotContain("alpha-webhook-secret", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(factory.TempRoot, body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"guestCredentialId\":null", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -110,6 +112,20 @@ public sealed class AuthenticationIntegrationTests
         Assert.Contains("alpha", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alpha-rcon-secret", body, StringComparison.Ordinal);
         Assert.DoesNotContain("alpha-webhook-secret", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadOnly_cannot_delete_server_through_audit_middleware()
+    {
+        using var factory = new AgentTestFactory();
+        var token = factory.CreateReadOnlyToken();
+        using var viewer = factory.CreateClientWithToken(token);
+        using var request = new StringContent(
+            "{\"confirmation\":\"Alpha\",\"createFinalBackup\":false}",
+            System.Text.Encoding.UTF8, "application/json");
+        using var response = await viewer.PostAsync("/api/servers/alpha/delete-completely", request);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.NotNull(factory.Services.GetRequiredService<ServerRegistry>().Get("alpha"));
     }
 
     [Fact]

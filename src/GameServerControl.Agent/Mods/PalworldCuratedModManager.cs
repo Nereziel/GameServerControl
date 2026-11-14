@@ -191,7 +191,8 @@ public sealed class PalworldCuratedModManager : IModManager
             {
                 // Single DLL: copy verbatim
                 var dst = Path.Combine(installRoot, Path.GetFileName(uri.LocalPath));
-                File.Copy(downloadPath, dst, overwrite: true);
+                var retained = ModInstallTransaction.ReplaceFiles(installRoot, new[] { (Source: downloadPath, Destination: dst) });
+                if (retained) _logger.LogWarning("Previous Palworld mod DLL retained after replacement");
                 installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
             }
             else
@@ -200,14 +201,11 @@ public sealed class PalworldCuratedModManager : IModManager
                 var extract = Path.Combine(tmpRoot, "extract");
                 try { ZipFile.ExtractToDirectory(downloadPath, extract, overwriteFiles: true); }
                 catch (Exception ex) { return new ModInstallResult(false, null, "Asset isn't a valid zip: " + ex.Message); }
-                foreach (var f in Directory.EnumerateFiles(extract, "*", SearchOption.AllDirectories))
-                {
-                    var rel = Path.GetRelativePath(extract, f);
-                    var dst = Path.Combine(installRoot, rel);
-                    Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-                    File.Copy(f, dst, overwrite: true);
-                    installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
-                }
+                var files = Directory.EnumerateFiles(extract, "*", SearchOption.AllDirectories)
+                    .Select(f => (Source: f, Destination: Path.Combine(installRoot, Path.GetRelativePath(extract, f)))).ToArray();
+                var retained = ModInstallTransaction.ReplaceFiles(installRoot, files);
+                if (retained) _logger.LogWarning("Previous Palworld mod file copies retained after replacement");
+                installedFiles.AddRange(files.Select(f => Path.GetRelativePath(def.GuestWorkingDir, f.Destination)));
             }
 
             var version = entry is not null

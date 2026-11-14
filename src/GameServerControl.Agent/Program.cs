@@ -12,6 +12,15 @@ using GameServerControl.Shared;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 
+// The Windows Task Scheduler invokes this narrowly-scoped command as SYSTEM.
+// Do not run a second web server; load the protected Agent credential only in
+// this transient process (never include it in the scheduled task definition).
+if (args.Length == 3 && args[0] == "--scheduled-maintenance")
+{
+    Environment.ExitCode = await ScheduledMaintenanceCommand.RunAsync(args[1], args[2]);
+    return;
+}
+
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
@@ -204,8 +213,9 @@ app.MapGet("/webui/{file}", (string file) =>
 app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseMiddleware<RoleEnforcementMiddleware>();
+// Audit must wrap role enforcement to record denied requests too.
 app.UseMiddleware<AuditMiddleware>();
+app.UseMiddleware<RoleEnforcementMiddleware>();
 
 var api = app.MapGroup("/api").RequireAuthorization();
 api.MapServerConfigFiles();
@@ -449,8 +459,16 @@ api.MapPost("/servers/{id}/mods/{modId}/update", async (string id, string modId,
     if (def is null) return Results.NotFound();
     var mgr = mods.For(def);
     if (mgr is null) return Results.BadRequest(new ModInstallResult(false, null, "Mod management not supported for this game."));
-    await mgr.UninstallAsync(def, modId, ct);
+    // Never uninstall a working mod before a replacement is downloaded.
+    // Each manager now stages its payload and swaps files with rollback.
+    var installed = await mgr.ListAsync(def, ct);
+    if (!installed.Any(item => string.Equals(item.ModId, modId, StringComparison.OrdinalIgnoreCase)))
+        return Results.NotFound(new ModInstallResult(false, null, "Installed mod not found."));
     var result = await mgr.InstallFromUrlAsync(def, req.Url, req.DisplayName, ct);
+    if (result.Ok && result.Mod is { } replacement &&
+        !string.Equals(replacement.ModId, modId, StringComparison.OrdinalIgnoreCase))
+        return Results.Conflict(new ModInstallResult(false, replacement,
+            "The downloaded package used a different mod ID; the previous mod was preserved. Review installed mods."));
     return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
 });
 
@@ -576,14 +594,28 @@ api.MapGet("/servers/{id}/schedule", async (string id, ServerRegistry reg, Maint
 api.MapPost("/servers/{id}/schedule", async (string id, MaintenanceSchedule schedule, ServerRegistry reg, MaintenanceScheduler sched, CancellationToken ct) =>
 {
     if (reg.Get(id) is null) return Results.NotFound();
-    await sched.ApplyAsync(id, schedule, ct);
-    return Results.Ok(new { applied = true });
+    try
+    {
+        await sched.ApplyAsync(id, schedule, ct);
+        return Results.Ok(new { applied = true });
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or PlatformNotSupportedException)
+    {
+        return Results.BadRequest(new { applied = false, error = ex.Message });
+    }
 });
 api.MapDelete("/servers/{id}/schedule", async (string id, ServerRegistry reg, MaintenanceScheduler sched, CancellationToken ct) =>
 {
     if (reg.Get(id) is null) return Results.NotFound();
-    await sched.ApplyAsync(id, null, ct);
-    return Results.NoContent();
+    try
+    {
+        await sched.ApplyAsync(id, null, ct);
+        return Results.NoContent();
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or PlatformNotSupportedException)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 api.MapPost("/discord/test", async (DiscordWebhookTestRequest req, DiscordNotifier notifier, CancellationToken ct) =>
