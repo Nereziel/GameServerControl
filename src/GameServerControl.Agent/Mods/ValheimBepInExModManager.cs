@@ -143,25 +143,28 @@ public sealed class ValheimBepInExModManager : IModManager
             {
                 modId = SanitizeFolderName(displayName ?? Path.GetFileName(sourceDir.TrimEnd('\\', '/')) ?? "mod");
                 var destDir = PathContainment.ResolveDirectChild(modsDir, modId);
-                if (Directory.Exists(destDir))
+                var stageDir = Path.Combine(modsDir, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
+                try
                 {
-                    if (!ModRemovalSafety.CanDeleteDirectoryTree(destDir))
-                        return new ModInstallResult(false, null, "Existing mod folder contains unsafe links.");
-                    Directory.Delete(destDir, recursive: true);
+                    CopyDirectory(sourceDir, stageDir);
+                    installedFiles.AddRange(Directory.EnumerateFiles(stageDir, "*", SearchOption.AllDirectories)
+                        .Select(f => Path.GetRelativePath(stageDir, f))
+                        .Select(f => Path.GetRelativePath(def.GuestWorkingDir, Path.Combine(destDir, f))));
+                    var retained = ModInstallTransaction.ReplaceDirectory(stageDir, destDir);
+                    if (retained) _logger.LogWarning("Previous Valheim mod folder retained after replacement of {ModId}", modId);
                 }
-                CopyDirectory(sourceDir, destDir);
-                installedFiles.AddRange(Directory.EnumerateFiles(destDir, "*", SearchOption.AllDirectories)
-                    .Select(f => Path.GetRelativePath(def.GuestWorkingDir, f)));
+                finally
+                {
+                    if (Directory.Exists(stageDir)) try { Directory.Delete(stageDir, recursive: true); } catch { }
+                }
             }
             else
             {
-                foreach (var dll in copyDlls!)
-                {
-                    var dllName = Path.GetFileName(dll);
-                    var dst = PathContainment.ResolveDirectChild(modsDir, dllName);
-                    File.Copy(dll, dst, overwrite: true);
-                    installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
-                }
+                var copies = copyDlls!.Select(dll =>
+                    (Source: dll, Destination: PathContainment.ResolveDirectChild(modsDir, Path.GetFileName(dll)))).ToArray();
+                var retained = ModInstallTransaction.ReplaceFiles(modsDir, copies);
+                if (retained) _logger.LogWarning("Previous Valheim DLL copy retained after replacement");
+                installedFiles.AddRange(copies.Select(file => Path.GetRelativePath(def.GuestWorkingDir, file.Destination)));
                 modId = Path.GetFileName(copyDlls![0]);
             }
 

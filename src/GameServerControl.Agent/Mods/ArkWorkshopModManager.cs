@@ -121,20 +121,29 @@ public sealed class ArkWorkshopModManager : IModManager
                 "Look in your steamcmd install for steamapps\\workshop\\content\\");
 
         // 3) Move into ARK's mods folder
-        var destDir = Path.Combine(ModsFolder(def), workshopId);
-        if (Directory.Exists(destDir))
-        {
-            try { Directory.Delete(destDir, recursive: true); } catch { /* ignore */ }
-        }
-        Directory.CreateDirectory(destDir);
+        var modsRoot = ModsFolder(def);
+        Directory.CreateDirectory(modsRoot);
+        if (!ModRemovalSafety.TryResolveModDirectory(modsRoot, workshopId, out var destDir))
+            return new ModInstallResult(false, null, "Unsafe Workshop ID.");
+        var stageDir = Path.Combine(modsRoot, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
         var installedFiles = new List<string>();
-        foreach (var f in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+        try
         {
-            var rel = Path.GetRelativePath(sourceDir, f);
-            var dst = Path.Combine(destDir, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-            File.Copy(f, dst, overwrite: true);
-            installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
+            Directory.CreateDirectory(stageDir);
+            foreach (var f in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(sourceDir, f);
+                var dst = Path.Combine(stageDir, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                File.Copy(f, dst, overwrite: false);
+                installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, Path.Combine(destDir, rel)));
+            }
+            var retained = ModInstallTransaction.ReplaceDirectory(stageDir, destDir);
+            if (retained) _logger.LogWarning("Previous ARK mod directory retained after replacement of {ModId}", workshopId);
+        }
+        finally
+        {
+            if (Directory.Exists(stageDir)) try { Directory.Delete(stageDir, recursive: true); } catch { }
         }
 
         var info = new ModInfo(

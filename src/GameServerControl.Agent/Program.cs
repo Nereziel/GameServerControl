@@ -459,8 +459,16 @@ api.MapPost("/servers/{id}/mods/{modId}/update", async (string id, string modId,
     if (def is null) return Results.NotFound();
     var mgr = mods.For(def);
     if (mgr is null) return Results.BadRequest(new ModInstallResult(false, null, "Mod management not supported for this game."));
-    await mgr.UninstallAsync(def, modId, ct);
+    // Never uninstall a working mod before a replacement is downloaded.
+    // Each manager now stages its payload and swaps files with rollback.
+    var installed = await mgr.ListAsync(def, ct);
+    if (!installed.Any(item => string.Equals(item.ModId, modId, StringComparison.OrdinalIgnoreCase)))
+        return Results.NotFound(new ModInstallResult(false, null, "Installed mod not found."));
     var result = await mgr.InstallFromUrlAsync(def, req.Url, req.DisplayName, ct);
+    if (result.Ok && result.Mod is { } replacement &&
+        !string.Equals(replacement.ModId, modId, StringComparison.OrdinalIgnoreCase))
+        return Results.Conflict(new ModInstallResult(false, replacement,
+            "The downloaded package used a different mod ID; the previous mod was preserved. Review installed mods."));
     return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
 });
 
