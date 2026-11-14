@@ -57,14 +57,38 @@ public sealed class MaintenanceScheduler
              schedule.HourlyBackupMinute is < 0 or > 59))
             throw new ArgumentException("Schedule time is out of range.");
 
-        // Failure is propagated to the API. Do not claim the task was applied
-        // if schtasks rejects it (or if this is a Linux Agent).
-        // Always wipe existing tasks for this server, then recreate enabled ones.
-        await RemoveTaskAsync(TaskName(serverId, "restart"), ct);
-        await RemoveTaskAsync(TaskName(serverId, "update"), ct);
-        await RemoveTaskAsync(TaskName(serverId, "backup"), ct);
-        if (schedule is null) return;
+        // Snapshot existing definitions before changing any schedule. Restoring the
+        // XML on failure prevents a bad task update from silently erasing an old plan.
+        var taskNames = new[] { TaskName(serverId, "restart"),
+            TaskName(serverId, "update"), TaskName(serverId, "backup") };
+        var previous = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var task in taskNames)
+        {
+            var (found, xml) = await RunSchtasksAsync(["/query", "/tn", task, "/xml"], ct);
+            if (found)
+            {
+                // Reject invalid snapshots before performing any destructive action.
+                _ = XDocument.Parse(xml);
+                previous[task] = xml;
+            }
+        }
 
+        try
+        {
+            foreach (var task in taskNames) await RemoveTaskAsync(task, ct);
+            if (schedule is null) return;
+            await ApplyNewTasksAsync(serverId, schedule, ct);
+        }
+        catch
+        {
+            await RestorePreviousTasksAsync(taskNames, previous);
+            throw;
+        }
+
+    }
+
+    private async Task ApplyNewTasksAsync(string serverId, MaintenanceSchedule schedule, CancellationToken ct)
+    {
         if (schedule.DailyRestartEnabled)
         {
             await CreateAsync(
@@ -103,6 +127,43 @@ public sealed class MaintenanceScheduler
                 serverId: serverId,
                 ct);
         }
+    }
+
+    private async Task RestorePreviousTasksAsync(
+        IEnumerable<string> taskNames, IReadOnlyDictionary<string, string> previous)
+    {
+        var errors = new List<string>();
+        foreach (var task in taskNames)
+        {
+            if (!previous.TryGetValue(task, out var xml))
+            {
+                var (exists, _) = await RunSchtasksAsync(["/query", "/tn", task], CancellationToken.None);
+                if (exists)
+                {
+                    var (deleted, _) = await RunSchtasksAsync(["/delete", "/f", "/tn", task], CancellationToken.None);
+                    if (!deleted) errors.Add(task);
+                }
+                continue;
+            }
+
+            // Windows installer protects the Agent directory with SYSTEM and
+            // Administrators ACLs. Older task XML may still contain legacy tokens,
+            // so never write an XML snapshot into the user TEMP directory.
+            var temporary = Path.Combine(AppContext.BaseDirectory,
+                ".gsc-schedule-rollback-" + Guid.NewGuid().ToString("N") + ".xml");
+            try
+            {
+                XDocument.Parse(xml).Save(temporary);
+                var (ok, _) = await RunSchtasksAsync(
+                    ["/create", "/f", "/tn", task, "/xml", temporary], CancellationToken.None);
+                if (!ok) errors.Add(task);
+            }
+            catch { errors.Add(task); }
+            finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
+        }
+        if (errors.Count > 0)
+            throw new InvalidOperationException("Schedule update failed and old definitions could not be restored: " +
+                string.Join(", ", errors));
     }
 
     private async Task CreateAsync(string taskName, string description, string trigger, string action, string serverId, CancellationToken ct)
