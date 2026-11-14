@@ -68,6 +68,35 @@ public sealed class AuthenticationIntegrationTests
     }
 
     [Fact]
+    public async Task ReadOnly_server_list_omits_launch_passwords_but_admin_can_access_args()
+    {
+        using var factory = new AgentTestFactory();
+        var token = factory.CreateReadOnlyToken();
+        var registry = factory.Services.GetRequiredService<ServerRegistry>();
+        var original = registry.Get("alpha")!;
+        var secret = "launch-password-not-for-readonly";
+        factory.Services.GetRequiredService<ServerStore>().Update("alpha", original with
+        {
+            StartArgs = new[] { "-password", secret, "?ServerAdminPassword=another-secret" },
+            DiscordWebhookUrl = null
+        });
+
+        using var viewer = factory.CreateClientWithToken(token);
+        using var admin = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+        using var viewerResult = await viewer.GetAsync("/api/servers");
+        using var adminResult = await admin.GetAsync("/api/servers");
+        var viewerBody = await viewerResult.Content.ReadAsStringAsync();
+        var adminBody = await adminResult.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, viewerResult.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, adminResult.StatusCode);
+        Assert.DoesNotContain(secret, viewerBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("another-secret", viewerBody, StringComparison.Ordinal);
+        Assert.Contains("\"startArgs\":[]", viewerBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(secret, adminBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ReadOnly_trailing_slash_server_list_does_not_expose_plaintext_secrets()
     {
         using var factory = new AgentTestFactory();

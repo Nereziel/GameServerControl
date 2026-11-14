@@ -32,7 +32,9 @@ public sealed record ServerViewDto(
         def.GameType,
         def.GuestExePath,
         def.GuestWorkingDir,
-        def.StartArgs,
+        // Launch arguments can contain game/admin passwords (Valheim, ARK, etc.).
+        // Never expose them to ReadOnly clients.
+        Array.Empty<string>(),
         def.SaveDirs,
         def.SteamAppId,
         def.GuestCredentialId,

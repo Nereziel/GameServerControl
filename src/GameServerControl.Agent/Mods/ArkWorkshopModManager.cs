@@ -163,11 +163,17 @@ public sealed class ArkWorkshopModManager : IModManager
     public Task<bool> UninstallAsync(ServerDef def, string modId, CancellationToken ct)
     {
         var modsDir = ModsFolder(def);
-        var dir = Path.Combine(modsDir, modId);
+        if (!Regex.IsMatch(modId, @"^[0-9]+$") ||
+            !ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var dir))
+            return Task.FromResult(false);
         var ok = false;
         try
         {
-            if (Directory.Exists(dir)) { Directory.Delete(dir, recursive: true); ok = true; }
+            if (Directory.Exists(dir) && ModRemovalSafety.CanDeleteDirectoryTree(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+                ok = true;
+            }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "ARK mod uninstall failed for {Id}", modId); }
         UpdateMetadata(def, m => m.Remove(modId));

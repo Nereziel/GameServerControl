@@ -143,7 +143,12 @@ public sealed class ValheimBepInExModManager : IModManager
             {
                 modId = SanitizeFolderName(displayName ?? Path.GetFileName(sourceDir.TrimEnd('\\', '/')) ?? "mod");
                 var destDir = PathContainment.ResolveDirectChild(modsDir, modId);
-                if (Directory.Exists(destDir)) Directory.Delete(destDir, recursive: true);
+                if (Directory.Exists(destDir))
+                {
+                    if (!ModRemovalSafety.CanDeleteDirectoryTree(destDir))
+                        return new ModInstallResult(false, null, "Existing mod folder contains unsafe links.");
+                    Directory.Delete(destDir, recursive: true);
+                }
                 CopyDirectory(sourceDir, destDir);
                 installedFiles.AddRange(Directory.EnumerateFiles(destDir, "*", SearchOption.AllDirectories)
                     .Select(f => Path.GetRelativePath(def.GuestWorkingDir, f)));
@@ -332,12 +337,9 @@ exec ./valheim_server.x86_64 "$@"
         {
             foreach (var rel in files)
             {
-                string abs;
-                try { abs = Path.GetFullPath(Path.Combine(def.GuestWorkingDir, rel)); }
-                catch { continue; }
-                if (!PathContainment.IsWithinRoot(modsDir, abs))
+                if (!ModRemovalSafety.TryResolveInstalledFile(def.GuestWorkingDir, modsDir, rel, out var abs))
                 {
-                    _logger.LogWarning("Skipping out-of-root file from Valheim mod metadata: {Path}", rel);
+                    _logger.LogWarning("Skipping unsafe Valheim mod metadata path {Path}", rel);
                     continue;
                 }
                 try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { }
@@ -349,7 +351,8 @@ exec ./valheim_server.x86_64 "$@"
         }
 
         if (File.Exists(modPath)) try { File.Delete(modPath); ok = true; } catch { }
-        if (Directory.Exists(modPath)) try { Directory.Delete(modPath, recursive: true); ok = true; } catch { }
+        if (Directory.Exists(modPath) && ModRemovalSafety.CanDeleteDirectoryTree(modPath))
+            try { Directory.Delete(modPath, recursive: true); ok = true; } catch { }
         return Task.FromResult(ok);
     }
 

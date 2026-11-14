@@ -252,7 +252,7 @@ ACCESS_ADMIN_EMAILS
 
 `ACCESS_ADMIN_EMAILS` is a comma/semicolon/newline-separated list of verified Cloudflare Access email identities that should receive the Worker-side `Admin` role. Matching is case-insensitive. Every other successfully authenticated Access user is mapped to `ReadOnly`. If `ACCESS_ADMIN_EMAILS` is empty, the gateway fails closed for writes: all Access users are ReadOnly.
 
-The Worker validates the Access JWT, selects the Agent token that matches the mapped role, strips browser-supplied authorization/gateway identity headers, and adds the protected-origin Access service credentials. ReadOnly users may perform GET requests, SignalR negotiation and the narrow live-log subscription control; normal POST/PUT/PATCH/DELETE operations remain blocked. The Agent repeats role enforcement as defense in depth.
+The Worker validates the Access JWT, selects the Agent token that matches the mapped role, strips browser-supplied authorization/gateway identity headers, and adds the protected-origin Access service credentials. ReadOnly users may perform GET requests and SignalR negotiation, then subscribe to live logs through the authenticated hub. Log-tail POST controls and other POST/PUT/PATCH/DELETE operations remain Admin-only. The Agent repeats role enforcement as defense in depth.
 
 Protect the human-facing panel hostname with Cloudflare Access. Protect the Tunnel origin hostname separately with an Access service-token policy used only by the Worker. Do not make the Agent origin publicly reachable without Access/Tunnel protection.
 
