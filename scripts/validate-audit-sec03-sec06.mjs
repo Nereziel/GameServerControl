@@ -11,8 +11,10 @@ const linuxUnit = fs.readFileSync('deploy/linux/gameservercontrol-agent.service'
 const linuxInstaller = fs.readFileSync('deploy/linux/install-from-release.sh', 'utf8');
 const linuxSourceInstaller = fs.readFileSync('deploy/linux/install.sh', 'utf8');
 const pathHelperPath = 'src/GameServerControl.Shared/PathContainment.cs';
+const modRemovalHelperPath = 'src/GameServerControl.Agent/Mods/ModRemovalSafety.cs';
 const secretHelperPath = 'src/GameServerControl.Shared/SecretFilePermissions.cs';
 const pathHelper = fs.existsSync(pathHelperPath) ? fs.readFileSync(pathHelperPath, 'utf8') : '';
+const modRemovalHelper = fs.existsSync(modRemovalHelperPath) ? fs.readFileSync(modRemovalHelperPath, 'utf8') : '';
 const secretHelper = fs.existsSync(secretHelperPath) ? fs.readFileSync(secretHelperPath, 'utf8') : '';
 
 function requireToken(source, token, message) {
@@ -45,7 +47,10 @@ requireToken(pathHelper, 'ResolveDirectChild', 'A shared direct-child path guard
 requireToken(pathHelper, 'IsWithinRoot', 'A shared canonical containment guard is required');
 requireToken(pathHelper, 'Path.GetFullPath', 'Containment must compare canonical paths');
 requireToken(valheim, 'PathContainment.ResolveDirectChild', 'Valheim install/uninstall paths must use the direct-child guard');
-requireToken(valheim, 'PathContainment.IsWithinRoot', 'Metadata-driven deletes must verify containment');
+requireToken(valheim, 'ModRemovalSafety.TryResolveInstalledFile', 'Valheim metadata-driven deletes must use the guarded resolver');
+requireToken(modRemovalHelper, 'PathContainment.IsWithinRoot', 'Mod removal must enforce canonical containment');
+requireToken(modRemovalHelper, 'HasReparseComponent', 'Mod removal must reject linked paths');
+requireToken(modRemovalHelper, 'CanDeleteDirectoryTree', 'Recursive mod deletion must reject symlink/junction descendants');
 
 // SEC-05/06: credentials must not reach service stdout and secret state must be restrictive.
 rejectToken(firstRun, 'Console.WriteLine($"     {token}")', 'Bootstrap API token must not be printed to stdout');

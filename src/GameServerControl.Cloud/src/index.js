@@ -57,16 +57,15 @@ export function agentTokenForRole(role, tokens) {
   return value;
 }
 
-function isReadOnlyControlPost(method, pathname) {
-  if (String(method).toUpperCase() !== 'POST') return false;
-  return /^\/api\/hosts\/[a-z][a-z0-9-]{0,39}\/hubs\/status\/negotiate$/i.test(pathname)
-    || /^\/api\/hosts\/[a-z][a-z0-9-]{0,39}\/api\/servers\/[^/]+\/logs\/tail$/i.test(pathname);
+function isReadOnlyNegotiatePost(method, pathname) {
+  return String(method).toUpperCase() === 'POST'
+    && /^\/api\/hosts\/[a-z][a-z0-9-]{0,39}\/hubs\/status\/negotiate$/i.test(pathname);
 }
 
 export function authorizeGatewayRequest(method, role, pathname = '') {
   const normalizedMethod = String(method || '').toUpperCase();
   if (!WRITE_METHODS.has(normalizedMethod) || role === ADMIN_ROLE ||
-      isReadOnlyControlPost(normalizedMethod, pathname))
+      isReadOnlyNegotiatePost(normalizedMethod, pathname))
     return { allowed: true, status: 200, error: null };
   return { allowed: false, status: 403,
     error: 'Read-only access cannot modify GameServerControl.' };

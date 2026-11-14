@@ -242,10 +242,28 @@ public sealed class PalworldCuratedModManager : IModManager
         var meta = LoadMetadata(def);
         if (!meta.TryGetValue(modId, out var sidecar)) return Task.FromResult(false);
         var ok = false;
+        var allowedRoots = new[]
+        {
+            Path.Combine(def.GuestWorkingDir, "Pal", "Binaries", "Win64"),
+            Path.Combine(def.GuestWorkingDir, "Pal", "Content", "Paks", "~mods")
+        };
         foreach (var rel in sidecar.Files ?? Array.Empty<string>())
         {
-            var abs = Path.Combine(def.GuestWorkingDir, rel);
-            try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { /* ignore */ }
+            string? safeFile = null;
+            foreach (var allowed in allowedRoots)
+            {
+                if (ModRemovalSafety.TryResolveInstalledFile(def.GuestWorkingDir, allowed, rel, out var resolved))
+                {
+                    safeFile = resolved;
+                    break;
+                }
+            }
+            if (safeFile is null)
+            {
+                _logger.LogWarning("Skipping unsafe Palworld mod metadata path {Path}", rel);
+                continue;
+            }
+            try { if (File.Exists(safeFile)) { File.Delete(safeFile); ok = true; } } catch { /* ignore */ }
         }
         UpdateMetadata(def, m => m.Remove(modId));
         return Task.FromResult(ok);

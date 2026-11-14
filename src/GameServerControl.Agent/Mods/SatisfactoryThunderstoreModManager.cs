@@ -123,11 +123,13 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     "No Satisfactory mod files (.smod / .pak / .uplugin) found in the zip.");
 
             var modId = SanitizeFolderName(payloadName);
-            var destDir = Path.Combine(modsDir, modId);
+            if (!ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var destDir))
+                return new ModInstallResult(false, null, "Unsafe mod folder name or linked destination.");
             if (Directory.Exists(destDir))
             {
-                // Allow upgrade-in-place
-                try { Directory.Delete(destDir, recursive: true); } catch { /* ignore */ }
+                if (!ModRemovalSafety.CanDeleteDirectoryTree(destDir))
+                    return new ModInstallResult(false, null, "Existing mod folder contains unsafe links.");
+                Directory.Delete(destDir, recursive: true);
             }
             Directory.CreateDirectory(destDir);
 
@@ -194,6 +196,8 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         var modsDir = ModsFolder(def);
         if (!Directory.Exists(modsDir)) return Task.FromResult(false);
 
+        if (!ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var modFolder))
+            return Task.FromResult(false);
         var meta = LoadMetadata(def);
         var ok = false;
 
@@ -201,11 +205,14 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         {
             foreach (var rel in files)
             {
-                var abs = Path.Combine(def.GuestWorkingDir, rel);
+                if (!ModRemovalSafety.TryResolveInstalledFile(def.GuestWorkingDir, modFolder, rel, out var abs))
+                {
+                    _logger.LogWarning("Skipping unsafe Satisfactory mod metadata path {Path}", rel);
+                    continue;
+                }
                 try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { /* ignore */ }
             }
-            var modFolder = Path.Combine(modsDir, modId);
-            if (Directory.Exists(modFolder))
+            if (Directory.Exists(modFolder) && ModRemovalSafety.CanDeleteDirectoryTree(modFolder))
             {
                 try { Directory.Delete(modFolder, recursive: true); ok = true; } catch { /* ignore */ }
             }
@@ -213,11 +220,10 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
             return Task.FromResult(ok);
         }
 
-        // No metadata (manual install) — delete by folder match
-        var folderPath = Path.Combine(modsDir, modId);
-        if (Directory.Exists(folderPath))
+        // No sidecar: only delete a direct, non-linked child of the mods directory.
+        if (Directory.Exists(modFolder) && ModRemovalSafety.CanDeleteDirectoryTree(modFolder))
         {
-            try { Directory.Delete(folderPath, recursive: true); ok = true; } catch { /* ignore */ }
+            try { Directory.Delete(modFolder, recursive: true); ok = true; } catch { /* ignore */ }
         }
         return Task.FromResult(ok);
     }
@@ -273,7 +279,7 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
     {
         var invalid = Path.GetInvalidFileNameChars();
         var clean = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
-        return string.IsNullOrWhiteSpace(clean) ? "mod" : clean;
+        return string.IsNullOrWhiteSpace(clean) || clean is "." or ".." ? "mod" : clean;
     }
 
     // ---- metadata sidecar (same layout as Valheim, different file path) ----
