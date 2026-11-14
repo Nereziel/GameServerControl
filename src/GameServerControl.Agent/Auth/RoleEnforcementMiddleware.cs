@@ -6,7 +6,8 @@ namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// Rejects state-changing API requests from ReadOnly tokens and sanitizes sensitive GET responses.
-/// SignalR negotiation is outside /api and SendConsoleInput is independently Admin-only on the hub.
+/// Runs inside AuditMiddleware so denied mutations are recorded. SignalR
+/// console input is independently Admin-only on the hub.
 /// </summary>
 public sealed class RoleEnforcementMiddleware
 {

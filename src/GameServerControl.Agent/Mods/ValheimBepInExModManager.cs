@@ -79,7 +79,8 @@ public sealed class ValheimBepInExModManager : IModManager
         foreach (var sub in Directory.EnumerateDirectories(dir))
         {
             var id = Path.GetFileName(sub);
-            if (seen.Contains(id)) continue;
+            if (seen.Contains(id) || id.StartsWith(".gsc-stage-", StringComparison.OrdinalIgnoreCase) ||
+                id.StartsWith(".gsc-mod-prev-", StringComparison.OrdinalIgnoreCase)) continue;
             var sidecar = meta.GetValueOrDefault(id);
             long size = 0;
             try { size = new DirectoryInfo(sub).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length); }

@@ -70,6 +70,9 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         foreach (var sub in Directory.EnumerateDirectories(dir))
         {
             var id = Path.GetFileName(sub);
+            if (id.StartsWith(".gsc-stage-", StringComparison.OrdinalIgnoreCase) ||
+                id.StartsWith(".gsc-mod-prev-", StringComparison.OrdinalIgnoreCase))
+                continue; // Internal mod transaction directory.
             var sidecar = meta.GetValueOrDefault(id);
             long size = 0;
             try { size = new DirectoryInfo(sub).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length); }

@@ -43,9 +43,8 @@ public sealed class MaintenanceScheduler
     {
         if (!_local.HasScheduledTaskSupport)
         {
-            // Linux: no Task Scheduler. Operators wire up scheduled restarts/updates/backups
-            // via their own systemd timer units (or cron). The agent surfaces this as a clean
-            // no-op rather than throwing — see SECURITY.md / README for the recipe.
+            // Linux has no Windows Task Scheduler. Return an explicit error
+            // instead of reporting applied=true for a schedule that never ran.
             throw new PlatformNotSupportedException(
                 "Windows Task Scheduler is unavailable on this platform. Configure systemd timers/cron explicitly.");
         }
