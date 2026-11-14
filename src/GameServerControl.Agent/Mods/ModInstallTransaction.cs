@@ -87,7 +87,7 @@ public static class ModInstallTransaction
         }
         catch
         {
-            foreach (var file in staged.Reverse())
+            foreach (var file in staged.AsEnumerable().Reverse())
             {
                 try
                 {
