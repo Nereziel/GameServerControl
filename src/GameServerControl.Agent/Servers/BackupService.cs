@@ -567,7 +567,7 @@ public sealed class BackupService
         }
     }
 
-    private static void CleanupStages(IEnumerable<RestoreSwap> swaps)
+    private static void CleanupStages(IEnumerable<RestoreSwapStep> swaps)
     {
         foreach (var swap in swaps)
         {
