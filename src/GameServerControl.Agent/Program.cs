@@ -204,8 +204,9 @@ app.MapGet("/webui/{file}", (string file) =>
 app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
-app.UseMiddleware<RoleEnforcementMiddleware>();
+// Audit must wrap role enforcement to record denied requests too.
 app.UseMiddleware<AuditMiddleware>();
+app.UseMiddleware<RoleEnforcementMiddleware>();
 
 var api = app.MapGroup("/api").RequireAuthorization();
 api.MapServerConfigFiles();

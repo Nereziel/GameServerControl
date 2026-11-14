@@ -312,20 +312,35 @@ public sealed class BackupService
                 swap.StageMoved = true;
             }
 
-            foreach (var swap in swaps)
-                if (swap.OriginalMoved && Directory.Exists(swap.Old)) Directory.Delete(swap.Old, recursive: true);
+            // All swap steps must succeed before any original data is deleted.
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Restore swap failed for {ServerId}; attempting rollback", def.Id);
             RollbackSwaps(swaps);
-            CleanupStages(swaps);
+            CleanupStages(swaps); // Only staging paths. Never delete a retained .gsc-old copy here.
             return new ActionResult(false, "Restore failed and rollback was attempted: " + ex.Message, corr);
         }
 
+        // Commit completed: cleanup failures must NOT trigger a rollback. The restored
+        // saves are already live and other .Old copies may have been deleted.
         CleanupStages(swaps);
+        var retainedOriginals = false;
+        foreach (var swap in swaps.Where(s => s.OriginalMoved))
+        {
+            try
+            {
+                if (Directory.Exists(swap.Old)) Directory.Delete(swap.Old, recursive: true);
+            }
+            catch (Exception ex)
+            {
+                retainedOriginals = true;
+                _logger.LogWarning(ex, "Restored server {Id}; old save copy retained at {Path}", def.Id, swap.Old);
+            }
+        }
         return new ActionResult(true,
-            $"Restored from {safeName}. Safety copy: {Path.GetFileName(safety.Path)}", corr);
+            $"Restored from {safeName}. Safety copy: {Path.GetFileName(safety.Path)}" +
+            (retainedOriginals ? " Warning: one or more old save directories could not be removed; inspect .gsc-old folders before removing them." : ""), corr);
     }
 
     private async Task<ActionResult> RestoreHyperVAsync(ServerDef def, string checkpointName, string corr, CancellationToken ct)
@@ -550,8 +565,10 @@ public sealed class BackupService
     {
         foreach (var swap in swaps)
         {
-            if (Directory.Exists(swap.Stage)) Directory.Delete(swap.Stage, recursive: true);
-            if (Directory.Exists(swap.Old)) Directory.Delete(swap.Old, recursive: true);
+            // A stale .Old path can contain the last recoverable copy from an
+            // interrupted restore. Refuse to overwrite/delete it.
+            if (Directory.Exists(swap.Stage) || Directory.Exists(swap.Old))
+                throw new IOException("Restore staging or prior-original directory already exists: " + swap.Target);
             Directory.CreateDirectory(swap.Stage);
         }
 
@@ -605,8 +622,9 @@ public sealed class BackupService
     {
         foreach (var swap in swaps)
         {
+            // During rollback the old directory may still contain the only original
+            // data if a move failed. Never delete it from generic stage cleanup.
             TryDeleteDirectory(swap.Stage);
-            if (!swap.OriginalMoved || swap.StageMoved) TryDeleteDirectory(swap.Old);
         }
     }
 

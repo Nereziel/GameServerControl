@@ -182,6 +182,13 @@ public sealed class RoleEnforcementMiddleware
                         && value.TryGetValue<string>(out var text)
                         && !string.IsNullOrEmpty(text);
                     values.Remove(key);
+                    // A dynamic schema can carry the live secret in "default" or
+                    // "description" as well as in "values". Suppress both.
+                    if (field is JsonObject secretField)
+                    {
+                        secretField["default"] = null;
+                        secretField["description"] = "Sensitive value hidden for ReadOnly access.";
+                    }
                     secretValues[key] = hasValue;
                 }
             }

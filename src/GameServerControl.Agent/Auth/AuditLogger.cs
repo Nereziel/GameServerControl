@@ -139,7 +139,16 @@ public sealed class AuditMiddleware
         }
         else if (TryGetCompleteDeleteServerId(ctx, out var id))
         {
-            await HandleCompleteDeleteAsync(ctx, id!);
+            // This middleware intentionally executes before RoleEnforcement so
+            // denied mutations are audited. Its direct deletion path must
+            // enforce Admin independently of endpoint routing.
+            if (!string.Equals(ctx.User?.FindFirst(TokenAuthHandler.RoleClaim)?.Value,
+                nameof(GameServerControl.Shared.TokenRole.Admin), StringComparison.OrdinalIgnoreCase))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await ctx.Response.WriteAsync("Admin access required.", ctx.RequestAborted);
+            }
+            else await HandleCompleteDeleteAsync(ctx, id!);
         }
         else
         {

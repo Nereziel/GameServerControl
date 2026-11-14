@@ -65,6 +65,8 @@ public sealed class AuthenticationIntegrationTests
         Assert.Contains("alpha", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alpha-rcon-secret", body, StringComparison.Ordinal);
         Assert.DoesNotContain("alpha-webhook-secret", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(factory.TempRoot, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("guestCredentialId", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
