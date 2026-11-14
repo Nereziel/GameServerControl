@@ -339,6 +339,7 @@ jobs:
       - name: Stage installer scripts as release assets
         run: |
           cp deploy/windows/install.ps1                         GameServerControl-Install-Windows.ps1
+          cp deploy/windows/bootstrap.ps1                       GameServerControl-Bootstrap-Windows.ps1
           cp deploy/cloudflare/install-tunnel-windows.ps1       GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1
           cp deploy/linux/install-from-release.sh               GameServerControl-Install-Linux.sh
           cp deploy/relay/install-from-release.sh               GameServerControl-Install-Relay.sh
@@ -352,6 +353,7 @@ jobs:
             GameServerControl-Agent-linux.tar.gz \
             GameServerControl-Relay-linux.tar.gz \
             GameServerControl-Install-Windows.ps1 \
+            GameServerControl-Bootstrap-Windows.ps1 \
             GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1 \
             GameServerControl-Install-Linux.sh \
             GameServerControl-Install-Relay.sh \
@@ -374,6 +376,7 @@ jobs:
             GameServerControl-Agent-linux.tar.gz
             GameServerControl-Relay-linux.tar.gz
             GameServerControl-Install-Windows.ps1
+            GameServerControl-Bootstrap-Windows.ps1
             GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1
             GameServerControl-Install-Linux.sh
             GameServerControl-Install-Relay.sh

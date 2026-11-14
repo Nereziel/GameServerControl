@@ -120,6 +120,9 @@ Optional marketplace/provider keys such as the CurseForge API key are kept serve
 - [ ] Web UI responses include the restrictive Content Security Policy/security headers.
 - [ ] HTTPS is terminated at a trusted proxy/tunnel or configured appropriately for direct private access.
 - [ ] Audit logs are writable and periodically reviewed.
+- [ ] Backup retention includes an independently recoverable copy outside the PC hosting game saves, with a tested restore procedure.
+- [ ] After upgrading from legacy scheduled tasks, resave maintenance schedules so no old task definition contains an Admin bearer token. Consider rotating the old Admin token after migration.
+- [ ] Inspect Task Scheduler ACLs, Agent filesystem ACLs and authenticated scheduled callbacks after a Windows update.
 
 ## Reporting security issues
 

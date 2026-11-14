@@ -44,18 +44,11 @@ The built-in web dashboard is served by the Agent itself. For remote/public acce
 
 ## Windows install / update
 
-Open **PowerShell as Administrator**. Install or upgrade directly to the latest published stable GitHub Release with one command:
+Open **PowerShell as Administrator**. Download `GameServerControl-Install-Windows.ps1` and `SHA256SUMS` from the **same versioned GitHub Release**, then verify the downloaded installer's SHA-256 before execution. Do not pipe mutable `main` branch script text directly into `iex`.
 
-```powershell
-irm https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/bootstrap.ps1 | iex
-```
+The version-pinned bootstrap is also published as `GameServerControl-Bootstrap-Windows.ps1` in releases and included in the checksum manifest. If you use it, verify its SHA-256 in the same way before executing it with `powershell.exe -File`. The installer preserves existing Agent configuration.
 
-The bootstrap downloads the **release installer and SHA256SUMS from the same stable release**, verifies the installer's SHA-256, then runs the verified local file. It pins the resolved tag so installer assets cannot silently switch versions during installation. Existing Agent configuration is preserved by the installer.
-
-**Trust boundary:** the one-liner executes the small bootstrap directly from the mutable `main` branch via `iex`. The installer is hash-checked, but the bootstrap itself is **not** independently verified by this command. Use the following manual release-file method instead when you require an integrity-checked entry point:
-
-1. Download `GameServerControl-Install-Windows.ps1` and `SHA256SUMS` from the **same GitHub Release**.
-2. Run this in the directory containing both files:
+Run the following in the directory containing the release installer and checksum manifest:
 
 ```powershell
 $line = Get-Content .\SHA256SUMS | Where-Object { $_ -match 'GameServerControl-Install-Windows\.ps1$' } | Select-Object -First 1
@@ -66,7 +59,7 @@ if ($actual -ne $expected) { throw 'Installer SHA-256 mismatch.' }
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\GameServerControl-Install-Windows.ps1
 ```
 
-Do not run the full mutable `main/deploy/windows/install.ps1` installer through `iex`: the bootstrap above uses release-pinned assets and verifies the actual installer before executing it.
+Do not run installation scripts from the mutable `main` branch through `iex`. Release artifacts are tied to a versioned tag and a SHA-256 manifest. A checksum from the same release provides integrity checking; the GitHub release itself must also be trusted.
 
 Default locations:
 
