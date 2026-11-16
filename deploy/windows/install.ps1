@@ -389,8 +389,14 @@ try {
 # GSC_VERSION to that exact tag, and executes only the verified local file.
 $updateHelper = Join-Path $installRt 'Update-GameServerControl.ps1'
 $updateHelperContent = @'
-param([switch]$Silent, [switch]$FromTray, [switch]$ElevatedChild)
+param([switch]$Silent, [switch]$FromTray, [switch]$ElevatedChild, [string]$Tag)
 $ErrorActionPreference = 'Stop'
+# Pass the pinned release across the UAC elevation boundary, not just
+# through environment variables that ShellExecute may not preserve.
+$requestedTag = if ($Tag) { $Tag } else { $env:GSC_VERSION }
+if ($requestedTag -and $requestedTag -notmatch '^v[0-9]+[.][0-9]+[.][0-9]+$') {
+    throw 'Updater tag must be a stable vMAJOR.MINOR.PATCH release.'
+}
 $ProgressPreference = 'SilentlyContinue'
 $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -427,16 +433,34 @@ if (-not $isElevated) {
     $flags = @('-ElevatedChild')
     if ($Silent) { $flags += '-Silent' }
     if ($FromTray) { $flags += '-FromTray' }
+    if ($requestedTag) { $flags += '-Tag'; $flags += $requestedTag }
     $flagText = $flags -join ' '
     try {
         $p = Start-Process powershell.exe -Verb RunAs -PassThru -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" $flagText"
     } catch {
-        if ($FromTray) { Start-TrayAgain }
+        if ($FromTray) {
+            Start-TrayAgain
+            Add-Type -AssemblyName System.Windows.Forms
+            [System.Windows.Forms.MessageBox]::Show(
+                'GameServerControl update could not request administrator approval. The Agent was not updated.',
+                'GameServerControl update',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
         exit 1
     }
     $p.WaitForExit()
     if ($FromTray) {
         Start-TrayAgain
+        if ($p.ExitCode -ne 0) {
+            Add-Type -AssemblyName System.Windows.Forms
+            [System.Windows.Forms.MessageBox]::Show(
+                "GameServerControl update was cancelled or failed (exit code $($p.ExitCode)). " +
+                "The previous Agent may have been restored. Check the installed version and run the verified installer manually for detailed errors.",
+                'GameServerControl update',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
     } elseif (-not $Silent) {
         Write-Host ''
         Read-Host 'Update finished. Press Enter to close'
@@ -447,7 +471,6 @@ if (-not $isElevated) {
 if ($Silent) { $env:GSC_SILENT_UPDATE = '1'; Start-Sleep -Seconds 3 }
 if ($FromTray) { $env:GSC_FROM_TRAY = '1'; Start-Sleep -Seconds 2 }
 $repo = if ($env:GSC_REPO) { $env:GSC_REPO } else { 'Nereziel/GameServerControl' }
-$requestedTag = $env:GSC_VERSION
 $apiUrl = if ($requestedTag) {
     "https://api.github.com/repos/$repo/releases/tags/$requestedTag"
 } else {

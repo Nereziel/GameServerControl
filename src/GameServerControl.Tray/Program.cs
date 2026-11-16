@@ -65,6 +65,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly Dictionary<ServiceVisualState, Icon> _icons;
     private string? _pendingText;
     private bool _initialUpdateChecked;
+    private bool _checkingForUpdates;
+    private bool _startingUpdate;
 
     public TrayApplicationContext(string adminUrl)
     {
@@ -91,7 +93,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _stopItem = new ToolStripMenuItem("Stop Agent", null, (_, _) => RunServiceAction("stop"));
         _restartItem = new ToolStripMenuItem("Restart Agent", null, (_, _) => RunServiceAction("restart"));
         _checkUpdateItem = new ToolStripMenuItem("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(showNoUpdate: true));
-        _updateItem = new ToolStripMenuItem("Update GameServerControl…", null, (_, _) => StartUpdate());
+        _updateItem = new ToolStripMenuItem("Update GameServerControl…", null, async (_, _) => await StartUpdateAsync()) { Enabled = false };
         _autostartItem = new ToolStripMenuItem("Start tray with Windows") { CheckOnClick = true };
         _autostartItem.Checked = IsAutostartEnabled();
         _autostartItem.CheckedChanged += (_, _) => SetAutostart(_autostartItem.Checked);
@@ -314,63 +316,130 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
     }
 
-    private void StartUpdate()
+    private static Version ReadInstalledAgentVersion(string installRoot, out string versionText)
     {
+        var exe = Path.Combine(installRoot, "Agent", "GameServerControl.Agent.exe");
+        if (!File.Exists(exe))
+            throw new FileNotFoundException("Installed Agent executable was not found.", exe);
+        versionText = FileVersionInfo.GetVersionInfo(exe).ProductVersion ?? "";
+        var version = ParseVersion(versionText);
+        if (version is null || version.Build < 0)
+            throw new InvalidDataException("Installed Agent does not report a usable version.");
+        return version;
+    }
+
+    private async Task<(string Tag, Version Version)> FetchLatestReleaseAsync()
+    {
+        // Always resolve at click time. The cached menu label, Tray binary
+        // version, and inherited GSC_VERSION may be stale or unrelated.
+        using var response = await _http.GetAsync(ReleasesApi);
+        response.EnsureSuccessStatusCode();
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var doc = await JsonDocument.ParseAsync(stream);
+        var tag = doc.RootElement.GetProperty("tag_name").GetString();
+        var parsed = ParseVersion(tag);
+        if (tag is null || parsed is null || parsed.Build < 0 ||
+            !string.Equals(tag, "v" + parsed.ToString(3), StringComparison.Ordinal))
+            throw new InvalidDataException("GitHub did not return a stable vMAJOR.MINOR.PATCH release.");
+        return (tag, parsed);
+    }
+
+    private async Task StartUpdateAsync()
+    {
+        if (_startingUpdate || _checkingForUpdates) return;
         if (!File.Exists(_updateHelper))
         {
             ShowBalloon("Updater not found", _updateHelper, ToolTipIcon.Error);
             return;
         }
 
+        _startingUpdate = true;
+        _updateItem.Enabled = false;
+        var started = false;
         try
         {
-            Process.Start(new ProcessStartInfo
+            // Resolve the release again before asking for consent. Do not
+            // reinstall the running Agent or accidentally downgrade it.
+            var (tag, latest) = await FetchLatestReleaseAsync();
+            var installed = ReadInstalledAgentVersion(_installRoot, out var currentText);
+            if (latest <= installed)
+            {
+                _updateItem.Text = "GameServerControl is up to date";
+                ShowBalloon("No update needed", $"Installed Agent {currentText}; latest release {tag}.", ToolTipIcon.Info);
+                return;
+            }
+
+            var confirmation = MessageBox.Show(
+                $"Update GameServerControl Agent from {currentText} to {tag}?\n\n" +
+                "The Agent will restart briefly. Existing game processes are not intentionally stopped.",
+                "Update GameServerControl",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (confirmation != DialogResult.Yes) return;
+
+            var psi = new ProcessStartInfo
             {
                 FileName = "powershell.exe",
-                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{_updateHelper}\" -FromTray",
                 WorkingDirectory = _installRoot,
                 UseShellExecute = false,
                 CreateNoWindow = true
-            });
+            };
+            psi.ArgumentList.Add("-NoProfile");
+            psi.ArgumentList.Add("-ExecutionPolicy");
+            psi.ArgumentList.Add("Bypass");
+            psi.ArgumentList.Add("-File");
+            psi.ArgumentList.Add(_updateHelper);
+            psi.ArgumentList.Add("-FromTray");
+            psi.ArgumentList.Add("-Tag");
+            psi.ArgumentList.Add(tag);
+            // Propagate the *selected* release through elevation and the
+            // release-verified installer. Never trust inherited pin variables.
+            psi.Environment["GSC_VERSION"] = tag;
+            psi.Environment["GSC_REPO"] = "Nereziel/GameServerControl";
+            using var process = Process.Start(psi)
+                ?? throw new InvalidOperationException("PowerShell updater did not start.");
+            started = true;
 
-            // The non-elevated updater helper owns the rest of the update. Exiting avoids locking
-            // GameServerControl.Tray.exe while the elevated installer replaces the Tray directory.
+            // The parent updater restores the Tray even if UAC is cancelled or
+            // the Agent rollback gate rejects the new binary.
             ExitThread();
         }
         catch (Exception ex)
         {
-            ShowBalloon("Could not start updater", ex.Message, ToolTipIcon.Error);
+            ShowBalloon("Could not start update", ex.Message, ToolTipIcon.Error);
+        }
+        finally
+        {
+            _startingUpdate = false;
+            if (!started) _updateItem.Enabled = true;
         }
     }
 
     private async Task CheckForUpdatesAsync(bool showNoUpdate)
     {
+        if (_checkingForUpdates || _startingUpdate) return;
+        _checkingForUpdates = true;
+        _checkUpdateItem.Enabled = false;
         try
         {
-            _checkUpdateItem.Enabled = false;
-            using var response = await _http.GetAsync(ReleasesApi);
-            response.EnsureSuccessStatusCode();
-            await using var stream = await response.Content.ReadAsStreamAsync();
-            using var doc = await JsonDocument.ParseAsync(stream);
-            var tag = doc.RootElement.GetProperty("tag_name").GetString();
-            if (string.IsNullOrWhiteSpace(tag)) return;
-
-            var current = ParseVersion(CurrentVersionString());
-            var latest = ParseVersion(tag);
-            var updateAvailable = current is not null && latest is not null && latest > current;
-
-            _updateItem.Text = updateAvailable ? $"Update to {tag}…" : "Update GameServerControl…";
-            if (updateAvailable)
-                ShowBalloon("GameServerControl update available", $"{CurrentVersionString()} → {tag}", ToolTipIcon.Info);
+            var (tag, latest) = await FetchLatestReleaseAsync();
+            var installed = ReadInstalledAgentVersion(_installRoot, out var currentText);
+            var available = latest > installed;
+            _updateItem.Text = available ? $"Update Agent to {tag}…" : "GameServerControl is up to date";
+            _updateItem.Enabled = available;
+            if (available)
+                ShowBalloon("GameServerControl update available", $"Agent {currentText} → {tag}", ToolTipIcon.Info);
             else if (showNoUpdate)
-                ShowBalloon("GameServerControl", $"No newer release found. Installed: {CurrentVersionString()}", ToolTipIcon.Info);
+                ShowBalloon("GameServerControl", $"No newer release found. Installed Agent: {currentText}", ToolTipIcon.Info);
         }
         catch (Exception ex)
         {
-            if (showNoUpdate) ShowBalloon("Update check failed", ex.Message, ToolTipIcon.Warning);
+            _updateItem.Enabled = false;
+            if (showNoUpdate)
+                ShowBalloon("Update check failed", ex.Message, ToolTipIcon.Warning);
         }
         finally
         {
+            _checkingForUpdates = false;
             _checkUpdateItem.Enabled = true;
         }
     }
