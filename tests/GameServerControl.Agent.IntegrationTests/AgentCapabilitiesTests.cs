@@ -26,6 +26,15 @@ public sealed class AgentCapabilitiesTests
     }
 
     [Fact]
+    public async Task Unknown_cancel_job_returns_not_found_to_admin()
+    {
+        using var factory = new AgentTestFactory();
+        using var client = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+        using var response = await client.PostAsync("/api/servers/install/unknown/cancel", null);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Cancel_endpoint_is_not_available_to_readonly()
     {
         using var factory = new AgentTestFactory();
