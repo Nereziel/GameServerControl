@@ -178,7 +178,7 @@ public sealed class SatisfactoryConfig : IGameConfig
                 continue;
             }
             if (schemaKey.Equals("ServerName", StringComparison.OrdinalIgnoreCase)) { serverNameNew = rawVal; continue; }
-            if (schemaKey.Equals("ClientPassword", StringComparison.OrdinalIgnoreCase)) { clientPasswordNew = rawVal; continue; }
+            if (schemaKey.Equals("ClientPassword", StringComparison.OrdinalIgnoreCase)) { if (!string.IsNullOrEmpty(rawVal)) clientPasswordNew = rawVal; continue; }
             // ActiveSessionName is read-only — the server manages it. To change it, edit
             // ServerName (RenameServer) or load a different save in-game.
             if (schemaKey.Equals("ActiveSessionName", StringComparison.OrdinalIgnoreCase)) continue;
