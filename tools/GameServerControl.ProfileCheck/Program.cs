@@ -133,7 +133,7 @@ Check(dragonwilds.Installable, "Dragonwilds must remain installable.");
 Check(dragonwilds.Capabilities.ManagedConfig, "Dragonwilds must retain managed configuration.");
 Check(dragonwilds.Capabilities.LiveLog, "Dragonwilds must retain live log support.");
 Check(!dragonwilds.Capabilities.HyperV, "Dragonwilds curated profile must remain BareMetal-only.");
-Check(dragonwilds.ExecutableRelative == "RSDragonwilds.exe", "Dragonwilds Windows executable changed unexpectedly.");
+Check(dragonwilds.ExecutableRelative == "RSDragonwildsServer.exe", "Dragonwilds Windows dedicated-server executable must be RSDragonwildsServer.exe.");
 Check(dragonwilds.LinuxExecutableRelative == "RSDragonwildsServer.sh", "Dragonwilds Linux executable changed unexpectedly.");
 var dragonGame = Port(dragonwilds, "Game");
 var dragonBeacon = Port(dragonwilds, "Beacon");
