@@ -31,6 +31,16 @@ ok()   { echo -e "    ${GREEN}OK:${NC} $*"; }
 warn() { echo -e "    ${YELLOW}!! $*${NC}"; }
 fail() { echo -e "\n${RED}ERROR:${NC} $*\n"; exit 1; }
 
+verify_release_checksum() {
+    local manifest="$1" asset="$2" archive="$3"
+    local expected_sha actual_sha
+    expected_sha="$(awk -v target="$asset" '$2 == target && length($1) == 64 && $1 ~ /^[a-fA-F0-9]+$/ { print $1 }' "$manifest")"
+    [[ "$expected_sha" =~ ^[a-fA-F0-9]{64}$ ]] || return 1
+    actual_sha="$(sha256sum -- "$archive" | awk '{ print $1 }')"
+    [[ "${actual_sha,,}" == "${expected_sha,,}" ]]
+}
+
+
 [[ $EUID -eq 0 ]] || fail "Run as root (sudo)."
 
 echo "GameServerControl Relay installer"
@@ -63,10 +73,8 @@ curl -fsSL "$tar_url" -o "$tmp_dir/relay.tar.gz"
 checksums_url="$(echo "$release_json" | grep -oP '"browser_download_url":\s*"\Khttps://[^"]+/SHA256SUMS' | head -1)"
 [[ -n "$checksums_url" ]] || fail "Release $tag has no SHA256SUMS asset."
 curl -fsSL "$checksums_url" -o "$tmp_dir/SHA256SUMS"
-expected_sha="$(awk '$2 == "GameServerControl-Relay-linux.tar.gz" && length($1) == 64 && $1 ~ /^[a-fA-F0-9]+$/ { print $1 }' "$tmp_dir/SHA256SUMS")"
-[[ "$expected_sha" =~ ^[a-fA-F0-9]{64}$ ]] || fail "Relay checksum entry is missing, malformed or duplicated."
-printf '%s  %s\n' "$expected_sha" "relay.tar.gz" |
-    (cd "$tmp_dir" && sha256sum --status -c -) || fail "Relay archive SHA-256 verification failed. Installation was not started."
+verify_release_checksum "$tmp_dir/SHA256SUMS" "GameServerControl-Relay-linux.tar.gz" "$tmp_dir/relay.tar.gz" ||
+    fail "Relay archive SHA-256 verification failed (missing, ambiguous or mismatched digest). Installation was not started."
 mkdir -p "$tmp_dir/relay"
 tar -xzf "$tmp_dir/relay.tar.gz" -C "$tmp_dir/relay"
 [[ -x "$tmp_dir/relay/GameServerControl.Relay" ]] || fail "Relay executable is missing from the release asset."
