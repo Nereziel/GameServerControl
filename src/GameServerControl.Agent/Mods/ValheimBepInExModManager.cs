@@ -92,7 +92,7 @@ public sealed class ValheimBepInExModManager : IModManager
         return Task.FromResult(result.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         if (!Supports(def))
             return new ModInstallResult(false, null, "Valheim mod management is currently supported only for BareMetal servers.");
@@ -111,13 +111,16 @@ public sealed class ValheimBepInExModManager : IModManager
         if (parsedRequested is { owner: var owner, name: var name } &&
             owner.Equals(BepInExOwner, StringComparison.OrdinalIgnoreCase) &&
             name.Equals(BepInExPackage, StringComparison.OrdinalIgnoreCase))
-            return new ModInstallResult(true, null, null);
+            return expectedModId is null
+                ? new ModInstallResult(true, null, null)
+                : new ModInstallResult(false, null, "The update target does not match the BepInEx bootstrap package.");
 
         var modsDir = ModsFolder(def);
         Directory.CreateDirectory(modsDir);
         var tmpRoot = Path.Combine(Path.GetTempPath(), "gsc-mod-" + Guid.NewGuid().ToString("n")[..8]);
         var zipPath = Path.Combine(tmpRoot, "download.zip");
         var extractPath = Path.Combine(tmpRoot, "extract");
+        string? stagedDirectory = null;
         Directory.CreateDirectory(tmpRoot);
 
         try
@@ -139,36 +142,33 @@ public sealed class ValheimBepInExModManager : IModManager
                     "Could not find plugin DLLs. Expected a Thunderstore plugins/ folder, top-level DLLs, or one DLL-containing folder.");
 
             string modId;
+            ModInstallTransaction.IReplacement replacement;
             var installedFiles = new List<string>();
             if (sourceDir is not null)
             {
                 modId = SanitizeFolderName(displayName ?? Path.GetFileName(sourceDir.TrimEnd('\\', '/')) ?? "mod");
+                if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+                    return new ModInstallResult(false, null, "The downloaded Valheim package ID does not match the installed mod.");
                 var destDir = PathContainment.ResolveDirectChild(modsDir, modId);
-                var stageDir = Path.Combine(modsDir, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
-                try
-                {
-                    CopyDirectory(sourceDir, stageDir);
-                    installedFiles.AddRange(Directory.EnumerateFiles(stageDir, "*", SearchOption.AllDirectories)
-                        .Select(f => Path.GetRelativePath(stageDir, f))
-                        .Select(f => Path.GetRelativePath(def.GuestWorkingDir, Path.Combine(destDir, f))));
-                    var retained = ModInstallTransaction.ReplaceDirectory(stageDir, destDir);
-                    if (retained) _logger.LogWarning("Previous Valheim mod folder retained after replacement of {ModId}", modId);
-                }
-                finally
-                {
-                    if (Directory.Exists(stageDir)) try { Directory.Delete(stageDir, recursive: true); } catch { }
-                }
+                stagedDirectory = Path.Combine(modsDir, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
+                CopyDirectory(sourceDir, stagedDirectory);
+                installedFiles.AddRange(Directory.EnumerateFiles(stagedDirectory, "*", SearchOption.AllDirectories)
+                    .Select(f => Path.GetRelativePath(stagedDirectory, f))
+                    .Select(f => Path.GetRelativePath(def.GuestWorkingDir, Path.Combine(destDir, f))));
+                replacement = ModInstallTransaction.BeginDirectory(stagedDirectory, destDir);
             }
             else
             {
+                modId = Path.GetFileName(copyDlls![0]);
+                if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+                    return new ModInstallResult(false, null, "The downloaded Valheim DLL ID does not match the installed mod.");
                 var copies = copyDlls!.Select(dll =>
                     (Source: dll, Destination: PathContainment.ResolveDirectChild(modsDir, Path.GetFileName(dll)))).ToArray();
-                var retained = ModInstallTransaction.ReplaceFiles(modsDir, copies);
-                if (retained) _logger.LogWarning("Previous Valheim DLL copy retained after replacement");
+                replacement = ModInstallTransaction.BeginFiles(modsDir, copies);
                 installedFiles.AddRange(copies.Select(file => Path.GetRelativePath(def.GuestWorkingDir, file.Destination)));
-                modId = Path.GetFileName(copyDlls![0]);
             }
 
+            using var pendingReplacement = replacement;
             string? version = null;
             string? finalName = displayName;
             string[] dependencies = Array.Empty<string>();
@@ -189,7 +189,8 @@ public sealed class ValheimBepInExModManager : IModManager
 
             var info = new ModInfo(modId, finalName, version, url, DateTimeOffset.UtcNow,
                 installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(), installedFiles.ToArray());
-            UpdateMetadata(def, m => m[modId] = ToSidecar(info));
+            var retained = pendingReplacement.Complete(() => UpdateMetadata(def, m => m[modId] = ToSidecar(info)));
+            if (retained) _logger.LogWarning("Previous Valheim mod files retained after replacement of {ModId}", modId);
 
             foreach (var dep in dependencies)
             {
@@ -228,6 +229,8 @@ public sealed class ValheimBepInExModManager : IModManager
         }
         finally
         {
+            if (stagedDirectory is not null && Directory.Exists(stagedDirectory))
+                try { Directory.Delete(stagedDirectory, recursive: true); } catch { }
             try { Directory.Delete(tmpRoot, recursive: true); } catch { }
         }
     }
@@ -436,13 +439,10 @@ exec ./valheim_server.x86_64 "$@"
     private void UpdateMetadata(ServerDef def, Action<Dictionary<string, SidecarEntry>> mutate)
     {
         var path = MetadataPath(def);
-        var dict = LoadMetadata(def);
+        var dict = ModMetadataStore.ReadForUpdate<SidecarEntry>(path);
         mutate(dict);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "Mod sidecar write failed at {Path}", path); }
+        // A failed sidecar write must trigger file rollback, not silently succeed.
+        ModMetadataStore.WriteAtomic(path,
+            JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

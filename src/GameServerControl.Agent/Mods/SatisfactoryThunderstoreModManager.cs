@@ -92,7 +92,7 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
 
     // ---- install ----
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
             return new ModInstallResult(false, null, "URL must be an http(s) link to a zip.");
@@ -126,6 +126,8 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     "No Satisfactory mod files (.smod / .pak / .uplugin) found in the zip.");
 
             var modId = SanitizeFolderName(payloadName);
+            if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+                return new ModInstallResult(false, null, "The downloaded Satisfactory package ID does not match the installed mod.");
             if (!ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var destDir))
                 return new ModInstallResult(false, null, "Unsafe mod folder name or linked destination.");
             var stageDir = Path.Combine(modsDir, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
@@ -144,8 +146,7 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     .ToList();
                 var installedBytes = Directory.EnumerateFiles(stageDir, "*", SearchOption.AllDirectories)
                     .Select(f => new FileInfo(f).Length).Sum();
-                var retained = ModInstallTransaction.ReplaceDirectory(stageDir, destDir);
-                if (retained) _logger.LogWarning("Previous Satisfactory mod directory retained after replacement of {ModId}", modId);
+                using var replacement = ModInstallTransaction.BeginDirectory(stageDir, destDir);
 
                 // Extract version + nicer name from Thunderstore manifest.json if present
                 string? version = null;
@@ -171,8 +172,8 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     InstalledAt: DateTimeOffset.UtcNow,
                     SizeBytes: installedBytes,
                     Files: installedFiles.ToArray());
-                UpdateMetadata(def, m => m[modId] = ToSidecar(info));
-
+                var retained = replacement.Complete(() => UpdateMetadata(def, m => m[modId] = ToSidecar(info)));
+                if (retained) _logger.LogWarning("Previous Satisfactory mod directory retained after replacement of {ModId}", modId);
                 return new ModInstallResult(true, info, null);
             }
             finally
@@ -312,16 +313,10 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
     private void UpdateMetadata(ServerDef def, Action<Dictionary<string, SidecarEntry>> mutate)
     {
         var path = MetadataPath(def);
-        var dict = LoadMetadata(def);
+        var dict = ModMetadataStore.ReadForUpdate<SidecarEntry>(path);
         mutate(dict);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Mod sidecar write failed at {Path}", path);
-        }
+        // A failed sidecar write must trigger file rollback, not silently succeed.
+        ModMetadataStore.WriteAtomic(path,
+            JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

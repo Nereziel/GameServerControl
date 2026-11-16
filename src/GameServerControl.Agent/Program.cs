@@ -464,11 +464,9 @@ api.MapPost("/servers/{id}/mods/{modId}/update", async (string id, string modId,
     var installed = await mgr.ListAsync(def, ct);
     if (!installed.Any(item => string.Equals(item.ModId, modId, StringComparison.OrdinalIgnoreCase)))
         return Results.NotFound(new ModInstallResult(false, null, "Installed mod not found."));
-    var result = await mgr.InstallFromUrlAsync(def, req.Url, req.DisplayName, ct);
-    if (result.Ok && result.Mod is { } replacement &&
-        !string.Equals(replacement.ModId, modId, StringComparison.OrdinalIgnoreCase))
-        return Results.Conflict(new ModInstallResult(false, replacement,
-            "The downloaded package used a different mod ID; the previous mod was preserved. Review installed mods."));
+    // The manager validates the actual payload identity *before* replacing files
+    // or writing metadata. Do not try to roll back a mismatched update afterward.
+    var result = await mgr.InstallFromUrlAsync(def, req.Url, req.DisplayName, ct, expectedModId: modId);
     return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
 });
 

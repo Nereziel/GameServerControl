@@ -33,3 +33,8 @@ jobs:
 
       - name: Run runtime integration tests
         run: dotnet test tests/GameServerControl.Agent.IntegrationTests/GameServerControl.Agent.IntegrationTests.csproj -c Release -p:WarningsAsErrors=CA1416
+
+      - name: Exercise real Windows Task Scheduler -> DPAPI -> Agent HTTP callback
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./scripts/test-windows-scheduled-maintenance.ps1

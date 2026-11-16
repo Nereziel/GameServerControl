@@ -17,7 +17,11 @@ public interface IModManager
     string ModsFolder(ServerDef def);
 
     Task<ModInfo[]> ListAsync(ServerDef def, CancellationToken ct);
-    Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct);
+    Task<ModInstallResult> InstallFromUrlAsync(
+        ServerDef def, string url, string? displayName, CancellationToken ct,
+        string? expectedModId = null);
+    // An update must validate expectedModId before changing installed files.
+    // Passing null selects the normal new-install behavior.
     Task<bool> UninstallAsync(ServerDef def, string modId, CancellationToken ct);
 
     /// <summary>
