@@ -70,7 +70,7 @@ public sealed class ModInstallTransactionTests
         File.WriteAllText(Path.Combine(installed, "mod.dll"), "old");
         File.WriteAllText(Path.Combine(staged, "mod.dll"), "new");
         var sidecar = Path.Combine(root, "metadata.json");
-        ModMetadataStore.WriteAtomic(sidecar, "{\\"version\\":1}");
+        ModMetadataStore.WriteAtomic(sidecar, "{\"version\":1}");
         try
         {
             using (var tx = ModInstallTransaction.BeginDirectory(staged, installed))
@@ -81,7 +81,7 @@ public sealed class ModInstallTransactionTests
                 }));
             }
             Assert.Equal("old", File.ReadAllText(Path.Combine(installed, "mod.dll")));
-            Assert.Equal("{\\"version\\":1}", File.ReadAllText(sidecar));
+            Assert.Equal("{\"version\":1}", File.ReadAllText(sidecar));
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -96,7 +96,7 @@ public sealed class ModInstallTransactionTests
         var sidecar = Path.Combine(root, ".gsc-mods.json");
         File.WriteAllText(installed, "old");
         File.WriteAllText(staged, "new");
-        ModMetadataStore.WriteAtomic(sidecar, "{\\"version\\":1}");
+        ModMetadataStore.WriteAtomic(sidecar, "{\"version\":1}");
         try
         {
             using (var tx = ModInstallTransaction.BeginFiles(root, new[] { (Source: staged, Destination: installed) }))
@@ -107,7 +107,7 @@ public sealed class ModInstallTransactionTests
                 }));
             }
             Assert.Equal("old", File.ReadAllText(installed));
-            Assert.Equal("{\\"version\\":1}", File.ReadAllText(sidecar));
+            Assert.Equal("{\"version\":1}", File.ReadAllText(sidecar));
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -122,15 +122,15 @@ public sealed class ModInstallTransactionTests
         var sidecar = Path.Combine(root, ".gsc-mods.json");
         File.WriteAllText(installed, "old");
         File.WriteAllText(staged, "new");
-        ModMetadataStore.WriteAtomic(sidecar, "{\\"version\\":1}");
+        ModMetadataStore.WriteAtomic(sidecar, "{\"version\":1}");
         try
         {
             using (var tx = ModInstallTransaction.BeginFiles(root, new[] { (Source: staged, Destination: installed) }))
             {
-                Assert.False(tx.Complete(() => ModMetadataStore.WriteAtomic(sidecar, "{\\"version\\":2}")));
+                Assert.False(tx.Complete(() => ModMetadataStore.WriteAtomic(sidecar, "{\"version\":2}")));
             }
             Assert.Equal("new", File.ReadAllText(installed));
-            Assert.Equal("{\\"version\\":2}", File.ReadAllText(sidecar));
+            Assert.Equal("{\"version\":2}", File.ReadAllText(sidecar));
             Assert.Empty(Directory.EnumerateFiles(root, "*.gsc-prev-*"));
         }
         finally { Directory.Delete(root, recursive: true); }
