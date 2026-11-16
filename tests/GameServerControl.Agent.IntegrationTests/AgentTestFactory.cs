@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using GameServerControl.Agent.Auth;
 using GameServerControl.Agent.Hyperv;
+using GameServerControl.Agent.Mods;
 using GameServerControl.Shared;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -18,10 +19,12 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
 {
     public const string AdminToken = "integration-admin-token-0123456789abcdef";
     private readonly HttpMessageHandler? _managedHostHandler;
+    private readonly IModManager? _modManager;
 
-    public AgentTestFactory(bool alphaUsesStdinProfile = false, bool alphaUsesLogProfile = false, HttpMessageHandler? managedHostHandler = null)
+    public AgentTestFactory(bool alphaUsesStdinProfile = false, bool alphaUsesLogProfile = false, HttpMessageHandler? managedHostHandler = null, IModManager? modManager = null)
     {
         _managedHostHandler = managedHostHandler;
+        _modManager = modManager;
         TempRoot = Path.Combine(Path.GetTempPath(), "gsc-integration-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TempRoot);
         Directory.CreateDirectory(Path.Combine(TempRoot, "alpha-game"));
@@ -92,6 +95,11 @@ public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
             services.RemoveAll<IWindowsRunnerServiceManager>();
             services.AddSingleton(FakeRunner);
             services.AddSingleton<IWindowsRunnerServiceManager>(sp => sp.GetRequiredService<FakeWindowsRunnerServiceManager>());
+            if (_modManager is not null)
+            {
+                services.RemoveAll<IModManager>();
+                services.AddSingleton(_modManager);
+            }
             if (_managedHostHandler is not null)
                 services.AddHttpClient("managed-hosts").ConfigurePrimaryHttpMessageHandler(() => _managedHostHandler);
         });
