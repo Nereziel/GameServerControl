@@ -65,6 +65,17 @@ requireCheck(manager.includes('ArgumentList'), 'Runner provisioning commands mus
 requireCheck(!manager.includes('cmd.exe') && !manager.includes('powershell.exe'), 'Runner service provisioning must not shell through cmd.exe or powershell.exe.');
 requireCheck(manager.includes('RunnerManifest') && manager.includes('JsonSerializer'), 'Agent must persist manifest-defined launch metadata instead of sending it over IPC.');
 requireCheck(manager.includes('icacls.exe') && manager.includes('(OI)(CI)(M)') && manager.includes('(OI)(CI)(RX)'), 'Agent must grant per-server Modify access to game roots and read/execute access to Runner payload.');
+const aclPolicy = read('src/GameServerControl.Agent/Hyperv/RunnerServiceSecurity.cs');
+requireCheck(aclPolicy.includes('ExistingPayloadGrant') && aclPolicy.includes('"/T"') &&
+    manager.includes('RunnerServiceSecurity.ExistingPayloadGrant(runnerRoot, serviceAccount)'),
+    'Each new Runner must receive explicit read/execute access to already-installed EXE/DLL payload files.');
+requireCheck(aclPolicy.includes('PayloadRevoke') && manager.includes('RunnerServiceSecurity.PayloadRevoke(path, serviceAccount)'),
+    'Runner deletion must revoke recursive payload permissions from the deleted service SID.');
+requireCheck(manager.includes('EnsureExpectedServiceAccountAsync(def, provision.Identity, ct)') &&
+    manager.includes('RunnerServiceSecurity.HasExpectedAccount') &&
+    manager.includes('IsRunnerServiceRunningAsync(identity, ct)'),
+    'Runner startup must reject a running service with a wrong Windows account and repair idle services.');
+
 requireCheck(manager.includes('schtasks.exe') && manager.includes('/disable') && manager.includes('/end'), 'Legacy Scheduled Tasks must be disabled and ended during Runner migration.');
 requireCheck(manager.includes('1690800') && manager.includes('FactoryGame') && manager.includes('CreateSymbolicLink'), 'Satisfactory must preserve its existing SystemProfile data through an idempotent directory link.');
 requireCheck(manager.includes('SetAutostartAsync') && manager.includes('GetAutostartAsync'), 'Runner manager must own Windows BareMetal autostart state.');
