@@ -37,7 +37,16 @@ public static class WindowsFirewall
         // Recreate our two deterministic rules so changing the executable path is idempotent.
         RemoveProgramRules(def.Id, out _);
 
-        var inbound = AddRule(RuleName(def.Id, inbound: true), "in", exe);
+        // Java is shared by multiple Minecraft servers and unrelated programs.
+        // Restrict inbound allow rules to the registered Minecraft game port,
+        // rather than opening every listening TCP/UDP port of java.exe.
+        var minecraftPort = MinecraftFirewallPort(def);
+        if (def.GameType == GameType.Minecraft && minecraftPort is null)
+        {
+            error = "Minecraft requires one valid Game TCP/UDP port for scoped firewall access.";
+            return false;
+        }
+        var inbound = AddRule(RuleName(def.Id, inbound: true), "in", exe, minecraftPort);
         var outbound = AddRule(RuleName(def.Id, inbound: false), "out", exe);
         if (inbound.Ok && outbound.Ok) return true;
 
@@ -60,11 +69,27 @@ public static class WindowsFirewall
     private static string RuleName(string id, bool inbound)
         => Prefix + id + (inbound ? " - Inbound" : " - Outbound");
 
-    private static (bool Ok, string Error) AddRule(string name, string direction, string exe)
-        => RunNetsh(
-            "advfirewall", "firewall", "add", "rule",
+    public static NetworkPort? MinecraftFirewallPort(ServerDef def)
+    {
+        if (def.GameType != GameType.Minecraft) return null;
+        return (def.NetworkPorts ?? GameProfiles.FindFor(def)?.DefaultPorts)
+            ?.FirstOrDefault(p => p.Name.Equals("Game", StringComparison.OrdinalIgnoreCase)
+                && p.Port is >= 1024 and <= 65535 && p.EndPort is null);
+    }
+
+    private static (bool Ok, string Error) AddRule(
+        string name, string direction, string exe, NetworkPort? minecraftPort = null)
+    {
+        var args = new List<string> { "advfirewall", "firewall", "add", "rule",
             $"name={name}", $"dir={direction}", "action=allow", $"program={exe}",
-            "enable=yes", "profile=any");
+            "enable=yes", "profile=any" };
+        if (minecraftPort is not null)
+        {
+            args.Add(minecraftPort.Protocol == NetworkProtocol.Udp ? "protocol=UDP" : "protocol=TCP");
+            args.Add($"localport={minecraftPort.Port}");
+        }
+        return RunNetsh(args.ToArray());
+    }
 
     private static (bool Ok, string Error) DeleteRule(string name)
         => RunNetsh("advfirewall", "firewall", "delete", "rule", $"name={name}");
