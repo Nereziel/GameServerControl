@@ -177,7 +177,7 @@ function openAddExisting() {
   openModal(
     'Add existing server',
     `<div class="callout info">Registers an existing installation. Pick its game profile first so saves, logs and supported features can be filled automatically.</div><div class="field"><label>Game profile</label><select id="aProfile" ${uiAction('applyExistingProfile',[],{event:'change'})}><option value="">Custom / unknown</option>${options}</select></div><div class="formgrid"><div class="field"><label>Name</label><input id="aName" placeholder="My Server"></div><div class="field"><label>Server ID</label><input id="aId" placeholder="my-server"></div></div><div class="field"><label>Server folder</label><input id="aWork" class="mono" placeholder="C:\\GameServers\\Example" ${uiAction('applyExistingProfile',[false],{event:'input'})}></div><div class="field"><label>Server executable</label><input id="aExe" class="mono"></div><div class="formgrid"><div class="field"><label>Save folders</label><textarea id="aSaves" class="mono"></textarea></div><div id="aLogWrap" class="field"><label>Log file</label><input id="aLog" class="mono"></div></div><details class="advanced"><summary>Advanced settings</summary><div class="advanced-body"><div class="field"><label>Start args — one per line</label><textarea id="aArgs" class="mono"></textarea></div><div class="formgrid three"><div class="field"><label>Steam App ID</label><input id="aSteam"></div><div class="field"><label>Game type</label><select id="aGame"><option>SteamGeneric</option><option>Windrose</option><option>Minecraft</option><option>Custom</option></select></div></div><div id="aRcon" class="hidden"><div class="section">RCON</div><div class="formgrid three"><div class="field"><label>Host</label><input id="aRhost" value="auto"></div><div class="field"><label>Port</label><input id="aRport" type="number" min="1" max="65535"></div><div class="field"><label>Password</label><input id="aRpass" type="password"></div></div></div></div></details>`,
-    `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button class="btn primary" ${uiAction('saveAddExisting')}>Add server</button>`,
+    `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button id="aSaveExisting" class="btn primary" ${uiAction('saveAddExisting')}>Add server</button><button id="aRecoverMinecraft" class="btn primary hidden" ${uiAction('recoverExistingMinecraft')}>Recover Minecraft installation</button>`,
     true
   );
 }
@@ -185,6 +185,10 @@ function openAddExisting() {
 function applyExistingProfile(resetName = true) {
   const g = existingProfiles().find(x => x.key === $('#aProfile')?.value);
   const root = $('#aWork')?.value.trim().replace(/[\\/]+$/, '') || '';
+  const minecraft = g?.gameType === 'Minecraft';
+  $('#aSaveExisting')?.classList.toggle('hidden', minecraft);
+  $('#aRecoverMinecraft')?.classList.toggle('hidden', !minecraft);
+  $('#aExe')?.closest('.field')?.classList.toggle('hidden', minecraft);
   if (!g) {
     $('#aRcon')?.classList.add('hidden');
     return;
@@ -206,6 +210,23 @@ function applyExistingProfile(resetName = true) {
   $('#aLogWrap').classList.toggle('hidden', !g.caps?.log);
   $('#aRcon').classList.toggle('hidden', !g.caps?.rcon);
   if (g.caps?.rcon && $('#aRport') && !$('#aRport').value) $('#aRport').value = g.rconPort || '';
+}
+
+async function recoverExistingMinecraft(){
+  const g=existingProfiles().find(x=>x.key===$('#aProfile')?.value);
+  const serverId=$('#aId')?.value.trim()||'',name=$('#aName')?.value.trim()||'',
+    installPath=$('#aWork')?.value.trim()||'';
+  if(g?.gameType!=='Minecraft'||!name||!installPath||
+     !/^[a-z0-9][a-z0-9-]{0,63}$/.test(serverId))
+    return toast('Select Minecraft and provide a valid server ID, name and existing folder.','err');
+  if(!confirm('Register Minecraft from GSC installation metadata without downloading or overwriting any world files?'))return;
+  try{
+    const def=await api('/api/servers/minecraft/recover',
+      {method:'POST',body:JSON.stringify({serverId,name,installPath})});
+    toast('Recovered '+(def.name||name)+' without downloading game files.','ok');
+    closeModal();
+    await loadServers();
+  }catch(e){toast('Minecraft recovery failed: '+e.message,'err')}
 }
 
 async function saveAddExisting() {

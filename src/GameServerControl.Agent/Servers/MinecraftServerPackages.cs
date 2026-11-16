@@ -14,6 +14,9 @@ public sealed record MinecraftInstallRequest(
     string? Version = null, int MemoryMb = 4096, int Port = 0,
     bool AcceptEula = false, bool AcceptBedrockTerms = false);
 
+public sealed record MinecraftRecoveryRequest(
+    string ServerId, string Name, string InstallPath, int MemoryMb = 4096);
+
 /// <summary>
 /// Downloads Minecraft dedicated-server files from Mojang, PaperMC, FabricMC
 /// or the official Bedrock release service. Never accepts arbitrary download
@@ -29,6 +32,79 @@ public sealed class MinecraftServerPackages
     {
         _http = httpFactory.CreateClient("minecraft-installer");
         _logger = logger;
+    }
+
+    /// <summary>
+    /// Re-register an already downloaded GSC Minecraft distribution when
+    /// registration failed after the files were safely committed. This
+    /// method is read-only: no overwrites, downloads, EULA changes or moves.
+    /// </summary>
+    public static ServerDef RecoverDefinition(MinecraftRecoveryRequest req)
+    {
+        if (string.IsNullOrWhiteSpace(req.ServerId) ||
+            !Regex.IsMatch(req.ServerId, "^[a-z0-9][a-z0-9-]{0,63}$"))
+            throw new ArgumentException("A valid lowercase Minecraft server ID is required.");
+        if (string.IsNullOrWhiteSpace(req.Name) || req.Name.Length > 100)
+            throw new ArgumentException("Minecraft server name is required (max 100 characters).");
+        if (req.MemoryMb is < 512 or > 65536)
+            throw new ArgumentException("Java RAM must be between 512 and 65536 MB.");
+        if (string.IsNullOrWhiteSpace(req.InstallPath) || !Path.IsPathFullyQualified(req.InstallPath))
+            throw new ArgumentException("Minecraft install path must be absolute.");
+        var root = Path.GetFullPath(req.InstallPath).TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!Directory.Exists(root) || root == Path.GetPathRoot(root) ||
+            (File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("Existing Minecraft install directory is missing or linked.");
+        var marker = Path.Combine(root, ".gsc-minecraft.json");
+        if (!File.Exists(marker) || (File.GetAttributes(marker) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("This folder has no valid GSC Minecraft installation metadata.");
+        var metadata = JsonNode.Parse(File.ReadAllText(marker));
+        var key = (string?)metadata?["profileKey"];
+        var profile = key is null ? null : GameProfiles.FindByKey(key);
+        if (profile?.GameType != GameType.Minecraft || !profile.Installable)
+            throw new InvalidDataException("Unrecognized Minecraft distribution metadata.");
+        if (string.IsNullOrWhiteSpace((string?)metadata?["version"]))
+            throw new InvalidDataException("Minecraft installation version is missing.");
+        var bedrock = profile.Key == "minecraft-bedrock";
+        string exePath;
+        string[] startArgs;
+        if (bedrock)
+        {
+            exePath = profile.BuildExecutablePath(root);
+            startArgs = Array.Empty<string>();
+            if (!File.Exists(exePath))
+                throw new InvalidDataException("Bedrock dedicated server binary is missing.");
+        }
+        else
+        {
+            if (!File.Exists(Path.Combine(root, "server.jar")))
+                throw new InvalidDataException("Minecraft Java server.jar is missing.");
+            var eulaPath = Path.Combine(root, "eula.txt");
+            if (!File.Exists(eulaPath) ||
+                !File.ReadLines(eulaPath).Any(line => line.Trim().Equals("eula=true", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("Minecraft Java EULA has not been accepted in this installation.");
+            exePath = ResolveJavaExecutable() ??
+                throw new InvalidOperationException("A compatible Java runtime is required to register this server.");
+            startArgs = new[] { "-Xms512M", "-Xmx" + req.MemoryMb + "M", "-jar", "server.jar", "nogui" };
+        }
+
+        var port = profile.DefaultPorts![0].Port;
+        var properties = Path.Combine(root, "server.properties");
+        if (File.Exists(properties))
+        {
+            var setting = File.ReadLines(properties)
+                .Select(line => line.Trim())
+                .FirstOrDefault(line => line.StartsWith("server-port=", StringComparison.OrdinalIgnoreCase));
+            if (setting is not null &&
+                (!int.TryParse(setting.Split('=', 2)[1].Trim(), out port) || port is < 1024 or > 65535))
+                throw new InvalidDataException("Minecraft server.properties contains an invalid server-port.");
+        }
+        return new ServerDef(
+            req.ServerId, req.Name, "", GameType.Minecraft, exePath, root, startArgs,
+            profile.BuildSaveDirs(root), null, null, profile.BuildLogPath(root),
+            HostingMode: HostingMode.BareMetal,
+            NetworkPorts: new[] { new NetworkPort("Game", bedrock ? NetworkProtocol.Udp : NetworkProtocol.Tcp, port) },
+            GameProfileKey: profile.Key);
     }
 
     public static string? Validate(MinecraftInstallRequest request)
@@ -89,6 +165,16 @@ public sealed class MinecraftServerPackages
         {
             progress("Resolving official Minecraft server download…");
             var (download, version, sha1, sha256) = await ResolveAsync(profile.Key, req.Version, ct);
+            if (javaExecutable is not null)
+            {
+                progress("Checking Java runtime compatibility…");
+                var actualJava = await MinecraftJavaRuntime.DetectMajorAsync(javaExecutable, ct);
+                var requiredJava = MinecraftJavaRuntime.MinimumJavaMajor(version);
+                if (requiredJava.HasValue && actualJava < requiredJava.Value)
+                    throw new InvalidOperationException(
+                        $"Minecraft {version} requires Java {requiredJava.Value} or later, but {javaExecutable} runs Java {actualJava}. " +
+                        "Install a compatible Java runtime and restart the Agent before retrying.");
+            }
             var artifact = Path.Combine(stage, profile.Key == "minecraft-bedrock" ? "bedrock-package.zip" : "server.jar");
             progress("Downloading Minecraft " + profile.Label + " " + version);
             await DownloadAsync(download, artifact, sha1, sha256, ct);
