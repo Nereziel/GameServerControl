@@ -20,6 +20,7 @@ public sealed class ServerInstaller
     private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromMinutes(20) };
 
     private readonly SteamCmdManager _steamCmd;
+    private readonly MinecraftServerPackages _minecraft;
     private readonly ServerStore _store;
     private readonly IHubContext<StatusHub> _hub;
     private readonly ILogger<ServerInstaller> _logger;
@@ -37,8 +38,10 @@ public sealed class ServerInstaller
     }
 
     public ServerInstaller(SteamCmdManager steamCmd, ServerStore store,
-        IHubContext<StatusHub> hub, ILogger<ServerInstaller> logger)
+        IHubContext<StatusHub> hub, ILogger<ServerInstaller> logger,
+        MinecraftServerPackages minecraft)
     {
+        _minecraft = minecraft;
         _steamCmd = steamCmd;
         _store = store;
         _hub = hub;
@@ -66,6 +69,50 @@ public sealed class ServerInstaller
         _jobs[jobId] = state;
         _ = Task.Run(() => RunAsync(jobId, req, CancellationToken.None));
         return jobId;
+    }
+
+    public string StartMinecraftJob(MinecraftInstallRequest request)
+    {
+        var invalid = MinecraftServerPackages.Validate(request);
+        if (invalid is not null) throw new ArgumentException(invalid);
+        PruneCompletedJobs(force: true);
+        var jobId = Guid.NewGuid().ToString("N")[..12];
+        var now = DateTimeOffset.UtcNow;
+        var snapshot = new InstallProgress(jobId, "queued", "Queued for Minecraft installation.",
+            0, false, false, Array.Empty<string>(), now, now,
+            request.Name, request.ProfileKey, request.InstallPath);
+        var state = new JobState(snapshot);
+        state.Lines.Add("Queued for Minecraft installation.");
+        _jobs[jobId] = state;
+        _ = Task.Run(() => RunMinecraftAsync(jobId, request, CancellationToken.None));
+        return jobId;
+    }
+
+    private async Task RunMinecraftAsync(string jobId, MinecraftInstallRequest request, CancellationToken ct)
+    {
+        var gateHeld = false;
+        try
+        {
+            await _installGate.WaitAsync(ct);
+            gateHeld = true;
+            await PublishAsync(jobId, "download", "Preparing Minecraft server files…", 5, false, false);
+            var result = await _minecraft.InstallAsync(request,
+                message => _ = PublishAsync(jobId, "download", message, 40, false, false), ct);
+            await PublishAsync(jobId, "register", "Registering Minecraft server…", 96, false, false);
+            _store.Add(result.Definition);
+            await PublishAsync(jobId, "done",
+                "Minecraft " + result.Version + " installed. Server ready to start.",
+                100, true, true);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Minecraft installation failed for {Id}", request.ServerId);
+            await PublishAsync(jobId, "failed", InstallExceptionMessage(ex), null, true, false);
+        }
+        finally
+        {
+            if (gateHeld) _installGate.Release();
+        }
     }
 
     private static InstallServerRequest NormalizeForHost(InstallServerRequest req)

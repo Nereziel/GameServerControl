@@ -54,9 +54,17 @@ public sealed class LocalProcessService
 
     public bool HasScheduledTaskSupport => OperatingSystem.IsWindows();
 
-    public async Task<(bool Ok, int? Pid, string Error)> StartProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default)
+    // A Minecraft host may run many servers with the same Java executable.
+    // Always use the registered server identity to select its Windows Runner.
+    public Task<(bool Ok, int? Pid, string Error)> StartProcessAsync(ServerDef def, CancellationToken ct = default) =>
+        StartProcessCoreAsync(def.GuestExePath, def.StartArgs, def.GuestWorkingDir, ct, def);
+
+    public Task<(bool Ok, int? Pid, string Error)> StartProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default) =>
+        StartProcessCoreAsync(exePath, args, workingDir, ct, FindServerForExe(exePath));
+
+    private async Task<(bool Ok, int? Pid, string Error)> StartProcessCoreAsync(
+        string exePath, string[] args, string workingDir, CancellationToken ct, ServerDef? def)
     {
-        var def = FindServerForExe(exePath);
         if (OperatingSystem.IsWindows())
         {
             if (def is null) return (false, null, "Refusing unregistered Windows BareMetal process launch.");
@@ -72,13 +80,13 @@ public sealed class LocalProcessService
             return (true, result.Pid, "");
         }
 
-        return await StartLocalProcessAsync(exePath, args, workingDir, ct);
+        return await StartLocalProcessAsync(exePath, args, workingDir, ct, def);
     }
 
-    private Task<(bool Ok, int? Pid, string Error)> StartLocalProcessAsync(string exePath, string[] args, string workingDir, CancellationToken ct = default)
+    private Task<(bool Ok, int? Pid, string Error)> StartLocalProcessAsync(
+        string exePath, string[] args, string workingDir, CancellationToken ct, ServerDef? def)
     {
         if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Direct game process launch is disabled on Windows.");
-        var def = FindServerForExe(exePath);
         try
         {
             if (!File.Exists(exePath))
@@ -104,6 +112,9 @@ public sealed class LocalProcessService
                 WindowStyle = interactive ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Minimized
             };
             foreach (var a in args) psi.ArgumentList.Add(a);
+            // Bedrock Linux loads native libraries from its server directory.
+            if (def?.GameProfileKey == "minecraft-bedrock" && OperatingSystem.IsLinux())
+                psi.Environment["LD_LIBRARY_PATH"] = psi.WorkingDirectory;
 
             var p = Process.Start(psi);
             if (p is null)
@@ -405,9 +416,14 @@ public sealed class LocalProcessService
         return File.Exists(binary) ? binary : configuredExePath;
     }
 
-    public async Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default)
+    public Task<(bool Ok, int? Pid)> FindProcessAsync(ServerDef def, CancellationToken ct = default) =>
+        FindProcessCoreAsync(def.GuestExePath, def, ct);
+
+    public Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default) =>
+        FindProcessCoreAsync(exePath, FindServerForExe(exePath), ct);
+
+    private async Task<(bool Ok, int? Pid)> FindProcessCoreAsync(string exePath, ServerDef? def, CancellationToken ct)
     {
-        var def = FindServerForExe(exePath);
         if (OperatingSystem.IsWindows())
         {
             if (def is null) return (false, null);
@@ -416,7 +432,30 @@ public sealed class LocalProcessService
             SetFirewallState(def, open: result.Pid is not null, out _);
             return (true, result.Pid);
         }
+        if (def?.GameType == GameType.Minecraft &&
+            def.GameProfileKey != "minecraft-bedrock")
+            return await FindJavaServerProcess(def);
         return await FindLocalProcessAsync(exePath, ct);
+    }
+
+    private static Task<(bool Ok, int? Pid)> FindJavaServerProcess(ServerDef def)
+    {
+        // On Linux, Java executables are shared. The /proc/<pid>/cwd link
+        // identifies which registered server root owns the process.
+        foreach (var process in Process.GetProcessesByName("java"))
+        {
+            using (process)
+            {
+                try
+                {
+                    var cwd = new DirectoryInfo($"/proc/{process.Id}/cwd").ResolveLinkTarget(true)?.FullName;
+                    if (cwd is not null && PathsEqual(cwd, def.GuestWorkingDir))
+                        return Task.FromResult<(bool, int?)>((true, process.Id));
+                }
+                catch { /* inaccessible processes are not assumed to belong to us */ }
+            }
+        }
+        return Task.FromResult<(bool, int?)>((true, null));
     }
 
     private Task<(bool Ok, int? Pid)> FindLocalProcessAsync(string exePath, CancellationToken ct = default)
@@ -465,9 +504,15 @@ public sealed class LocalProcessService
         }
     }
 
-    public async Task<bool> StopProcessAsync(string exePath, int? pid, bool force, CancellationToken ct = default)
+    public Task<bool> StopProcessAsync(ServerDef def, int? pid, bool force, CancellationToken ct = default) =>
+        StopProcessCoreAsync(def.GuestExePath, pid, force, ct, def);
+
+    public Task<bool> StopProcessAsync(string exePath, int? pid, bool force, CancellationToken ct = default) =>
+        StopProcessCoreAsync(exePath, pid, force, ct, FindServerForExe(exePath));
+
+    private async Task<bool> StopProcessCoreAsync(string exePath, int? pid, bool force,
+        CancellationToken ct, ServerDef? def)
     {
-        var def = FindServerForExe(exePath);
         var processImage = ResolveProcessImagePath(exePath);
         try
         {
@@ -498,7 +543,9 @@ public sealed class LocalProcessService
 
             if (p is null)
             {
-                var (ok, foundPid) = await FindProcessAsync(exePath, ct);
+                var (ok, foundPid) = def is null
+                    ? await FindProcessAsync(exePath, ct)
+                    : await FindProcessAsync(def, ct);
                 if (!ok)
                 {
                     _logger.LogWarning("Refusing name-only stop for {Exe}: process lookup is ambiguous or unavailable.", processImage);

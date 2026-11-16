@@ -192,7 +192,7 @@ function toast(msg,kind=''){
 
 async function api(path,opts={}){
   const h={Authorization:'Bearer '+CFG.token,...(opts.headers||{})};
-  if(opts.body)h['Content-Type']='application/json';
+  if(opts.body && !(opts.body instanceof FormData))h['Content-Type']='application/json';
   const r=await fetch(CFG.url+agentApiPath(path),{...opts,headers:h});
   const txt=await r.text();let d=null;
   try{d=txt?JSON.parse(txt):null}catch{d=txt}
@@ -215,7 +215,7 @@ function profileToGame(p){
     saveRel:p.hostSaveDirs||p.saveDirs||[],logRel:p.hostLogPath??p.logPath??null,gameType:p.gameType||'SteamGeneric',
     rconPort:p.defaultRconPort??null,note:p.notes||'',installable:!!p.installable,ports:p.defaultPorts||[],
     caps:{config:!!c.managedConfig,mods:!!c.mods,rcon:!!c.rcon,players:!!c.playerManagement,log:!!c.liveLog,
-      console:consoleMode==='rcon'?'rcon':consoleMode==='logonly'?'log':null,hyperV:c.hyperV!==false,scheduledTask:c.scheduledTask!==false}
+      console:consoleMode==='rcon'?'rcon':consoleMode==='logonly'?'log':consoleMode==='stdin'?'stdin':null,hyperV:c.hyperV!==false,scheduledTask:c.scheduledTask!==false}
   };
 }
 
@@ -277,7 +277,7 @@ window.addEventListener('DOMContentLoaded',init);
 
 async function refreshAll(){await Promise.allSettled([loadServers(),refreshJobs(false),...(ACTIVE_HOST_ID==='all'?[]:[checkForUpdate(false)])])}
 async function loadServers(){try{const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;renderServers()}catch(e){toast('Refresh failed: '+e.message,'err')}}
-function profileFor(d){return PROFILES.find(g=>g.appId&&g.appId===d.steamAppId)||PROFILES.find(g=>g.gameType===d.gameType&&g.gameType!=='SteamGeneric')||null}
+function profileFor(d){return PROFILES.find(g=>g.key===d.gameProfileKey)||PROFILES.find(g=>g.appId&&g.appId===d.steamAppId)||PROFILES.find(g=>g.gameType===d.gameType&&g.gameType!=='SteamGeneric')||null}
 function serverMeta(d){const g=profileFor(d);return g?{icon:g.icon,label:g.label,profile:g}:{icon:'🖥',label:d.gameType||'Server',profile:{caps:{}}}}
 
 function renderServers(){
@@ -450,7 +450,13 @@ function installNetworkUiHooks(){
       const path=$('#cPath');
       if(path&&g?.defaultInstallPath){path.value=g.defaultInstallPath;path.dispatchEvent(new Event('input'))}
       if(!body)return;
-      if(g?.key==='valheim'){
+      if(g?.gameType==='Minecraft'){
+        const isBedrock=g.key==='minecraft-bedrock';
+        const box=document.createElement('div');
+        box.className='formgrid';
+        box.innerHTML=`<div class="field"><label>Minecraft version</label><input id="cMinecraftVersion" placeholder="${isBedrock?'latest official stable':'latest stable (or e.g. 1.21.11)'}" maxlength="32" ${isBedrock?'disabled':''}><div class="help">Leave empty for the latest release; Paper requires a stable build.</div></div><div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65535" value="${isBedrock?'19132':'25565'}"></div>${isBedrock?'':`<div class="field"><label>Maximum RAM (MB)</label><input id="cMinecraftMemory" type="number" min="512" max="65536" step="256" value="4096"><div class="help">Compatible Java must be installed on the computer running the Agent.</div></div>`}<div class="field" style="grid-column:1/-1"><label><input id="cMinecraftLicense" type="checkbox"> I accept the ${isBedrock?'Minecraft Bedrock Dedicated Server license':'Minecraft Java EULA'} for this installation.</label><div class="help">Installation is disabled until you explicitly accept the official license terms.</div></div>`;
+        body.appendChild(box);
+      }else if(g?.key==='valheim'){
         const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65534" value="2456"><div class="help">Valheim reserves this UDP port and the next one (port+1).</div></div>';body.appendChild(box);
       }else if(g?.key==='dragonwilds'){
         const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65535" value="7777"></div><div class="field"><label>Beacon port</label><input id="cBeaconPort" type="number" min="1024" max="65535" value="8888"></div>';body.appendChild(box);
@@ -479,11 +485,27 @@ function installNetworkUiHooks(){
       const g=GAMES.find(x=>x.key===key),name=$('#cName')?.value.trim(),id=$('#cId')?.value.trim(),path=$('#cPath')?.value.trim().replace(/[\\/]+$/,''),err=$('#cErr');
       err?.classList.add('hidden');
       if(!g||!name||!path||!/^[a-z0-9][a-z0-9-]{0,63}$/.test(id||'')){if(err){err.textContent='Name/path are required and ID may contain lowercase letters, digits and dashes.';err.classList.remove('hidden')}return}
-      let ports;try{ports=readInstallPorts(g)}catch(e){if(err){err.textContent=e.message;err.classList.remove('hidden')}return}
+      let ports;try{ports=readInstallPorts(g);
+        if(g.gameType==='Minecraft'){
+          const port=Number.parseInt($('#cGamePort')?.value||'0',10);
+          if(!Number.isInteger(port)||port<1024||port>65535)throw new Error('Minecraft port must be between 1024 and 65535.');
+          ports=[{name:'Game',protocol:g.key==='minecraft-bedrock'?'Udp':'Tcp',port,endPort:null}];
+        }
+      }catch(e){if(err){err.textContent=e.message;err.classList.remove('hidden')}return}
       const conflict=findNetworkConflict(ports);
       if(conflict){const msg=`Port conflict with ${conflict.server.name}: ${formatNetworkPort(conflict.ours)} overlaps ${formatNetworkPort(conflict.theirs)}.`;if(err){err.textContent=msg;err.classList.remove('hidden')}else toast(msg,'err');return}
+      if(g.gameType==='Minecraft'){
+        const memoryMb=Number.parseInt($('#cMinecraftMemory')?.value||'4096',10);
+        if(!$('#cMinecraftLicense')?.checked){if(err){err.textContent='Accept the Minecraft license terms before installing.';err.classList.remove('hidden')}return}
+        if(!Number.isInteger(memoryMb)||memoryMb<512||memoryMb>65536){if(err){err.textContent='RAM must be between 512 and 65536 MB.';err.classList.remove('hidden')}return}
+        const isBedrock=g.key==='minecraft-bedrock';
+        const req={profileKey:g.key,installPath:path,serverId:id,name,version:$('#cMinecraftVersion')?.value.trim()||null,memoryMb,port:ports[0].port,acceptEula:!isBedrock,acceptBedrockTerms:isBedrock};
+        try{const ack=await api('/api/servers/minecraft/install',{method:'POST',body:JSON.stringify(req)});rememberJob({jobId:ack.jobId,name,icon:g.icon,path});closeModal();showView('installs');toast('Minecraft installation queued.','ok');await refreshJobs()}
+        catch(e){if(err){err.textContent=e.message;err.classList.remove('hidden')}}
+        return;
+      }
       const args=applyInstallPorts(g,expandList(g.args,path),ports);
-      const def={id,name,vmName:'',gameType:g.gameType||'SteamGeneric',guestExePath:joinPath(path,g.exe),guestWorkingDir:path,startArgs:args,saveDirs:expandList(g.saveRel,path),steamAppId:g.appId,guestCredentialId:null,logPathInGuest:g.logRel?expandRoot(g.logRel,path):null,rconHost:g.caps?.rcon?'auto':null,rconPort:g.caps?.rcon?(g.rconPort||null):null,rconPassword:null,hostingMode:'BareMetal',scheduledTaskName:null,stopProcessNames:null,discordWebhookUrl:null,networkPorts:ports};
+      const def={id,name,vmName:'',gameType:g.gameType||'SteamGeneric',gameProfileKey:g.key,guestExePath:joinPath(path,g.exe),guestWorkingDir:path,startArgs:args,saveDirs:expandList(g.saveRel,path),steamAppId:g.appId,guestCredentialId:null,logPathInGuest:g.logRel?expandRoot(g.logRel,path):null,rconHost:g.caps?.rcon?'auto':null,rconPort:g.caps?.rcon?(g.rconPort||null):null,rconPassword:null,hostingMode:'BareMetal',scheduledTaskName:null,stopProcessNames:null,discordWebhookUrl:null,networkPorts:ports};
       try{const ack=await api('/api/servers/install',{method:'POST',body:JSON.stringify({steamAppId:g.appId,installPath:path,serverDef:def})});rememberJob({jobId:ack.jobId,name,icon:g.icon,path});closeModal();showView('installs');toast(`${g.label} installation started in background.`,'ok');await refreshJobs()}catch(e){if(err){err.textContent=e.message;err.classList.remove('hidden')}else toast(e.message,'err')}
     };
     wrappedStart.__networkWrapped=true;window.startInstall=wrappedStart;

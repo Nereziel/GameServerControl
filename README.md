@@ -159,6 +159,61 @@ The Web UI is the primary control surface. It supports:
 
 The Web UI reads the current authenticated identity from `/api/auth/me`. A `ReadOnly` token can inspect status, configuration, backups and supported live output, but mutation controls and interactive commands are disabled. The Agent remains the authorization authority even if a browser control is missed.
 
+## Minecraft servers (Java and Bedrock)
+
+Minecraft is **not** installed through SteamCMD. Select **Create server** and choose one
+of the dedicated Minecraft profiles. The installer uses the normal GSC asynchronous
+installation view, with explicit port, edition, version and license acceptance.
+
+| Profile | Distribution | Default protocol | Server-side extensions |
+| --- | --- | --- | --- |
+| Minecraft Java – Vanilla | Official Mojang release | TCP 25565 | Vanilla datapacks |
+| Minecraft Java – Paper | PaperMC **stable** release | TCP 25565 | Paper plugins in `plugins/` |
+| Minecraft Java – Fabric | Fabric loader | TCP 25565 | Fabric mods in `mods/` |
+| Minecraft Bedrock – Official | Official Bedrock Dedicated Server | UDP 19132 | Behavior/resource packs |
+
+- **Java runtime:** Install a compatible Java distribution on the game-server host first.
+  Configure system-wide `JAVA_HOME` or `PATH` and restart the Agent service so its
+  low-privilege Runner can launch that Java executable. The installer does not
+  download a JRE or change your system Java installation.
+- **Java EULA:** Explicit acceptance is required in the create-server form. Only then
+  does GSC write `eula=true` to the new server's `eula.txt`.
+- **Bedrock license:** Explicit acceptance is required. The official Bedrock binary
+  supports Windows and Ubuntu Linux 22.04+; it does not require Java.
+- **Version:** Leave blank for the latest Mojang Java release or an available
+  stable Paper build. For Fabric, GSC uses a stable loader and launcher for the
+  chosen Minecraft version. Bedrock currently uses the latest official stable
+  download only.
+- **Mod/plugin marketplace:** Paper and Fabric can browse Modrinth and install
+  **compatible, version-pinned** JARs. Downloads are checked against the SHA-512
+  published by Modrinth. Server-only plugins/mods need a restart to take effect;
+  some Fabric mods also require installation on players' clients.
+- **Bedrock add-ons:** Bedrock uses behavior/resource packs, not Java JARs.
+  Stop the Bedrock server after its first start, open **Mods**, and upload a
+  local `.mcpack` or `.mcaddon` file. GSC safely imports pack manifests,
+  copies the pack files, and links them into the active world's behavior/resource
+  pack JSON. Script modules are currently excluded. A server restart applies
+  the change. You can also edit existing pack settings in **Files**. Cloudflare
+  proxy upload limits may apply to large add-on bundles.
+- **Worlds/backups:** Java backs up `world/`, `world_nether/`,
+  `world_the_end/`; Bedrock backs up `worlds/`. If you change Java
+  `level-name`, update the registered save directories to match.
+- **Console:** The GSC server workspace uses the Minecraft stdin/stdout
+  console; stopping Java/Bedrock sends `stop` first to save world data before a
+  forced termination is considered.
+- **Updates:** Minecraft does not use the SteamCMD update action. To change a
+  server edition or Minecraft version, take a backup and use the official
+  vendor's upgrade procedure. The automated in-place Minecraft updater,
+  Forge/NeoForge installers and full modpack deployment remain future work.
+
+All downloads use vendor/marketplace HTTPS origins only. GSC does not run arbitrary
+installer scripts received from a public URL.
+
+Official documentation: [Minecraft Java server](https://www.minecraft.net/en-us/download/server),
+[Bedrock Dedicated Server](https://www.minecraft.net/en-us/download/server/bedrock),
+[PaperMC downloads](https://docs.papermc.io/misc/downloads-service/),
+[Fabric server setup](https://fabricmc.net/use/server/).
+
 ## Game profiles
 
 Per-game defaults and capabilities live in:

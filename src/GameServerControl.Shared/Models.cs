@@ -83,7 +83,8 @@ public record ServerDef(
     string? DiscordWebhookUrl = null,                   // optional: POST lifecycle events (start/stop/crash/backup/update) here
     NetworkPort[]? NetworkPorts = null,                 // reserved/listening ports for collision detection and future port-based firewall rules
     int? BackupRetention = null,                        // per-server normal-backup retention override; null uses Agent default
-    bool DiscordAlertsOnly = false                     // when true, send only failure/crash warnings
+    bool DiscordAlertsOnly = false,                    // when true, send only failure/crash warnings
+    string? GameProfileKey = null                      // Minecraft variant / stable profile identity
 );
 
 public record ServerStatus(

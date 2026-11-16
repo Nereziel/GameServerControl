@@ -102,6 +102,16 @@ builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
 builder.Services.AddSingleton<SteamCmdManager>();
 builder.Services.AddSingleton<ServerInstaller>();
+builder.Services.AddSingleton<MinecraftServerPackages>();
+builder.Services.AddHttpClient("minecraft-installer", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(20);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("GameServerControl/1.1 (+https://github.com/Nereziel/GameServerControl)");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseProxy = false
+});
 builder.Services.AddSingleton<DiscordNotifier>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<AgentUpdateService>();
@@ -126,6 +136,19 @@ builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServ
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.SatisfactoryThunderstoreModManager>();
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.PalworldCuratedModManager>();
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.ArkWorkshopModManager>();
+builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.MinecraftJavaModManager>();
+builder.Services.AddSingleton<GameServerControl.Agent.Mods.MinecraftBedrockAddOnManager>();
+builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager>(
+    sp => sp.GetRequiredService<GameServerControl.Agent.Mods.MinecraftBedrockAddOnManager>());
+builder.Services.AddHttpClient("minecraft-modding", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(2);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("GameServerControl/1.1 (+https://github.com/Nereziel/GameServerControl)");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseProxy = false
+});
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.ModManagerRegistry>();
 builder.Services.AddSingleton<SourceRconClient>();
 builder.Services.AddSingleton<IGameRcon, PalworldRcon>();
@@ -261,6 +284,44 @@ api.MapPost("/servers/install", (InstallServerRequest req, ServerInstaller insta
         return Results.Conflict(new { error = $"Server with id '{req.ServerDef.Id}' already exists." });
     var jobId = installer.StartJob(req);
     return Results.Ok(new InstallJobAck(jobId, "Install job queued"));
+});
+api.MapPost("/servers/minecraft/install", (MinecraftInstallRequest request,
+    ServerInstaller installer, ServerRegistry registry) =>
+{
+    var validation = MinecraftServerPackages.Validate(request);
+    if (validation is not null) return Results.BadRequest(new { error = validation });
+    if (registry.Get(request.ServerId) is not null)
+        return Results.Conflict(new { error = "A server with this ID already exists." });
+    try
+    {
+        var jobId = installer.StartMinecraftJob(request);
+        return Results.Ok(new InstallJobAck(jobId, "Minecraft installation queued"));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+});
+api.MapPost("/servers/{id}/minecraft/bedrock/addons", async (
+    string id, HttpRequest request, ServerRegistry registry,
+    GameServerControl.Agent.Mods.MinecraftBedrockAddOnManager addOns, CancellationToken ct) =>
+{
+    var def = registry.Get(id);
+    if (def is null) return Results.NotFound();
+    if (!addOns.Supports(def)) return Results.BadRequest(new { error = "This server is not official Bedrock." });
+    if (!request.HasFormContentType) return Results.BadRequest(new { error = "Upload a .mcpack/.mcaddon multipart form." });
+    try
+    {
+        var form = await request.ReadFormAsync(ct);
+        var file = form.Files.GetFile("file");
+        if (file is null || file.Length == 0) return Results.BadRequest(new { error = "No add-on file supplied." });
+        if (file.Length > 125L * 1024 * 1024)
+            return Results.BadRequest(new { error = "Add-on upload exceeds 125 MiB." });
+        await using var stream = file.OpenReadStream();
+        var result = await addOns.ImportAsync(def, file.FileName, stream, ct);
+        return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
+    }
+    catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or IOException)
+    {
+        return Results.BadRequest(new { error = "Unable to import Bedrock add-on: " + ex.Message });
+    }
 });
 api.MapGet("/servers/install/{jobId}", (string jobId, ServerInstaller installer) =>
 {

@@ -27,9 +27,28 @@ public static class GameProfileMetadata
             ],
             ["minecraft"] =
             [
+                new(".", "Server", false),
                 new("config", "Mods / plugins"),
+                new("world/serverconfig", "World config")
+            ],
+            ["minecraft-paper"] =
+            [
+                new(".", "Server", false),
                 new("plugins", "Mods / plugins"),
                 new("world/serverconfig", "World config")
+            ],
+            ["minecraft-fabric"] =
+            [
+                new(".", "Server", false),
+                new("config", "Mods / plugins"),
+                new("world/serverconfig", "World config")
+            ],
+            ["minecraft-bedrock"] =
+            [
+                new(".", "Server", false),
+                new("worlds", "World config"),
+                new("behavior_packs", "Mods / plugins"),
+                new("resource_packs", "Mods / plugins")
             ],
             ["palworld"] =
             [

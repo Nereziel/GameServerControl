@@ -84,7 +84,7 @@ public sealed class ServerOrchestrator
         if (def.HostingMode == HostingMode.BareMetal)
         {
             vmState = VmState.NotApplicable;
-            var (ok, foundPid) = await _local.FindProcessAsync(def.GuestExePath, ct);
+            var (ok, foundPid) = await _local.FindProcessAsync(def, ct);
             procState = !ok ? ProcessState.Unknown : (foundPid is null ? ProcessState.NotRunning : ProcessState.Running);
             pid = foundPid;
         }
@@ -262,7 +262,7 @@ public sealed class ServerOrchestrator
 
     private async Task<ActionResult> StartBareMetalAsync(ServerDef def, string corr, CancellationToken ct)
     {
-        var (alreadyOk, existingPid) = await _local.FindProcessAsync(def.GuestExePath, ct);
+        var (alreadyOk, existingPid) = await _local.FindProcessAsync(def, ct);
         if (alreadyOk && existingPid is int pidAlready)
         {
             _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pidAlready });
@@ -271,7 +271,7 @@ public sealed class ServerOrchestrator
         }
 
         await LogAsync(def.Id, "orch", "Launching " + def.GuestExePath);
-        var (started, pid, err) = await _local.StartProcessAsync(def.GuestExePath, def.StartArgs, def.GuestWorkingDir, ct);
+        var (started, pid, err) = await _local.StartProcessAsync(def, ct);
         if (!started) return StartFailure(def.Id, corr, ExplainLaunchError(err));
 
         _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pid, StartedAt = DateTimeOffset.UtcNow, LastError = null });
@@ -345,7 +345,24 @@ public sealed class ServerOrchestrator
         if (def.HostingMode == HostingMode.BareMetal)
         {
             var pid = _tracker.Get(id).PidInGuest;
-            await _local.StopProcessAsync(def.GuestExePath, pid, force, ct);
+            var stoppedGracefully = false;
+            if (def.GameType == GameType.Minecraft && !force)
+            {
+                var (sent, _) = await _local.SendConsoleInputAsync(def, "stop", ct);
+                if (sent)
+                {
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var (found, runningPid) = await _local.FindProcessAsync(def, ct);
+                        if (found && runningPid is null) { stoppedGracefully = true; break; }
+                        await Task.Delay(500, ct);
+                    }
+                }
+            }
+            if (!stoppedGracefully)
+                await _local.StopProcessAsync(def, pid, force, ct);
 
             if (def.StopProcessNames is { Length: > 0 } extras)
             {
