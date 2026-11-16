@@ -1015,25 +1015,65 @@ startInstall = async function (key) {
   }
 
   function highlight(content,format){
-    const text=String(content||''),limit=140000,visible=text.length>limit?text.slice(0,limit):text;
-    const rendered=visible.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').map(line=>tokenizedLine(line,String(format||'').toLowerCase())).join('\n');
-    return rendered+(text.length>limit?'\n\n<span class="fse-token-comment">[Highlighted preview truncated; the editor still contains the complete file.]</span>':'');
+    // Keep the complete text visible, even when syntax tokenization would be expensive.
+    const text=String(content??'');
+    if(text.length>140000)return esc(text);
+    return text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').map(line=>tokenizedLine(line,String(format||'').toLowerCase())).join('\n');
   }
 
   function currentInfo(){return state.list.find(x=>x.path===state.selected)||null}
   function setValidation(kind,text){const el=$('#fseValidation');if(!el)return;el.className='fse-status '+(kind||'');el.textContent=text}
-  function updatePreview(){const input=$('#fseText'),preview=$('#fsePreview');if(!input||!preview)return;preview.innerHTML=highlight(input.value,state.content?.format||currentInfo()?.format);}
 
-  function editorHtml(){
+  function syncEditorScroll(){
+    const input=$('#fseText'),highlighted=$('#fseHighlight');
+    if(!input||!highlighted)return;
+    highlighted.scrollTop=input.scrollTop;
+    highlighted.scrollLeft=input.scrollLeft;
+  }
+
+  function updateEditorPosition(){
+    const input=$('#fseText'),position=$('#fsePosition');
+    if(!input||!position)return;
+    const before=input.value.slice(0,input.selectionStart),lastNewline=before.lastIndexOf('\n');
+    const line=before.split('\n').length;
+    position.textContent=`Ln ${line}, Col ${before.length-lastNewline}`;
+  }
+
+  function updateHighlight(){
+    const input=$('#fseText'),highlighted=$('#fseHighlight');
+    if(!input||!highlighted)return;
+    // All file text is escaped by highlight/tokenizedLine before entering innerHTML.
+    highlighted.innerHTML=highlight(input.value,state.content?.format||currentInfo()?.format)+'&#8203;';
+    syncEditorScroll();
+    updateEditorPosition();
+  }
+
+  function bindFileEditor(){
+    const input=$('#fseText');
+    if(!input)return;
+    input.addEventListener('scroll',syncEditorScroll,{passive:true});
+    input.addEventListener('click',updateEditorPosition);
+    input.addEventListener('keyup',updateEditorPosition);
+    input.addEventListener('select',updateEditorPosition);
+    syncEditorScroll();
+    updateEditorPosition();
+  }
+
+    function editorHtml(){
     const info=currentInfo(),c=state.content;
     if(!c||!info)return '<div class="fse-empty">Select a config file.</div>';
     const running=serverWorkspaceStatus(state.serverId).processState==='Running';
     const restart=info.restartRecommended?`<span class="fse-status warn">Restart recommended${running?' · server running':''}</span>`:'<span class="fse-status ok">Reload usually not required</span>';
     const history=state.history.length?state.history.map(x=>`<div class="fse-history-row"><div class="grow"><div class="fse-file-name">${new Date(x.createdAt).toLocaleString()}</div><div class="fse-file-meta">${esc(sizeText(x.sizeBytes))} · ${esc(x.id)}</div></div><button class="btn" ${uiAction('gscFilesRestore',[x.id])}>Restore</button></div>`).join(''):'<div class="muted tiny">No edit history yet. A snapshot is created automatically before every save or restore.</div>';
-    return `<div class="fse-head"><div class="grow"><div class="fse-title">${esc(info.name)}</div><div class="fse-path">${esc(info.path)}</div></div><div class="fse-head-actions"><button class="btn" ${uiAction('gscFilesReload')}>Reload</button><button id="fseSave" class="btn primary" ${state.dirty?'':'disabled'} ${uiAction('gscFilesSave')}>Save</button></div></div><div class="fse-statusbar"><span class="fse-status">${esc(String(c.format||info.format||'text').toUpperCase())}</span><span class="fse-status">${esc(sizeText(c.sizeBytes))}</span><span class="fse-status">${new Date(c.modifiedAt).toLocaleString()}</span>${restart}<span id="fseValidation" class="fse-status">Unchanged</span></div>${info.restartRecommended&&running?'<div class="callout info">This file is normally read when the server/plugin starts. Save is allowed while running, but a restart is recommended for the change to take effect.</div>':''}<div class="fse-editgrid"><div><div class="fse-pane-title">Editor · Ctrl+S to save</div><textarea id="fseText" class="fse-editor" spellcheck="false" ${uiAction('gscFilesInput',[],{event:'input'})} ${uiAction('gscFilesKeydown',[],{event:'keydown',pass:'event'})}>${esc(c.content)}</textarea></div><div><div class="fse-pane-title">Syntax-highlighted preview</div><pre id="fsePreview" class="fse-preview">${highlight(c.content,c.format||info.format)}</pre></div></div><div class="fse-history"><div class="sw-toolbar"><div><b>Edit history</b><div class="tiny muted">Last ${state.history.length} snapshots for this file.</div></div><div class="spacer"></div></div>${history}</div>`;
+    return `<div class="fse-head"><div class="grow"><div class="fse-title">${esc(info.name)}</div><div class="fse-path">${esc(info.path)}</div></div><div class="fse-head-actions"><button class="btn" ${uiAction('gscFilesReload')}>Reload</button><button id="fseSave" class="btn primary" ${state.dirty?'':'disabled'} ${uiAction('gscFilesSave')}>Save</button></div></div><div class="fse-statusbar"><span class="fse-status">${esc(String(c.format||info.format||'text').toUpperCase())}</span><span class="fse-status">${esc(sizeText(c.sizeBytes))}</span><span class="fse-status">${new Date(c.modifiedAt).toLocaleString()}</span>${restart}<span id="fseValidation" class="fse-status">Unchanged</span></div>${info.restartRecommended&&running?'<div class="callout info">This file is normally read when the server/plugin starts. Save is allowed while running, but a restart is recommended for the change to take effect.</div>':''}<div class="fse-pane-title">Syntax-highlighted editor · Ctrl+S to save</div><div class="fse-code-surface"><pre id="fseHighlight" class="fse-highlight" aria-hidden="true">${highlight(c.content,c.format||info.format)}&#8203;</pre><textarea id="fseText" class="fse-editor" wrap="off" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" aria-label="Edit configuration file" ${uiAction('gscFilesInput',[],{event:'input'})} ${uiAction('gscFilesKeydown',[],{event:'keydown',pass:'event'})}>${esc(c.content)}</textarea></div><div class="fse-editor-footer"><span id="fsePosition">Ln 1, Col 1</span><span>${String(c.content||'').length>140000?'Large file · syntax colors disabled for performance':'Tab: 2 spaces · Enter: auto-indent'}</span></div><div class="fse-history"><div class="sw-toolbar"><div><b>Edit history</b><div class="tiny muted">Last ${state.history.length} snapshots for this file.</div></div><div class="spacer"></div></div>${history}</div>`;
   }
 
-  function renderEditor(){const host=$('#fseMain');if(host)host.innerHTML=editorHtml()}
+  function renderEditor(){
+    const host=$('#fseMain');
+    if(!host)return;
+    host.innerHTML=editorHtml();
+    bindFileEditor();
+  }
 
   window.gscFilesFilter=function(value){state.filter=String(value||'');renderSidebar()};
 
@@ -1048,12 +1088,50 @@ startInstall = async function (key) {
   };
 
   window.gscFilesInput=function(){
-    if(!state.content)return;state.dirty=true;const save=$('#fseSave');if(save)save.disabled=false;updatePreview();setValidation('','Checking syntax…');
+    if(!state.content)return;state.dirty=true;const save=$('#fseSave');if(save)save.disabled=false;updateHighlight();setValidation('','Checking syntax…');
     clearTimeout(state.validationTimer);const seq=++state.validationSeq;
     state.validationTimer=setTimeout(async()=>{const input=$('#fseText');if(!input||seq!==state.validationSeq)return;try{await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify({path:state.selected,content:input.value})});if(seq===state.validationSeq)setValidation('ok','Syntax valid')}catch(e){if(seq===state.validationSeq)setValidation('err',e.message)}},650);
   };
 
-  window.gscFilesKeydown=function(event){if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();gscFilesSave()}};
+  window.gscFilesKeydown=function(event){
+    if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){
+      event.preventDefault();gscFilesSave();return;
+    }
+    const input=$('#fseText');
+    if(!input||event.isComposing||event.ctrlKey||event.metaKey||event.altKey)return;
+    if(event.key==='Tab'){
+      event.preventDefault();
+      const start=input.selectionStart,end=input.selectionEnd;
+      if(!event.shiftKey&&start===end){
+        input.setRangeText('  ',start,end,'end');
+      }else{
+        const lineStart=input.value.lastIndexOf('\n',start-1)+1;
+        if(event.shiftKey&&start===end){
+          const indent=input.value.slice(lineStart).match(/^(?:\t| {1,2})/);
+          if(!indent)return;
+          input.setRangeText('',lineStart,lineStart+indent[0].length,'start');
+          const caret=Math.max(lineStart,start-indent[0].length);
+          input.setSelectionRange(caret,caret);
+        }else{
+          const selectedEnd=end>start&&input.value[end-1]==='\n'?end-1:end;
+          const newline=input.value.indexOf('\n',selectedEnd);
+          const blockEnd=newline<0?input.value.length:newline;
+          const block=input.value.slice(lineStart,blockEnd);
+          const replacement=block.split('\n').map(line=>event.shiftKey?line.replace(/^(?:\t| {1,2})/,''):'  '+line).join('\n');
+          input.setRangeText(replacement,lineStart,blockEnd,'start');
+          input.setSelectionRange(lineStart,lineStart+replacement.length);
+        }
+      }
+      gscFilesInput();
+    }else if(event.key==='Enter'&&!event.shiftKey){
+      event.preventDefault();
+      const start=input.selectionStart,end=input.selectionEnd;
+      const previousLine=input.value.slice(input.value.lastIndexOf('\n',start-1)+1,start);
+      const indent=(previousLine.match(/^[ \t]*/)||[''])[0]+(/[\{\[\(]\s*$/.test(previousLine)?'  ':'');
+      input.setRangeText('\n'+indent,start,end,'end');
+      gscFilesInput();
+    }
+  };
 
   async function refreshList(){
     const list=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files`);state.list=list.files||[];renderSidebar();
@@ -1063,14 +1141,15 @@ startInstall = async function (key) {
   window.gscFilesSave=async function(){
     const input=$('#fseText');if(!input||!state.content||!state.selected||!state.dirty)return;
     const save=$('#fseSave');if(save){save.disabled=true;save.textContent='Saving…'}
+    input.readOnly=true;
     try{
       const payload={path:state.selected,content:input.value};
       await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/validate`,{method:'POST',body:JSON.stringify(payload)});
       const result=await api(`/api/servers/${encodeURIComponent(state.serverId)}/files/content`,{method:'PUT',body:JSON.stringify({...payload,expectedSha256:state.content.sha256})});
-      state.content={...state.content,content:input.value,sha256:result.sha256,sizeBytes:result.sizeBytes,modifiedAt:result.modifiedAt};state.dirty=false;setValidation('ok','Saved · syntax valid');
-      await refreshList();await refreshHistory();const info=currentInfo();setNotice(info?.restartRecommended?'Config saved. Restart recommended for this change.':'Config saved.','ok',false);
+      state.content={...state.content,content:input.value,sha256:result.sha256,sizeBytes:result.sizeBytes,modifiedAt:result.modifiedAt};state.dirty=false;
+      await refreshList();await refreshHistory();setValidation('ok','Saved · syntax valid');const info=currentInfo();setNotice(info?.restartRecommended?'Config saved. Restart recommended for this change.':'Config saved.','ok',false);
     }catch(e){setValidation('err',e.message);setNotice('Config save failed: '+e.message,'err',false);if(save)save.disabled=false}
-    finally{if(save)save.textContent='Save'}
+    finally{input.readOnly=false;if(save)save.textContent='Save'}
   };
 
   window.gscFilesReload=function(){if(!state.selected)return;if(state.dirty&&!confirm('Discard unsaved changes and reload this file?'))return;gscFilesOpen(state.serverId,state.selected,true)};

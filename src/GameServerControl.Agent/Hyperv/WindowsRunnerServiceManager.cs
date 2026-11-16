@@ -16,6 +16,7 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     private readonly ILogger<WindowsRunnerServiceManager> _logger;
     private readonly ConcurrentDictionary<string, string> _provisionedFingerprints = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _provisionGates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _startGates = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _deprovisioning = new(StringComparer.OrdinalIgnoreCase);
 
     public WindowsRunnerServiceManager(WindowsRunnerPipeClient client, ILogger<WindowsRunnerServiceManager> logger)
@@ -28,22 +29,99 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
 
     public async Task<RunnerResponse> StartAsync(ServerDef def, CancellationToken ct = default)
     {
-        // Provisioning can update the SCM logon account while the service is already
-        // running, but that does not replace its process token. Fail closed before
-        // reprovisioning rather than launching a game through a live LocalSystem Runner.
-        if (Supports(def))
+        if (!Supports(def)) return new RunnerResponse(false, "Windows Runner is not applicable to this server.");
+        // Serialize starts per server so a manifest refresh cannot race another Start request.
+        var gate = _startGates.GetOrAdd(def.Id, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
         {
+            // Do not change the SCM identity of a live Runner before checking its token.
             var preflight = await RefuseUnexpectedRunningAccountAsync(RunnerIdentity.ForServer(def.Id), ct);
             if (!preflight.Ok) return new RunnerResponse(false, preflight.Error);
-        }
 
-        var provision = await EnsureProvisionedAsync(def, ct);
-        if (!provision.Ok) return new RunnerResponse(false, provision.Error);
-        var serviceIdentity = await EnsureExpectedServiceAccountAsync(def, provision.Identity, ct);
-        if (!serviceIdentity.Ok) return new RunnerResponse(false, serviceIdentity.Error);
-        var started = await EnsureRunnerServiceRunningAsync(provision.Identity, ct);
-        if (!started.Ok) return new RunnerResponse(false, started.Error);
-        return await SendWithRetryAsync(provision.Identity, new RunnerRequest(RunnerCommand.Start), ct);
+            var provision = await EnsureProvisionedAsync(def, ct);
+            if (!provision.Ok) return new RunnerResponse(false, provision.Error);
+            var serviceIdentity = await EnsureExpectedServiceAccountAsync(def, provision.Identity, ct);
+            if (!serviceIdentity.Ok) return new RunnerResponse(false, serviceIdentity.Error);
+
+            var started = await EnsureRunnerServiceRunningAsync(provision.Identity, ct);
+            if (!started.Ok) return new RunnerResponse(false, started.Error);
+
+            var current = await ReadManifestAsync(ManifestPath(provision.Identity), ct);
+            if (current is null)
+                return new RunnerResponse(false, "Runner manifest is unavailable after provisioning.");
+
+            var live = await SendRunnerWithStartupRetryAsync(provision.Identity, new RunnerRequest(RunnerCommand.Ping), ct);
+            if (live.TransportFailure || !live.Response.Ok)
+                return new RunnerResponse(false, "Cannot verify the active Runner configuration: " + live.Response.Error);
+
+            if (!string.Equals(current.Revision(), live.Response.ManifestRevision, StringComparison.Ordinal))
+            {
+                // Never stop a Runner service while its game is running: an old manifest
+                // can still be needed to locate and gracefully stop that process.
+                var find = await SendRunnerWithStartupRetryAsync(provision.Identity, new RunnerRequest(RunnerCommand.Find), ct);
+                if (find.TransportFailure || !find.Response.Ok)
+                    return new RunnerResponse(false, "Cannot safely refresh Runner configuration: " + find.Response.Error);
+
+                var decision = RunnerManifestUpdate.Decide(
+                    current.Revision(), live.Response.ManifestRevision, find.Response.Pid is not null);
+                if (decision == RunnerManifestUpdateAction.DeferUntilStopped)
+                    return new RunnerResponse(false, "Runner settings changed while the game is running. Stop the game before starting with the new configuration.");
+
+                if (decision == RunnerManifestUpdateAction.RestartIdle)
+                {
+                    var refreshed = await RestartIdleRunnerServiceAsync(provision.Identity, ct);
+                    if (!refreshed.Ok) return new RunnerResponse(false, refreshed.Error);
+
+                    live = await SendRunnerWithStartupRetryAsync(provision.Identity, new RunnerRequest(RunnerCommand.Ping), ct);
+                    if (live.TransportFailure || !live.Response.Ok ||
+                        !string.Equals(current.Revision(), live.Response.ManifestRevision, StringComparison.Ordinal))
+                        return new RunnerResponse(false, "Runner restart did not activate the latest launch configuration.");
+                }
+            }
+
+            var launch = await SendRunnerWithStartupRetryAsync(provision.Identity, new RunnerRequest(RunnerCommand.Start), ct);
+            return launch.Response;
+        }
+        finally { gate.Release(); }
+    }
+
+    private async Task<RunnerPipeResult> SendRunnerWithStartupRetryAsync(
+        RunnerIdentityInfo identity, RunnerRequest request, CancellationToken ct)
+    {
+        RunnerPipeResult last = default;
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            last = await _client.SendDetailedAsync(identity, request, ct);
+            if (!last.TransportFailure) return last;
+            if (attempt < 3) await Task.Delay(350, ct);
+        }
+        return last;
+    }
+
+    private async Task<(bool Ok, string Error)> RestartIdleRunnerServiceAsync(
+        RunnerIdentityInfo identity, CancellationToken ct)
+    {
+        var stopped = await RunToolAsync("sc.exe", ["stop", identity.ServiceName], ToolTimeout, ct);
+        if (!stopped.Ok && !stopped.Output.Contains("1062", StringComparison.OrdinalIgnoreCase))
+            return (false, "Could not stop idle Runner to refresh configuration: " + stopped.Output);
+
+        // Do not issue sc start while the previous instance is still STOP_PENDING.
+        var isStopped = false;
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            var query = await RunToolAsync("sc.exe", ["query", identity.ServiceName], ToolTimeout, ct);
+            if (query.Ok && query.Output.Contains("STOPPED", StringComparison.OrdinalIgnoreCase))
+            {
+                isStopped = true;
+                break;
+            }
+            await Task.Delay(250, ct);
+        }
+        if (!isStopped) return (false, "Timed out waiting for idle Runner to stop before refresh.");
+
+        var started = await EnsureRunnerServiceRunningAsync(identity, ct);
+        return started.Ok ? (true, "") : (false, "Could not restart Runner with updated settings: " + started.Error);
     }
 
     public async Task<RunnerResponse> FindAsync(ServerDef def, CancellationToken ct = default) =>
@@ -184,8 +262,7 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
 
     private static async Task<(bool Ok, string Error)> RemoveGrantAsync(string path, string serviceAccount, CancellationToken ct)
     {
-        // Payload files have protected ACLs and now receive explicit grants. Revoke
-        // those grants recursively; game/save roots still use inherited root grants.
+        // Revoke explicit grants from the protected Runner payload files as well.
         var args = PathsEqual(path, RunnerRoot())
             ? RunnerServiceSecurity.PayloadRevoke(path, serviceAccount)
             : new[] { path, "/remove:g", serviceAccount };
@@ -427,9 +504,7 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
             RunnerServiceSecurity.PayloadDirectoryGrant(runnerRoot, serviceAccount), ToolTimeout, ct);
         if (!runnerGrant.Ok) return (false, "Could not grant Runner payload access: " + runnerGrant.Output);
 
-        // The Windows installer deliberately disables inheritance on installed
-        // EXE/DLL files. Grant explicit RX recursively for each newly created
-        // service identity; directory inheritance alone is not sufficient.
+        // Existing EXE/DLL files have protected ACLs installed without inheritance.
         var existingPayloadGrant = await RunToolAsync("icacls.exe",
             RunnerServiceSecurity.ExistingPayloadGrant(runnerRoot, serviceAccount), ToolTimeout, ct);
         if (!existingPayloadGrant.Ok)

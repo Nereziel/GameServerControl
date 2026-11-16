@@ -41,6 +41,11 @@ requireCheck(/StartAsync\s*\(\s*CancellationToken/.test(runnerHost), 'RunnerProc
 requireCheck(!/StartAsync\s*\([^)]*(?:string|IEnumerable|\[\])[^)]*\)/m.test(runnerHost), 'Runner start API exposed caller-supplied launch metadata.');
 requireCheck(runnerHost.includes('RunnerProtocolLimits.MaxConsoleInputChars'), 'Runner console input must enforce the shared protocol bound.');
 requireCheck(runnerHost.includes('StopProcessNames'), 'Runner extra-process termination must come from its manifest allowlist.');
+requireCheck(runnerHost.includes('not accessible to the Runner service account'), 'Runner executable check must explain missing files versus service-account access failures.');
+requireCheck(runnerPipe.includes('ManifestRevision: _manifest.Revision()'), 'Runner Ping must report the actual in-memory manifest revision.');
+requireCheck(manager.includes('RunnerManifestUpdate.Decide(') && manager.includes('RunnerCommand.Find') &&
+    manager.includes('RunnerManifestUpdateAction.DeferUntilStopped') && manager.includes('RestartIdleRunnerServiceAsync'),
+    'Runner must detect changed manifests, preserve running games and refresh only idle services.');
 requireCheck(runnerPipe.includes('NamedPipeServerStream'), 'Runner IPC must use a local named pipe.');
 requireCheck(runnerPipe.includes('PipeSecurity') && runnerPipe.includes('WellKnownSidType.LocalSystemSid') && runnerPipe.includes('WellKnownSidType.BuiltinAdministratorsSid'), 'Runner pipe ACL must explicitly authorize only SYSTEM and local Administrators.');
 requireCheck(runnerPipe.includes('RunnerProtocolLimits.MaxRequestBytes') && runnerPipe.includes('RunnerProtocolLimits.MaxResponseBytes'), 'Runner pipe must enforce bounded request and response sizes.');
@@ -75,7 +80,6 @@ requireCheck(manager.includes('EnsureExpectedServiceAccountAsync(def, provision.
     manager.includes('RunnerServiceSecurity.HasExpectedAccount') &&
     manager.includes('IsRunnerServiceRunningAsync(identity, ct)'),
     'Runner startup must reject a running service with a wrong Windows account and repair idle services.');
-
 requireCheck(manager.includes('schtasks.exe') && manager.includes('/disable') && manager.includes('/end'), 'Legacy Scheduled Tasks must be disabled and ended during Runner migration.');
 requireCheck(manager.includes('1690800') && manager.includes('FactoryGame') && manager.includes('CreateSymbolicLink'), 'Satisfactory must preserve its existing SystemProfile data through an idempotent directory link.');
 requireCheck(manager.includes('SetAutostartAsync') && manager.includes('GetAutostartAsync'), 'Runner manager must own Windows BareMetal autostart state.');

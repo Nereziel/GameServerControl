@@ -45,7 +45,7 @@ public sealed class RunnerProcessHost
         try
         {
             if (!File.Exists(_manifest.ExecutablePath))
-                return new RunnerResponse(false, "Executable not found.");
+                return new RunnerResponse(false, $"Configured executable is missing or not accessible to the Runner service account: {_manifest.ExecutablePath}.");
             if (!Directory.Exists(_manifest.WorkingDirectory))
                 return new RunnerResponse(false, "Working directory not found.");
 
