@@ -50,6 +50,8 @@ public sealed class MinecraftServerPackages
             return "Installing at a filesystem root is not allowed.";
         if (Directory.Exists(root) || File.Exists(root))
             return "Install folder already exists. Choose an unused folder to protect existing data.";
+        if (profile.Key == "minecraft-bedrock" && !string.IsNullOrWhiteSpace(request.Version))
+            return "Official Bedrock installer currently downloads only the latest stable release.";
         if (request.Version is { Length: > 0 } v && !Regex.IsMatch(v, "^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$"))
             return "Invalid Minecraft version identifier.";
         if (request.MemoryMb is < 512 or > 65536) return "Java RAM must be between 512 and 65536 MB.";
