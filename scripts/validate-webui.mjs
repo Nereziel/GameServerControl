@@ -199,6 +199,7 @@ try {
   }
 
   runNode(path.resolve('scripts/test-game-picker-focus.mjs'), 'Create server game picker focus regression');
+  runNode(path.resolve('scripts/test-install-job-resume-ui.mjs'), 'Install history and cancellation UI');
   runNode(path.resolve('scripts/validate-update-ux.mjs'), 'update/install UX contract');
   runNode(path.resolve('scripts/validate-server-admin.mjs'), 'server admin capability contract');
   runNode(path.resolve('scripts/validate-monitoring.mjs'), 'monitoring history contract');
