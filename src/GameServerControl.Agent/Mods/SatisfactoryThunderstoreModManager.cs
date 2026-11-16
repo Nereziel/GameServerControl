@@ -146,8 +146,7 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     .ToList();
                 var installedBytes = Directory.EnumerateFiles(stageDir, "*", SearchOption.AllDirectories)
                     .Select(f => new FileInfo(f).Length).Sum();
-                var retained = ModInstallTransaction.ReplaceDirectory(stageDir, destDir);
-                if (retained) _logger.LogWarning("Previous Satisfactory mod directory retained after replacement of {ModId}", modId);
+                using var replacement = ModInstallTransaction.BeginDirectory(stageDir, destDir);
 
                 // Extract version + nicer name from Thunderstore manifest.json if present
                 string? version = null;
@@ -173,8 +172,8 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     InstalledAt: DateTimeOffset.UtcNow,
                     SizeBytes: installedBytes,
                     Files: installedFiles.ToArray());
-                UpdateMetadata(def, m => m[modId] = ToSidecar(info));
-
+                var retained = replacement.Complete(() => UpdateMetadata(def, m => m[modId] = ToSidecar(info)));
+                if (retained) _logger.LogWarning("Previous Satisfactory mod directory retained after replacement of {ModId}", modId);
                 return new ModInstallResult(true, info, null);
             }
             finally
@@ -316,14 +315,9 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         var path = MetadataPath(def);
         var dict = LoadMetadata(def);
         mutate(dict);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Mod sidecar write failed at {Path}", path);
+        // A failed write must propagate into the mod replacement transaction.
+        // Atomic rename avoids truncating the existing metadata on disk.
+        ModMetadataStore.WriteAtomic(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));", path);
         }
     }
 }

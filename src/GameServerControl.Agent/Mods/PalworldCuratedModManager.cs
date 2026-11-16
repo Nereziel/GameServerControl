@@ -189,12 +189,12 @@ public sealed class PalworldCuratedModManager : IModManager
             Directory.CreateDirectory(installRoot);
 
             var installedFiles = new List<string>();
+            ModInstallTransaction.IReplacement replacement;
             if (kind == InstallKind.Win64Dll)
             {
                 // Single DLL: copy verbatim
                 var dst = Path.Combine(installRoot, Path.GetFileName(uri.LocalPath));
-                var retained = ModInstallTransaction.ReplaceFiles(installRoot, new[] { (Source: downloadPath, Destination: dst) });
-                if (retained) _logger.LogWarning("Previous Palworld mod DLL retained after replacement");
+                replacement = ModInstallTransaction.BeginFiles(installRoot, new[] { (Source: downloadPath, Destination: dst) });
                 installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
             }
             else
@@ -205,11 +205,11 @@ public sealed class PalworldCuratedModManager : IModManager
                 catch (Exception ex) { return new ModInstallResult(false, null, "Asset isn't a valid zip: " + ex.Message); }
                 var files = Directory.EnumerateFiles(extract, "*", SearchOption.AllDirectories)
                     .Select(f => (Source: f, Destination: Path.Combine(installRoot, Path.GetRelativePath(extract, f)))).ToArray();
-                var retained = ModInstallTransaction.ReplaceFiles(installRoot, files);
-                if (retained) _logger.LogWarning("Previous Palworld mod file copies retained after replacement");
+                replacement = ModInstallTransaction.BeginFiles(installRoot, files);
                 installedFiles.AddRange(files.Select(f => Path.GetRelativePath(def.GuestWorkingDir, f.Destination)));
             }
 
+            using var pendingReplacement = replacement;
             var version = entry is not null
                 ? (await _gh.GetLatestAsync(entry.Owner, entry.Repo, entry.AssetNameContains, ct))?.Tag
                 : null;
@@ -221,7 +221,8 @@ public sealed class PalworldCuratedModManager : IModManager
                 InstalledAt: DateTimeOffset.UtcNow,
                 SizeBytes: installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(),
                 Files: installedFiles.ToArray());
-            UpdateMetadata(def, m => m[modId] = ToSidecar(info));
+            var retained = pendingReplacement.Complete(() => UpdateMetadata(def, m => m[modId] = ToSidecar(info)));
+            if (retained) _logger.LogWarning("Previous Palworld mod files retained after replacement of {ModId}", modId);
             return new ModInstallResult(true, info, null);
         }
         catch (Exception ex)
@@ -295,14 +296,9 @@ public sealed class PalworldCuratedModManager : IModManager
         var path = MetadataPath(def);
         var dict = LoadMetadata(def);
         mutate(dict);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Palworld mod sidecar write failed at {Path}", path);
+        // A failed write must propagate into the mod replacement transaction.
+        // Atomic rename avoids truncating the existing metadata on disk.
+        ModMetadataStore.WriteAtomic(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));", path);
         }
     }
 }
