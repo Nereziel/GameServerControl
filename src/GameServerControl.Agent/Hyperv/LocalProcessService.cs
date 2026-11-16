@@ -431,7 +431,7 @@ public sealed class LocalProcessService
         }
         if (def?.GameType == GameType.Minecraft &&
             def.GameProfileKey != "minecraft-bedrock")
-            return FindJavaServerProcess(def);
+            return await FindJavaServerProcess(def);
         return await FindLocalProcessAsync(exePath, ct);
     }
 
