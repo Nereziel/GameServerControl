@@ -215,6 +215,9 @@ installation view, with explicit port, edition, version and license acceptance.
 All downloads use vendor/marketplace HTTPS origins only. GSC does not run arbitrary
 installer scripts received from a public URL.
 
+For interrupted installs, cancellation and registration recovery without
+re-downloading Minecraft, see [Installation continuity and recovery](docs/installation-recovery.md).
+
 Official documentation: [Minecraft Java server](https://www.minecraft.net/en-us/download/server),
 [Bedrock Dedicated Server](https://www.minecraft.net/en-us/download/server/bedrock),
 [PaperMC downloads](https://docs.papermc.io/misc/downloads-service/),
