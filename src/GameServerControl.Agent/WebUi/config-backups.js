@@ -34,7 +34,7 @@ function configField(f, v) {
     return `<div class="field"><label>${lab}</label><div class="checkrow"><input data-cfg="${key}" type="checkbox" ${String(v).toLowerCase() === 'true' ? 'checked' : ''}><span>Enabled</span></div>${desc}</div>`;
   }
   if (f.type === 'Choice') {
-    return `<div class="field"><label>${lab}</label><select data-cfg="${key}">${(f.choices || []).map(x => `<option ${String(x) === String(v) ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>${desc}</div>`;
+    return `<div class="field"><label>${lab}</label><select data-cfg="${key}">${(f.choices || []).map(x => `<option ${String(x).toLowerCase() === String(v).toLowerCase() ? 'selected' : ''}>${esc(x)}</option>`).join('')}</select>${desc}</div>`;
   }
   if (f.type === 'Multiline') {
     return `<div class="field"><label>${lab}</label><textarea data-cfg="${key}">${esc(v)}</textarea>${desc}</div>`;
