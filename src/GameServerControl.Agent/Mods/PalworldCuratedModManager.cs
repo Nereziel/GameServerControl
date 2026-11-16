@@ -294,7 +294,7 @@ public sealed class PalworldCuratedModManager : IModManager
     private void UpdateMetadata(ServerDef def, Action<Dictionary<string, SidecarEntry>> mutate)
     {
         var path = MetadataPath(def);
-        var dict = LoadMetadata(def);
+        var dict = ModMetadataStore.ReadForUpdate<SidecarEntry>(path);
         mutate(dict);
         // A failed sidecar write must trigger file rollback, not silently succeed.
         ModMetadataStore.WriteAtomic(path,

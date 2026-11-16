@@ -162,6 +162,12 @@ public sealed class ArkWorkshopModManager : IModManager
             _logger.LogInformation(modIdsHint);
             return new ModInstallResult(true, info with { Source = info.Source + " | " + modIdsHint }, null);
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ARK mod update failed for {Id}", workshopId);
+            return new ModInstallResult(false, null,
+                "Mod replacement or metadata persistence failed. Check Agent logs before retrying.");
+        }
         finally
         {
             replacement?.Dispose();
@@ -253,7 +259,7 @@ public sealed class ArkWorkshopModManager : IModManager
     private void UpdateMetadata(ServerDef def, Action<Dictionary<string, SidecarEntry>> mutate)
     {
         var path = MetadataPath(def);
-        var dict = LoadMetadata(def);
+        var dict = ModMetadataStore.ReadForUpdate<SidecarEntry>(path);
         mutate(dict);
         // A failed sidecar write must trigger file rollback, not silently succeed.
         ModMetadataStore.WriteAtomic(path,
