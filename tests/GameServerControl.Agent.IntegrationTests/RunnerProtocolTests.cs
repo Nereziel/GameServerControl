@@ -141,6 +141,40 @@ public sealed class RunnerProtocolTests
         Assert.NotNull(new RunnerRequest(RunnerCommand.SendConsoleInput, ConsoleInput: new string('x', RunnerProtocolLimits.MaxConsoleInputChars + 1)).Validate());
     }
 
+    [Fact]
+    public void Runner_payload_acl_grants_existing_files_and_revokes_recursively()
+    {
+        var runnerRoot = @"C:\GameServerControl\Runner";
+        var serviceAccount = @"NT SERVICE\GameServerControlRunner_8bc0d26edc306dab";
+
+        Assert.Equal(
+            new[] { runnerRoot, "/grant", serviceAccount + ":(OI)(CI)(RX)" },
+            RunnerServiceSecurity.PayloadDirectoryGrant(runnerRoot, serviceAccount));
+        Assert.Equal(
+            new[] { runnerRoot, "/grant", serviceAccount + ":(RX)", "/T" },
+            RunnerServiceSecurity.ExistingPayloadGrant(runnerRoot, serviceAccount));
+        Assert.Equal(
+            new[] { runnerRoot, "/remove:g", serviceAccount, "/T" },
+            RunnerServiceSecurity.PayloadRevoke(runnerRoot, serviceAccount));
+    }
+
+    [Fact]
+    public void Runner_service_identity_check_rejects_local_system_and_unrelated_accounts()
+    {
+        var identity = RunnerIdentity.ForServer("dragonwilds");
+        var expected = "NT SERVICE\\" + identity.ServiceName;
+        var valid = "SERVICE_NAME: " + identity.ServiceName + "\\nSERVICE_START_NAME : " + expected;
+        var system = "SERVICE_NAME: " + identity.ServiceName + "\\nSERVICE_START_NAME : LocalSystem";
+        var other = "SERVICE_NAME: " + identity.ServiceName +
+                    "\\nSERVICE_START_NAME : NT SERVICE\\GameServerControlRunner_other";
+
+        Assert.True(RunnerServiceSecurity.HasExpectedAccount(valid, expected));
+        Assert.True(RunnerServiceSecurity.HasExpectedAccount(valid.ToLowerInvariant(), expected));
+        Assert.False(RunnerServiceSecurity.HasExpectedAccount(system, expected));
+        Assert.False(RunnerServiceSecurity.HasExpectedAccount(other, expected));
+        Assert.False(RunnerServiceSecurity.HasExpectedAccount("Error 1060", expected));
+    }
+
     private static RunnerManifest Manifest(string executable, string workingDirectory, string[] stopProcessNames) =>
         new(
             "alpha",
