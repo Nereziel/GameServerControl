@@ -63,4 +63,26 @@ assert.ok(!requestPaths.some(([p])=>p.endsWith('/jobs')),
 assert.ok(!jobs.innerHTML.includes('cancelInstallJob'),
   'Legacy agents should never display a cancel control');
 
-console.log('Install history recovery, cancellation and legacy Agent fallback passed.');
+
+// A cleared completed install should stay dismissed even after Agent resync
+// and browser reload; the durable Agent history itself must remain intact.
+featureEnabled=true;
+currentVersion={...job,phase:'done',line:'Installed',percentHint:100,finished:true,success:true};
+vm.runInContext('INSTALL_HISTORY_POLL_AT[jobKey()] = 0',context);
+await context.refreshJobs();
+assert.equal(context.loadJobRefs().length,1);
+context.clearFinishedJobs();
+assert.equal(context.loadJobRefs().length,0,'Clear finished should remove the visible job');
+vm.runInContext('INSTALL_HISTORY_POLL_AT[jobKey()] = 0',context);
+await context.refreshJobs();
+assert.equal(context.loadJobRefs().length,0,
+  'Completed jobs explicitly cleared by the user must not be reimported by Agent history');
+
+const reloaded={...context,JOB_CACHE:{}};
+vm.createContext(reloaded);
+vm.runInContext(script.slice(0,split),reloaded);
+await reloaded.refreshJobs();
+assert.equal(reloaded.loadJobRefs().length,0,
+  'Explicitly cleared jobs must stay hidden after a browser reload');
+
+console.log('Install history recovery, cancellation, dismissal and legacy Agent fallback passed.');
