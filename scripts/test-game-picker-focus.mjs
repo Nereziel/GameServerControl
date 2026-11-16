@@ -25,7 +25,10 @@ const context = {
     assert.equal(title, 'Create server');
     modalRenders++;
     input = {value:'',isFocused:false,focus(){this.isFocused = true}};
-    results = {innerHTML:html.match(/<div id="gamePickerResults" class="games">([\\s\\S]*?)<\\/div>\\s*$/)?.[1] ?? ''};
+    const marker = '<div id="gamePickerResults" class="games">';
+    const resultStart = html.indexOf(marker);
+    assert.ok(resultStart >= 0, 'Picker needs a dedicated result container');
+    results = {innerHTML:html.slice(resultStart + marker.length)};
   },
   $: selector => selector === '#gameSearch' ? input : selector === '#gamePickerResults' ? results : null
 };
