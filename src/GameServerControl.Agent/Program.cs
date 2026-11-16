@@ -250,6 +250,20 @@ api.MapGet("/version", (UpdateChecker checker) => Results.Ok(checker.Latest));
 api.MapPost("/version/check", async (UpdateChecker checker, CancellationToken ct) =>
     Results.Ok(await checker.CheckAsync(ct)));
 api.MapGet("/game-profiles", () => Results.Ok(GameProfiles.All));
+api.MapGet("/capabilities", () => Results.Ok(new
+{
+    schemaVersion = 1,
+    features = new[]
+    {
+        "minecraft.install",
+        "minecraft.java.mods",
+        "minecraft.bedrock.addons",
+        "install.cancel",
+        "install.history",
+        "install.restart-recovery",
+        "backup.retention.safe"
+    }
+}));
 api.MapPost("/update", (AgentUpdateService updater) =>
 {
     var result = updater.StartLatestUpdate();
@@ -323,6 +337,15 @@ api.MapPost("/servers/{id}/minecraft/bedrock/addons", async (
         return Results.BadRequest(new { error = "Unable to import Bedrock add-on: " + ex.Message });
     }
 });
+api.MapGet("/servers/install/jobs", (ServerInstaller installer) =>
+    Results.Ok(installer.ListJobs())).RequireAuthorization("admin");
+api.MapPost("/servers/install/{jobId}/cancel", (string jobId, ServerInstaller installer) =>
+{
+    if (installer.Get(jobId) is null) return Results.NotFound();
+    return installer.CancelJob(jobId)
+        ? Results.Accepted(value: new { requested = true, jobId })
+        : Results.Conflict(new { error = "Install job has already finished." });
+}).RequireAuthorization("admin");
 api.MapGet("/servers/install/{jobId}", (string jobId, ServerInstaller installer) =>
 {
     var p = installer.Get(jobId);

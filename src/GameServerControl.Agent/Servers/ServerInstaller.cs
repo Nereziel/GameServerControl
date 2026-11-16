@@ -71,12 +71,26 @@ public sealed class ServerInstaller
         }
     }
 
+    public IReadOnlyList<InstallProgress> ListJobs()
+    {
+        PruneCompletedJobs();
+        return _jobs.Values.Select(state =>
+        {
+            lock (state.Gate) return state.Snapshot;
+        }).OrderByDescending(job => job.UpdatedAt ?? job.StartedAt ?? DateTimeOffset.MinValue)
+          .Take(InstallJobJournal.MaxRecords)
+          .ToArray();
+    }
+
     public bool CancelJob(string jobId)
     {
         if (!_jobs.TryGetValue(jobId, out var state)) return false;
         lock (state.Gate)
+        {
             if (state.Snapshot.Finished) return false;
-        state.Cancellation.Cancel();
+            try { state.Cancellation.Cancel(); }
+            catch (ObjectDisposedException) { return false; }
+        }
         return true;
     }
 
