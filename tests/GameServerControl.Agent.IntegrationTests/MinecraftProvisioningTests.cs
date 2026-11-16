@@ -115,6 +115,66 @@ public sealed class MinecraftProvisioningTests
     }
 
     [Fact]
+    public void Zip_extraction_rejects_compression_bombs()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gsc-mc-bomb-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var archiveFile = Path.Combine(root, "bomb.zip");
+            using (var output = File.Create(archiveFile))
+            using (var zip = new ZipArchive(output, ZipArchiveMode.Create))
+            using (var entry = zip.CreateEntry("highly-compressible.bin", CompressionLevel.SmallestSize).Open())
+            {
+                var block = new byte[1024 * 1024];
+                for (var i = 0; i < 5; i++) entry.Write(block);
+            }
+            Assert.Throws<InvalidDataException>(() =>
+                MinecraftServerPackages.ExtractSafeZip(archiveFile, Path.Combine(root, "stage")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void Zip_extraction_rejects_unix_symlink_entries()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gsc-mc-link-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var archiveFile = Path.Combine(root, "symlink.zip");
+            using (var output = File.Create(archiveFile))
+            using (var zip = new ZipArchive(output, ZipArchiveMode.Create))
+            {
+                var entry = zip.CreateEntry("behavior_packs/linked");
+                entry.ExternalAttributes = unchecked((int)(0xA1FFu << 16));
+                using var writer = new StreamWriter(entry.Open());
+                writer.Write("../../outside");
+            }
+            Assert.Throws<InvalidDataException>(() =>
+                MinecraftServerPackages.ExtractSafeZip(archiveFile, Path.Combine(root, "stage")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void Zip_extraction_rejects_too_many_entries()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gsc-mc-count-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var archiveFile = Path.Combine(root, "entries.zip");
+            using (var output = File.Create(archiveFile))
+            using (var zip = new ZipArchive(output, ZipArchiveMode.Create))
+                for (var i = 0; i < 4097; i++) zip.CreateEntry("entry-" + i);
+            Assert.Throws<InvalidDataException>(() =>
+                MinecraftServerPackages.ExtractSafeZip(archiveFile, Path.Combine(root, "stage")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void Bedrock_zip_extraction_accepts_real_folders()
     {
         var root = Path.Combine(Path.GetTempPath(), "gsc-mc-zip-" + Guid.NewGuid().ToString("N"));

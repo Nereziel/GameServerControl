@@ -117,13 +117,15 @@ public sealed class BackupService
                 return new ActionResult(false, created.Error ?? "Backup failed", corr);
 
             await PruneBareMetalAsync(def, ct);
-            _tracker.Update(id, s => s with { LastBackupAt = DateTimeOffset.UtcNow });
             var mb = (created.SizeBytes ?? 0) / 1024d / 1024d;
-            var warning = created.Metadata?.SkippedFiles > 0
-                ? $" Warning: skipped {created.Metadata.SkippedFiles} locked file(s); this backup is not restorable."
-                : "";
+            if (created.Metadata?.SkippedFiles is > 0)
+                return new ActionResult(false,
+                    $"Incomplete backup retained for inspection: {Path.GetFileName(created.Path)} ({mb:0.##} MB); " +
+                    $"{created.Metadata.SkippedFiles} file(s) were skipped. Restore is disabled. Complete backups are preserved independently.",
+                    corr);
+            _tracker.Update(id, state => state with { LastBackupAt = DateTimeOffset.UtcNow });
             return new ActionResult(true,
-                $"Backup created: {Path.GetFileName(created.Path)} ({mb:0.##} MB).{warning}", corr);
+                $"Backup created: {Path.GetFileName(created.Path)} ({mb:0.##} MB).", corr);
         }
 
         if (!OperatingSystem.IsWindows())
@@ -481,13 +483,7 @@ public sealed class BackupService
     private async Task PruneBareMetalAsync(ServerDef def, CancellationToken ct)
     {
         var list = ListBareMetal(def);
-        var normalKeep = EffectiveBackupRetention(def);
-        foreach (var item in list.Where(x => x.Kind == BackupKind.Archive).Skip(normalKeep))
-        {
-            ct.ThrowIfCancellationRequested();
-            DeleteArchiveByName(def, item.CheckpointName);
-        }
-        foreach (var item in list.Where(x => x.Kind == BackupKind.SafetyArchive).Skip(3))
+        foreach (var item in BackupRetentionPolicy.SelectBareMetalEvictions(list, EffectiveBackupRetention(def)))
         {
             ct.ThrowIfCancellationRequested();
             DeleteArchiveByName(def, item.CheckpointName);

@@ -290,10 +290,24 @@ public sealed class MinecraftServerPackages
         (uri.Host is "piston-data.mojang.com" or "meta.fabricmc.net" or "www.minecraft.net" ||
          uri.Host == "fill-data.papermc.io" || uri.Host.EndsWith(".papermc.io", StringComparison.Ordinal));
 
+    private const int MaxMinecraftZipEntries = 4096;
+    private const long MaxMinecraftZipEntryBytes = 512L * 1024 * 1024;
+    private const long MaxMinecraftZipExpandedBytes = 2L * 1024 * 1024 * 1024;
+    private const long MaxMinecraftZipRatio = 1000;
+
+    /// <summary>
+    /// Extract official Minecraft Bedrock artifacts and user-provided add-on archives.
+    /// Backup archives use their own validation; no backup size limits are changed.
+    /// </summary>
     public static void ExtractSafeZip(string zip, string root)
     {
         var folder = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         using var archive = ZipFile.OpenRead(zip);
+        if (archive.Entries.Count > MaxMinecraftZipEntries)
+            throw new InvalidDataException("Minecraft ZIP contains too many entries.");
+
+        long expanded = 0;
+        // Preflight the whole archive before writing the first file.
         foreach (var entry in archive.Entries)
         {
             var rel = entry.FullName.Replace('\\', '/');
@@ -305,15 +319,48 @@ public sealed class MinecraftServerPackages
             if (!output.StartsWith(folder + Path.DirectorySeparatorChar,
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
                 throw new InvalidDataException("Bedrock archive escapes installation root.");
-            if (entry.FullName.EndsWith('/'))
-                Directory.CreateDirectory(output);
-            else
+
+            // ZIP Unix mode may describe links or special device nodes.
+            var unixMode = (entry.ExternalAttributes >> 16) & 0xF000;
+            if (unixMode != 0 && unixMode is not (0x8000 or 0x4000))
+                throw new InvalidDataException("Minecraft ZIP contains an unsafe link or special file.");
+
+            if (entry.Length < 0 || entry.Length > MaxMinecraftZipEntryBytes ||
+                expanded > MaxMinecraftZipExpandedBytes - entry.Length)
+                throw new InvalidDataException("Minecraft ZIP exceeds safe uncompressed size limits.");
+            expanded += entry.Length;
+            if (entry.Length > 1024 * 1024 &&
+                (entry.CompressedLength == 0 || entry.Length / entry.CompressedLength > MaxMinecraftZipRatio))
+                throw new InvalidDataException("Minecraft ZIP has excessive compression amplification.");
+        }
+
+        long written = 0;
+        foreach (var entry in archive.Entries)
+        {
+            var rel = entry.FullName.Replace('\\', '/');
+            var output = Path.GetFullPath(Path.Combine(folder, rel.Replace('/', Path.DirectorySeparatorChar)));
+            if (rel.EndsWith('/'))
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-                using var target = new FileStream(output, FileMode.CreateNew, FileAccess.Write);
-                using var from = entry.Open();
-                from.CopyTo(target);
+                Directory.CreateDirectory(output);
+                continue;
             }
+            Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+            using var target = new FileStream(output, FileMode.CreateNew, FileAccess.Write);
+            using var source = entry.Open();
+            var buffer = new byte[64 * 1024];
+            long entryWritten = 0;
+            int count;
+            while ((count = source.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                if (count > MaxMinecraftZipEntryBytes - entryWritten ||
+                    count > MaxMinecraftZipExpandedBytes - written)
+                    throw new InvalidDataException("Minecraft ZIP extraction exceeded safe output limits.");
+                target.Write(buffer, 0, count);
+                entryWritten += count;
+                written += count;
+            }
+            if (entryWritten != entry.Length)
+                throw new InvalidDataException("Minecraft ZIP entry size did not match declared size.");
         }
     }
 
