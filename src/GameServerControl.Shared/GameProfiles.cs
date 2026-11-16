@@ -124,7 +124,7 @@ public static class GameProfiles
             LinuxSaveDirs: new[]{ "{root}/data" },
             LinuxLogPath: "{root}/logs/valheim.log"),
 
-        new("dragonwilds", "RuneScape: Dragonwilds", "🐉", GameType.SteamGeneric, "4019830", "Dragonwilds", "RSDragonwilds.exe",
+        new("dragonwilds", "RuneScape: Dragonwilds", "🐉", GameType.SteamGeneric, "4019830", "Dragonwilds", "RSDragonwildsServer.exe",
             new[]{ "-log", "-NewConsole", "-Port=7777", "-BeaconPort=8888" },
             new[]{ @"{root}\RSDragonwilds\Saved\Savegames" }, @"{root}\RSDragonwilds\Saved\Logs\RSDragonwilds.log",
             new GameCapabilities(ManagedConfig: true, LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.LogOnly),
