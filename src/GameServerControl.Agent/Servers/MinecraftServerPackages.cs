@@ -78,6 +78,10 @@ public sealed class MinecraftServerPackages
         // Do not follow a pre-existing final directory or overwrite existing worlds.
         if (Directory.Exists(root) || File.Exists(root))
             throw new IOException("Install directory already exists.");
+        // Fail before downloading large game assets when Java is unavailable.
+        var javaExecutable = profile.Key == "minecraft-bedrock" ? null : ResolveJavaExecutable();
+        if (profile.Key != "minecraft-bedrock" && javaExecutable is null)
+            throw new InvalidOperationException("A compatible Java runtime was not found. Install Java and configure machine-wide JAVA_HOME/PATH, then restart the Agent.");
         var stage = Path.Combine(parent, ".gsc-minecraft-stage-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(stage);
         var committed = false;
@@ -120,9 +124,7 @@ public sealed class MinecraftServerPackages
             }
             var exePath = profile.Key == "minecraft-bedrock"
                 ? profile.BuildExecutablePath(root)
-                : ResolveJavaExecutable();
-            if (exePath is null)
-                throw new InvalidOperationException("Java runtime was not found. Install a compatible Java version and configure JAVA_HOME/PATH, then retry.");
+                : javaExecutable!;
             var args = profile.Key == "minecraft-bedrock" ? Array.Empty<string>() : new[]
             {
                 "-Xms512M", "-Xmx" + req.MemoryMb + "M", "-jar", "server.jar", "nogui"
