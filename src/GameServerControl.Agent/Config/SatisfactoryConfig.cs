@@ -147,6 +147,26 @@ public sealed class SatisfactoryConfig : IGameConfig
 
     // ---- write ----
 
+    // The live API does not reveal the existing client password. Blank means keep
+    // it; removing it requires an explicit checkbox rather than a default-empty form.
+    public static string? ResolveClientPasswordUpdate(IReadOnlyDictionary<string, string> values)
+    {
+        string? replacement = null;
+        var clear = false;
+        foreach (var (key, value) in values)
+        {
+            if (key.Equals("ClientPassword", StringComparison.OrdinalIgnoreCase))
+                replacement = value;
+            else if (key.Equals("ClearClientPassword", StringComparison.OrdinalIgnoreCase))
+                clear = string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!clear) return string.IsNullOrEmpty(replacement) ? null : replacement;
+        if (!string.IsNullOrEmpty(replacement))
+            throw new ArgumentException("Cannot set and remove the Satisfactory join password in the same save.");
+        return "";
+    }
+
     public async Task<bool> WriteAsync(ServerDef def, Dictionary<string, string> values, CancellationToken ct)
     {
         if (def.HostingMode != HostingMode.BareMetal)
@@ -162,7 +182,7 @@ public sealed class SatisfactoryConfig : IGameConfig
         var iniOps = new Dictionary<string, List<(string Section, string IniKey, string Value)>>(StringComparer.OrdinalIgnoreCase);
         var apiAgs = new Dictionary<string, object>();
         string? serverNameNew = null;
-        string? clientPasswordNew = null;
+        string? clientPasswordNew = ResolveClientPasswordUpdate(values);
 
         foreach (var (schemaKey, rawVal) in values)
         {
@@ -178,7 +198,8 @@ public sealed class SatisfactoryConfig : IGameConfig
                 continue;
             }
             if (schemaKey.Equals("ServerName", StringComparison.OrdinalIgnoreCase)) { serverNameNew = rawVal; continue; }
-            if (schemaKey.Equals("ClientPassword", StringComparison.OrdinalIgnoreCase)) { if (!string.IsNullOrEmpty(rawVal)) clientPasswordNew = rawVal; continue; }
+            if (schemaKey.Equals("ClientPassword", StringComparison.OrdinalIgnoreCase) ||
+                schemaKey.Equals("ClearClientPassword", StringComparison.OrdinalIgnoreCase)) continue;
             // ActiveSessionName is read-only — the server manages it. To change it, edit
             // ServerName (RenameServer) or load a different save in-game.
             if (schemaKey.Equals("ActiveSessionName", StringComparison.OrdinalIgnoreCase)) continue;
