@@ -214,18 +214,53 @@ public static class GameProfiles
             new[]{ @"{root}\data\DST\MyCluster" }, null, Basic,
             Notes: "Klei's -persistent_storage_root override keeps the cluster under the server folder.", Installable: true, EstimatedSize: "~1 GB"),
 
-        new("minecraft", "Minecraft (Java)", "⛏", GameType.Minecraft, null, "Minecraft", "server.jar",
-            new[]{ "java", "-Xmx4G", "-Xms4G", "-jar", "server.jar", "nogui" },
+        new("minecraft", "Minecraft Java – Vanilla", "⛏", GameType.Minecraft, null, "MinecraftJava", "java",
+            new[]{ "-Xms1G", "-Xmx4G", "-jar", "server.jar", "nogui" },
             new[]{ @"{root}\world", @"{root}\world_nether", @"{root}\world_the_end" }, @"{root}\logs\latest.log",
-            new GameCapabilities(LiveLog: true, ConsoleMode: GameConsoleMode.LogOnly),
-            Notes: "Manual registration only; Minecraft installation is not handled by SteamCMD.",
-            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Tcp, 25565) }),
+            new GameCapabilities(LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.Stdin),
+            Notes: "Official Mojang Java server. Needs a compatible Java runtime installed and explicit Minecraft EULA acceptance.",
+            Installable: true, EstimatedSize: "~1 GB + world",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Tcp, 25565) },
+            LinuxSaveDirs: new[]{ "{root}/world", "{root}/world_nether", "{root}/world_the_end" },
+            LinuxLogPath: "{root}/logs/latest.log"),
+
+        new("minecraft-paper", "Minecraft Java – Paper (plugins)", "⛏", GameType.Minecraft, null, "MinecraftPaper", "java",
+            new[]{ "-Xms1G", "-Xmx4G", "-jar", "server.jar", "nogui" },
+            new[]{ @"{root}\world", @"{root}\world_nether", @"{root}\world_the_end" }, @"{root}\logs\latest.log",
+            new GameCapabilities(Mods: true, LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.Stdin),
+            Notes: "PaperMC stable builds and server plugins in plugins/. A compatible Java runtime is required.",
+            Installable: true, EstimatedSize: "~1 GB + plugins/world",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Tcp, 25565) },
+            LinuxSaveDirs: new[]{ "{root}/world", "{root}/world_nether", "{root}/world_the_end" },
+            LinuxLogPath: "{root}/logs/latest.log"),
+
+        new("minecraft-fabric", "Minecraft Java – Fabric (mods)", "⛏", GameType.Minecraft, null, "MinecraftFabric", "java",
+            new[]{ "-Xms1G", "-Xmx4G", "-jar", "server.jar", "nogui" },
+            new[]{ @"{root}\world", @"{root}\world_nether", @"{root}\world_the_end" }, @"{root}\logs\latest.log",
+            new GameCapabilities(Mods: true, LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.Stdin),
+            Notes: "Fabric launcher and mods in mods/. Fabric API is frequently required. A compatible Java runtime is required.",
+            Installable: true, EstimatedSize: "~1 GB + mods/world",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Tcp, 25565) },
+            LinuxSaveDirs: new[]{ "{root}/world", "{root}/world_nether", "{root}/world_the_end" },
+            LinuxLogPath: "{root}/logs/latest.log"),
+
+        new("minecraft-bedrock", "Minecraft Bedrock – Official", "⛏", GameType.Minecraft, null, "MinecraftBedrock", "bedrock_server.exe",
+            Array.Empty<string>(), new[]{ @"{root}\worlds" }, null,
+            new GameCapabilities(LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.Stdin),
+            Notes: "Official Bedrock Dedicated Server, UDP 19132. Supported on Windows and Ubuntu Linux; uses behavior/resource packs, not Java plugins.",
+            Installable: true, EstimatedSize: "~1 GB + worlds",
+            DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 19132) },
+            LinuxExecutableRelative: "bedrock_server",
+            LinuxSaveDirs: new[]{ "{root}/worlds" }),
     };
 
     public static GameProfile? FindByKey(string? key)
         => string.IsNullOrWhiteSpace(key) ? null : All.FirstOrDefault(x => x.Key.Equals(key, StringComparison.OrdinalIgnoreCase));
 
     public static GameProfile? FindFor(ServerDef def)
-        => All.FirstOrDefault(x => !string.IsNullOrWhiteSpace(def.SteamAppId) && x.SteamAppId == def.SteamAppId)
+        => All.FirstOrDefault(x => !string.IsNullOrWhiteSpace(def.GameProfileKey)
+               && x.Key.Equals(def.GameProfileKey, StringComparison.OrdinalIgnoreCase)
+               && x.GameType == def.GameType)
+           ?? All.FirstOrDefault(x => !string.IsNullOrWhiteSpace(def.SteamAppId) && x.SteamAppId == def.SteamAppId)
            ?? All.FirstOrDefault(x => x.GameType == def.GameType && x.GameType != GameType.SteamGeneric);
 }

@@ -215,7 +215,7 @@ function profileToGame(p){
     saveRel:p.hostSaveDirs||p.saveDirs||[],logRel:p.hostLogPath??p.logPath??null,gameType:p.gameType||'SteamGeneric',
     rconPort:p.defaultRconPort??null,note:p.notes||'',installable:!!p.installable,ports:p.defaultPorts||[],
     caps:{config:!!c.managedConfig,mods:!!c.mods,rcon:!!c.rcon,players:!!c.playerManagement,log:!!c.liveLog,
-      console:consoleMode==='rcon'?'rcon':consoleMode==='logonly'?'log':null,hyperV:c.hyperV!==false,scheduledTask:c.scheduledTask!==false}
+      console:consoleMode==='rcon'?'rcon':consoleMode==='logonly'?'log':consoleMode==='stdin'?'stdin':null,hyperV:c.hyperV!==false,scheduledTask:c.scheduledTask!==false}
   };
 }
 
@@ -277,7 +277,7 @@ window.addEventListener('DOMContentLoaded',init);
 
 async function refreshAll(){await Promise.allSettled([loadServers(),refreshJobs(false),...(ACTIVE_HOST_ID==='all'?[]:[checkForUpdate(false)])])}
 async function loadServers(){try{const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;renderServers()}catch(e){toast('Refresh failed: '+e.message,'err')}}
-function profileFor(d){return PROFILES.find(g=>g.appId&&g.appId===d.steamAppId)||PROFILES.find(g=>g.gameType===d.gameType&&g.gameType!=='SteamGeneric')||null}
+function profileFor(d){return PROFILES.find(g=>g.key===d.gameProfileKey)||PROFILES.find(g=>g.appId&&g.appId===d.steamAppId)||PROFILES.find(g=>g.gameType===d.gameType&&g.gameType!=='SteamGeneric')||null}
 function serverMeta(d){const g=profileFor(d);return g?{icon:g.icon,label:g.label,profile:g}:{icon:'🖥',label:d.gameType||'Server',profile:{caps:{}}}}
 
 function renderServers(){
