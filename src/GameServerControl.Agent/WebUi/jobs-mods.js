@@ -17,15 +17,23 @@ function dismissJobIds(ids){
 }
 
 const INSTALL_HISTORY_POLL_AT={};
+function installHostSelection(){
+  return {id:ACTIVE_HOST_ID,epoch:typeof HOST_SWITCH_EPOCH==='number'?HOST_SWITCH_EPOCH:0};
+}
+function isSelectedInstallHost(selection){
+  return selection.id===ACTIVE_HOST_ID&&
+    (typeof HOST_SWITCH_EPOCH!=='number'||selection.epoch===HOST_SWITCH_EPOCH);
+}
 async function recoverServerInstallJobs(){
   if(ACTIVE_HOST_ID==='all'||!supportsAgentFeature('install.history')||
       (typeof isReadOnly==='function'&&isReadOnly()))return;
+  const selection=installHostSelection();
   const key=jobKey(), now=Date.now();
   if(now-(INSTALL_HISTORY_POLL_AT[key]||0)<30000)return;
   INSTALL_HISTORY_POLL_AT[key]=now;
   try{
     const records=await api('/api/servers/install/jobs');
-    if(!Array.isArray(records))return;
+    if(!isSelectedInstallHost(selection)||!Array.isArray(records))return;
     const existing=loadJobRefs();
     const dismissed=loadDismissedJobIds();
     const known=new Set(existing.map(x=>x.jobId));
@@ -48,17 +56,23 @@ async function recoverServerInstallJobs(){
 
 async function refreshJobs(render=true){
   if(ACTIVE_HOST_ID==='all'){if(render||CURRENT_VIEW==='installs')renderJobs();return}
+  const selection=installHostSelection();
   await recoverServerInstallJobs();
+  if(!isSelectedInstallHost(selection))return;
   const refs=loadJobRefs();let active=0;
   for(const r of refs){
     try{
-      JOB_CACHE[r.jobId]=await api('/api/servers/install/'+encodeURIComponent(r.jobId));
-      if(!JOB_CACHE[r.jobId].finished)active++;
+      const progress=await api('/api/servers/install/'+encodeURIComponent(r.jobId));
+      if(!isSelectedInstallHost(selection))return;
+      JOB_CACHE[r.jobId]=progress;
+      if(!progress.finished)active++;
     }catch{
+      if(!isSelectedInstallHost(selection))return;
       JOB_CACHE[r.jobId]={jobId:r.jobId,phase:'expired',
         line:'Job history unavailable on this Agent.',finished:true,success:false,logLines:[]};
     }
   }
+  if(!isSelectedInstallHost(selection))return;
   const badge=$('#installBadge');
   if(badge){badge.textContent=active;badge.classList.toggle('hidden',active===0)}
   if(render||CURRENT_VIEW==='installs')renderJobs();
