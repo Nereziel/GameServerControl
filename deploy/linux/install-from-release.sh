@@ -37,7 +37,7 @@ echo "Repository: $REPO"
 [[ $EUID -eq 0 ]] || fail "Run as root (sudo)."
 
 step "Checking prerequisites"
-for tool in curl tar systemctl grep awk od tr hostname; do
+for tool in curl tar sha256sum systemctl grep awk od tr hostname; do
     command -v "$tool" >/dev/null 2>&1 || fail "$tool not found in PATH."
 done
 ok "curl, tar, systemctl all present."
@@ -112,7 +112,14 @@ cleanup() {
 }
 trap cleanup EXIT
 curl -fsSL "$tar_url" -o "$tmp_dir/agent.tar.gz"
-ok "Downloaded."
+checksums_url="$(echo "$release_json" | grep -oP '"browser_download_url":\\s*"\\Khttps://[^"]+/SHA256SUMS' | head -1)"
+[[ -n "$checksums_url" ]] || fail "Release $tag has no SHA256SUMS asset."
+curl -fsSL "$checksums_url" -o "$tmp_dir/SHA256SUMS"
+expected_sha="$(awk '$2 == "GameServerControl-Agent-linux.tar.gz" && length($1) == 64 && $1 ~ /^[a-fA-F0-9]+$/ { print $1 }' "$tmp_dir/SHA256SUMS")"
+[[ "$expected_sha" =~ ^[a-fA-F0-9]{64}$ ]] || fail "Agent checksum entry is missing, malformed or duplicated."
+printf '%s  %s\\n' "$expected_sha" "agent.tar.gz" |
+    (cd "$tmp_dir" && sha256sum --status -c -) || fail "Agent archive SHA-256 verification failed. Existing service was not modified."
+ok "Downloaded Agent verified against release SHA256SUMS."
 
 if systemctl is-active --quiet "$UNIT_NAME"; then
     step "Stopping existing $UNIT_NAME"

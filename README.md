@@ -99,6 +99,12 @@ C:\GameServerControl\Agent\appsettings.json
 
 ## Linux install
 
+The Agent and Relay Linux installers verify each downloaded release archive against the
+published SHA-256 manifest **before** stopping a service or extracting anything. This
+protects archives in transit but does not independently authenticate the mutable
+installer script itself. For higher assurance, download and verify the script from a
+versioned GitHub Release rather than executing the `main` branch directly.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/linux/install-from-release.sh | sudo bash
 ```

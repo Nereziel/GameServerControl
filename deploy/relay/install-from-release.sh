@@ -38,7 +38,7 @@ echo "---------------------------------"
 echo "Repository: $REPO"
 
 step "Checking prerequisites"
-for tool in curl tar systemctl tailscale iptables ip; do
+for tool in curl tar sha256sum systemctl tailscale iptables ip; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool not found in PATH."
 done
 ok "Required tools are present."
@@ -60,6 +60,13 @@ step "Downloading relay"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 curl -fsSL "$tar_url" -o "$tmp_dir/relay.tar.gz"
+checksums_url="$(echo "$release_json" | grep -oP '"browser_download_url":\\s*"\\Khttps://[^"]+/SHA256SUMS' | head -1)"
+[[ -n "$checksums_url" ]] || fail "Release $tag has no SHA256SUMS asset."
+curl -fsSL "$checksums_url" -o "$tmp_dir/SHA256SUMS"
+expected_sha="$(awk '$2 == "GameServerControl-Relay-linux.tar.gz" && length($1) == 64 && $1 ~ /^[a-fA-F0-9]+$/ { print $1 }' "$tmp_dir/SHA256SUMS")"
+[[ "$expected_sha" =~ ^[a-fA-F0-9]{64}$ ]] || fail "Relay checksum entry is missing, malformed or duplicated."
+printf '%s  %s\\n' "$expected_sha" "relay.tar.gz" |
+    (cd "$tmp_dir" && sha256sum --status -c -) || fail "Relay archive SHA-256 verification failed. Installation was not started."
 mkdir -p "$tmp_dir/relay"
 tar -xzf "$tmp_dir/relay.tar.gz" -C "$tmp_dir/relay"
 [[ -x "$tmp_dir/relay/GameServerControl.Relay" ]] || fail "Relay executable is missing from the release asset."
