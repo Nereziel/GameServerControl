@@ -98,9 +98,13 @@ async function cancelInstallJob(id){
 }
 function clearFinishedJobs(){
   const refs=loadJobRefs();
-  const finished=refs.filter(r=>JOB_CACHE[r.jobId]?.finished).map(r=>r.jobId);
+  const finished=new Set([
+    ...refs.filter(r=>JOB_CACHE[r.jobId]?.finished).map(r=>r.jobId),
+    ...Object.values(JOB_CACHE).filter(p=>p?.finished).map(p=>p.jobId)
+  ]);
+  // The server can return 100 records while only 30 are shown in the browser.
   dismissJobIds(finished);
-  saveJobRefs(refs.filter(r=>!finished.includes(r.jobId)));
+  saveJobRefs(refs.filter(r=>!finished.has(r.jobId)));
   renderJobs();
   refreshJobs(false);
 }
