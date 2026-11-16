@@ -107,4 +107,53 @@ await context.refreshJobs();
 assert.equal(context.loadJobRefs().length,0,
   'Clear finished must dismiss every terminal job returned by the Agent, not only visible cards');
 
-console.log('Install recovery, cancel, dismissal, multi-page history and legacy fallback passed.');
+
+// Switching computers while a network request is in flight must not mix
+// private installation history or status between the two host selections.
+const originalApi=context.api;
+let resolveOldHistory;
+context.ACTIVE_HOST_ID='computer-a';
+context.HOST_SWITCH_EPOCH=1;
+context.JOB_CACHE={};
+vm.runInContext('INSTALL_HISTORY_POLL_AT[jobKey()] = 0',context);
+context.api=(path,opts)=>{
+  if(path==='/api/servers/install/jobs')
+    return new Promise(resolve=>{resolveOldHistory=resolve});
+  return originalApi(path,opts);
+};
+const staleHistory=context.recoverServerInstallJobs();
+assert.equal(typeof resolveOldHistory,'function');
+context.ACTIVE_HOST_ID='computer-b';
+context.HOST_SWITCH_EPOCH=2;
+resolveOldHistory([{...job,jobId:'private-host-a',serverName:'From computer A'}]);
+await staleHistory;
+assert.equal(context.loadJobRefs().length,0,
+  'A response from computer A must not be stored under computer B');
+assert.equal(Object.keys(context.JOB_CACHE).length,0,
+  'Old host history must not populate the new host job cache');
+
+let resolveOldProgress;
+context.ACTIVE_HOST_ID='computer-a';
+context.HOST_SWITCH_EPOCH=3;
+context.saveJobRefs([{jobId:'stale-progress',name:'Old install',path:'/private/a'}]);
+context.api=(path,opts)=>{
+  if(path==='/api/servers/install/jobs')return Promise.resolve([]);
+  if(path==='/api/servers/install/stale-progress')
+    return new Promise(resolve=>{resolveOldProgress=resolve});
+  return originalApi(path,opts);
+};
+vm.runInContext('INSTALL_HISTORY_POLL_AT[jobKey()] = 0',context);
+const staleRefresh=context.refreshJobs();
+for(let i=0;i<10&&!resolveOldProgress;i++)
+  await new Promise(resolve=>setImmediate(resolve));
+assert.equal(typeof resolveOldProgress,'function');
+context.ACTIVE_HOST_ID='computer-b';
+context.HOST_SWITCH_EPOCH=4;
+context.JOB_CACHE={};
+resolveOldProgress({...job,jobId:'stale-progress'});
+await staleRefresh;
+assert.equal(Object.keys(context.JOB_CACHE).length,0,
+  'A delayed individual job response must not pollute the newly selected host');
+context.api=originalApi;
+
+console.log('Install recovery, dismissal, host isolation and legacy fallback passed.');
