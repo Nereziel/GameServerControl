@@ -175,6 +175,9 @@ only the local backup location is used.
 1. Mount a trusted SMB/NFS share (or another removable/off-machine volume) on
    the computer running the Agent. Ensure the Agent service account can create
    folders and write files there. Avoid links/junctions as destination roots.
+   **After mounting**, create a text file named `.gsc-offsite-ready` at the
+   share root. GSC refuses to copy if this marker disappears, preventing silent
+   writes to the empty local directory when a network mount is disconnected.
 2. Set `Agent:OffsiteBackupRoot` in the Agent configuration to the **absolute**
    mount directory. For example:
    ```json

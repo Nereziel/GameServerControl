@@ -45,12 +45,26 @@ public static class OffsiteBackupMirror
 
         var mount = Path.GetFullPath(offsiteRoot).TrimEnd(
             Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (mount == Path.GetPathRoot(mount) && !Directory.Exists(mount))
-            throw new DirectoryNotFoundException("Offsite filesystem must already be mounted.");
+        if (mount == Path.GetPathRoot(mount))
+            throw new ArgumentException("Offsite backup destination cannot be a filesystem root.");
         if (!Directory.Exists(mount))
             throw new DirectoryNotFoundException("Offsite backup directory is not available; mount it first.");
         RejectLink(mount);
+
         var outputDir = Path.Combine(mount, serverId);
+        var proposedFile = Path.GetFullPath(Path.Combine(outputDir, Path.GetFileName(source)));
+        if (string.Equals(proposedFile, source,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new ArgumentException("Local backup directory cannot also be used as offsite destination.");
+
+        // A marker must exist on the mounted storage. If an SMB/NFS mount
+        // disappears, the underlying local directory must not silently
+        // receive supposedly remote backup copies.
+        var marker = Path.Combine(mount, ".gsc-offsite-ready");
+        if (!File.Exists(marker))
+            throw new InvalidOperationException(
+                "Offsite storage verification marker is missing. Check that the network share is mounted.");
+        RejectLink(marker);
         if (Directory.Exists(outputDir)) RejectLink(outputDir);
         else Directory.CreateDirectory(outputDir);
 
