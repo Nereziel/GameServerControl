@@ -165,6 +165,41 @@ The Web UI is the primary control surface. It supports:
 
 The Web UI reads the current authenticated identity from `/api/auth/me`. A `ReadOnly` token can inspect status, configuration, backups and supported live output, but mutation controls and interactive commands are disabled. The Agent remains the authorization authority even if a browser control is missed.
 
+## Optional off-machine backup copies
+
+GameServerControl supports an **opt-in, integrity-verified** backup mirror to an
+already mounted network share or off-machine filesystem. No data is sent to an
+external service unless you explicitly configure its destination. By default,
+only the local backup location is used.
+
+1. Mount a trusted SMB/NFS share (or another removable/off-machine volume) on
+   the computer running the Agent. Ensure the Agent service account can create
+   folders and write files there. Avoid links/junctions as destination roots.
+   **After mounting**, create a text file named `.gsc-offsite-ready` at the
+   share root. GSC refuses to copy if this marker disappears, preventing silent
+   writes to the empty local directory when a network mount is disconnected.
+2. Set `Agent:OffsiteBackupRoot` in the Agent configuration to the **absolute**
+   mount directory. For example:
+   ```json
+   { "Agent": { "OffsiteBackupRoot": "/mnt/gsc-backups" } }
+   ```
+   Windows may use a dedicated UNC share path or a mounted volume.
+3. Restart the Agent service after updating its configuration. Take a test
+   backup and verify both the local and remote files and their metadata.
+
+GSC streams the finished local ZIP and `.meta.json` to the offsite directory,
+checks SHA-256, then publishes the completed files. It never overwrites a
+different remote copy and it never mirrors partial/non-restorable backups.
+If mirroring fails, the local backup remains intact and the operation reports
+failure. Before update/restore operations, a mirror failure also prevents the
+potentially destructive operation from starting.
+
+The offsite directory is **not automatically pruned** with local backup
+retention; this protects independent recovery history. Monitor remote disk
+space and periodically perform a manual restore drill. Existing backup archive
+size limits and local retention settings are unchanged. Hyper-V VM checkpoint
+exports and native R2/S3 API uploads are not supported by this initial mirror.
+
 ## Minecraft servers (Java and Bedrock)
 
 Minecraft is **not** installed through SteamCMD. Select **Create server** and choose one

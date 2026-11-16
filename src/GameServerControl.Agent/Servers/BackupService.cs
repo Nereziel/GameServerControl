@@ -65,6 +65,26 @@ public sealed class BackupService
     private string BackupRoot => _cfg["Agent:BackupRoot"] ??
         (OperatingSystem.IsWindows() ? @"C:\GameServerControl\Backups" : "/var/lib/gameservercontrol/backups");
 
+    private async Task<string?> MirrorOffsiteIfConfiguredAsync(
+        ServerDef def, string? localArchive, CancellationToken ct)
+    {
+        var target = _cfg["Agent:OffsiteBackupRoot"];
+        if (string.IsNullOrWhiteSpace(target)) return null;
+        try
+        {
+            if (localArchive is null)
+                throw new InvalidDataException("Local archive is unavailable for mirroring.");
+            await OffsiteBackupMirror.CopyAsync(localArchive, target, def.Id, ct);
+            return null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Offsite backup verification failed for {ServerId}", def.Id);
+            return "Offsite backup failed integrity or storage checks; check Agent logs and mounted backup storage.";
+        }
+    }
+
     private int DefaultBackupRetention
         => int.TryParse(_cfg["Agent:BackupRetention"], out var value) && value > 0
             ? Math.Clamp(value, 1, 200)
@@ -116,13 +136,20 @@ public sealed class BackupService
             if (!created.Success)
                 return new ActionResult(false, created.Error ?? "Backup failed", corr);
 
-            await PruneBareMetalAsync(def, ct);
             var mb = (created.SizeBytes ?? 0) / 1024d / 1024d;
             if (created.Metadata?.SkippedFiles is > 0)
+            {
+                await PruneBareMetalAsync(def, ct);
                 return new ActionResult(false,
                     $"Incomplete backup retained for inspection: {Path.GetFileName(created.Path)} ({mb:0.##} MB); " +
                     $"{created.Metadata.SkippedFiles} file(s) were skipped. Restore is disabled. Complete backups are preserved independently.",
                     corr);
+            }
+            var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, created.Path, ct);
+            if (offsiteProblem is not null)
+                return new ActionResult(false,
+                    $"Local backup retained: {Path.GetFileName(created.Path)}. " + offsiteProblem, corr);
+            await PruneBareMetalAsync(def, ct);
             _tracker.Update(id, state => state with { LastBackupAt = DateTimeOffset.UtcNow });
             return new ActionResult(true,
                 $"Backup created: {Path.GetFileName(created.Path)} ({mb:0.##} MB).", corr);
@@ -182,6 +209,10 @@ public sealed class BackupService
 
         if (!created.Success)
             return new ActionResult(false, created.Error ?? "Pre-update backup failed", corr);
+        var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, created.Path, ct);
+        if (offsiteProblem is not null)
+            return new ActionResult(false,
+                "Local pre-update snapshot retained, but update was cancelled. " + offsiteProblem, corr);
 
         await PruneBareMetalAsync(def, ct);
         _tracker.Update(id, current => current with { LastBackupAt = DateTimeOffset.UtcNow });
@@ -250,7 +281,7 @@ public sealed class BackupService
 
     private async Task<ActionResult> RestoreBareMetalFromArchiveAsync(ServerDef def, string backupName, string corr, CancellationToken ct)
     {
-        var (probeOk, runningPid) = await _local.FindProcessAsync(def.GuestExePath, ct);
+        var (probeOk, runningPid) = await _local.FindProcessAsync(def, ct);
         if (!probeOk)
             return new ActionResult(false, "Could not verify that the server process is stopped.", corr);
         if (runningPid is not null)
@@ -276,6 +307,10 @@ public sealed class BackupService
             ct);
         if (!safety.Success)
             return new ActionResult(false, "Safety backup failed: " + (safety.Error ?? "unknown error") + ". Restore was not started.", corr);
+        var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, safety.Path, ct);
+        if (offsiteProblem is not null)
+            return new ActionResult(false,
+                "Local pre-restore safety snapshot retained, but restore was not started. " + offsiteProblem, corr);
 
         await PruneBareMetalAsync(def, ct);
 
