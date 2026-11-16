@@ -82,6 +82,10 @@ public static class ModInstallTransaction
         string allowedRoot, IEnumerable<(string Source, string Destination)> replacements)
     {
         var root = Path.GetFullPath(allowedRoot);
+        // IsWithinRoot intentionally excludes the root itself. Resolve from the
+        // parent so a file directly inside allowedRoot can be checked safely.
+        var parent = Path.GetDirectoryName(root)
+            ?? throw new InvalidOperationException("A mod directory cannot be a filesystem root.");
         var txId = Guid.NewGuid().ToString("N");
         var seen = new HashSet<string>(OperatingSystem.IsWindows()
             ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -90,8 +94,8 @@ public static class ModInstallTransaction
             if (!File.Exists(pair.Source))
                 throw new FileNotFoundException("Staged mod file is missing.", pair.Source);
             var full = Path.GetFullPath(pair.Destination);
-            var relative = Path.GetRelativePath(root, full);
-            if (!ModRemovalSafety.TryResolveInstalledFile(root, root, relative, out var verified) ||
+            var relative = Path.GetRelativePath(parent, full);
+            if (!ModRemovalSafety.TryResolveInstalledFile(parent, root, relative, out var verified) ||
                 !string.Equals(verified, full, OperatingSystem.IsWindows()
                     ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal) ||
                 !seen.Add(full))
