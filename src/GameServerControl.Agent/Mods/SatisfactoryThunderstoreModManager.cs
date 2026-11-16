@@ -315,9 +315,8 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         var path = MetadataPath(def);
         var dict = LoadMetadata(def);
         mutate(dict);
-        // A failed write must propagate into the mod replacement transaction.
-        // Atomic rename avoids truncating the existing metadata on disk.
-        ModMetadataStore.WriteAtomic(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));", path);
-        }
+        // A failed sidecar write must trigger file rollback, not silently succeed.
+        ModMetadataStore.WriteAtomic(path,
+            JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
     }
 }
