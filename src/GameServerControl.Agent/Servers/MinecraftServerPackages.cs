@@ -89,6 +89,16 @@ public sealed class MinecraftServerPackages
         {
             progress("Resolving official Minecraft server download…");
             var (download, version, sha1, sha256) = await ResolveAsync(profile.Key, req.Version, ct);
+            if (javaExecutable is not null)
+            {
+                progress("Checking Java runtime compatibility…");
+                var actualJava = await MinecraftJavaRuntime.DetectMajorAsync(javaExecutable, ct);
+                var requiredJava = MinecraftJavaRuntime.MinimumJavaMajor(version);
+                if (requiredJava.HasValue && actualJava < requiredJava.Value)
+                    throw new InvalidOperationException(
+                        $"Minecraft {version} requires Java {requiredJava.Value} or later, but {javaExecutable} runs Java {actualJava}. " +
+                        "Install a compatible Java runtime and restart the Agent before retrying.");
+            }
             var artifact = Path.Combine(stage, profile.Key == "minecraft-bedrock" ? "bedrock-package.zip" : "server.jar");
             progress("Downloading Minecraft " + profile.Label + " " + version);
             await DownloadAsync(download, artifact, sha1, sha256, ct);
