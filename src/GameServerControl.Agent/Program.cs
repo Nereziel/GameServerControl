@@ -102,6 +102,16 @@ builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
 builder.Services.AddSingleton<SteamCmdManager>();
 builder.Services.AddSingleton<ServerInstaller>();
+builder.Services.AddSingleton<MinecraftServerPackages>();
+builder.Services.AddHttpClient("minecraft-installer", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(20);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("GameServerControl/1.1 (+https://github.com/Nereziel/GameServerControl)");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseProxy = false
+});
 builder.Services.AddSingleton<DiscordNotifier>();
 builder.Services.AddSingleton<UpdateChecker>();
 builder.Services.AddSingleton<AgentUpdateService>();
@@ -261,6 +271,20 @@ api.MapPost("/servers/install", (InstallServerRequest req, ServerInstaller insta
         return Results.Conflict(new { error = $"Server with id '{req.ServerDef.Id}' already exists." });
     var jobId = installer.StartJob(req);
     return Results.Ok(new InstallJobAck(jobId, "Install job queued"));
+});
+api.MapPost("/servers/minecraft/install", (MinecraftInstallRequest request,
+    ServerInstaller installer, ServerRegistry registry) =>
+{
+    var validation = MinecraftServerPackages.Validate(request);
+    if (validation is not null) return Results.BadRequest(new { error = validation });
+    if (registry.Get(request.ServerId) is not null)
+        return Results.Conflict(new { error = "A server with this ID already exists." });
+    try
+    {
+        var jobId = installer.StartMinecraftJob(request);
+        return Results.Ok(new InstallJobAck(jobId, "Minecraft installation queued"));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
 api.MapGet("/servers/install/{jobId}", (string jobId, ServerInstaller installer) =>
 {

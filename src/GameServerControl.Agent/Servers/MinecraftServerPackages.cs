@@ -291,7 +291,7 @@ public sealed class MinecraftServerPackages
         {
             var rel = entry.FullName.Replace('\\', '/');
             if (string.IsNullOrWhiteSpace(rel) || rel.StartsWith('/') ||
-                rel.Split('/').Any(part => part is "." or ".." or "") ||
+                rel.Split('/', StringSplitOptions.RemoveEmptyEntries).Any(part => part is "." or "..") ||
                 rel.Contains(':'))
                 throw new InvalidDataException("Unsafe Bedrock archive path.");
             var output = Path.GetFullPath(Path.Combine(folder, rel.Replace('/', Path.DirectorySeparatorChar)));
