@@ -72,6 +72,9 @@ public sealed class ArkWorkshopModManager : IModManager
         foreach (var sub in Directory.EnumerateDirectories(dir))
         {
             var id = Path.GetFileName(sub);
+            if (id.StartsWith(".gsc-stage-", StringComparison.OrdinalIgnoreCase) ||
+                id.StartsWith(".gsc-mod-prev-", StringComparison.OrdinalIgnoreCase))
+                continue; // Internal mod transaction directory.
             var sidecar = meta.GetValueOrDefault(id);
             long size = 0;
             try { size = new DirectoryInfo(sub).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length); }
@@ -90,9 +93,11 @@ public sealed class ArkWorkshopModManager : IModManager
 
     // ---- install ----
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         var workshopId = ExtractWorkshopId(url);
+        if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, workshopId))
+            return new ModInstallResult(false, null, "The Workshop ID does not match the installed mod.");
         if (string.IsNullOrEmpty(workshopId))
             return new ModInstallResult(false, null,
                 "Couldn't extract a Steam Workshop ID from that URL. Paste either the full https://steamcommunity.com/sharedfiles/filedetails/?id=XXXXXX URL or just the numeric ID.");
@@ -121,41 +126,53 @@ public sealed class ArkWorkshopModManager : IModManager
                 "Look in your steamcmd install for steamapps\\workshop\\content\\");
 
         // 3) Move into ARK's mods folder
-        var destDir = Path.Combine(ModsFolder(def), workshopId);
-        if (Directory.Exists(destDir))
-        {
-            try { Directory.Delete(destDir, recursive: true); } catch { /* ignore */ }
-        }
-        Directory.CreateDirectory(destDir);
+        var modsRoot = ModsFolder(def);
+        Directory.CreateDirectory(modsRoot);
+        if (!ModRemovalSafety.TryResolveModDirectory(modsRoot, workshopId, out var destDir))
+            return new ModInstallResult(false, null, "Unsafe Workshop ID.");
+        var stageDir = Path.Combine(modsRoot, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
         var installedFiles = new List<string>();
-        foreach (var f in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+        ModInstallTransaction.IReplacement? replacement = null;
+        try
         {
-            var rel = Path.GetRelativePath(sourceDir, f);
-            var dst = Path.Combine(destDir, rel);
-            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-            File.Copy(f, dst, overwrite: true);
-            installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
+            Directory.CreateDirectory(stageDir);
+            foreach (var f in Directory.EnumerateFiles(sourceDir, "*", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(sourceDir, f);
+                var dst = Path.Combine(stageDir, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+                File.Copy(f, dst, overwrite: false);
+                installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, Path.Combine(destDir, rel)));
+            }
+            replacement = ModInstallTransaction.BeginDirectory(stageDir, destDir);
+            var info = new ModInfo(
+                ModId: workshopId,
+                DisplayName: displayName ?? $"Workshop {workshopId}",
+                Version: null,
+                Source: $"https://steamcommunity.com/sharedfiles/filedetails/?id={workshopId}",
+                InstalledAt: DateTimeOffset.UtcNow,
+                SizeBytes: installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(),
+                Files: installedFiles.ToArray());
+            var retained = replacement.Complete(() => UpdateMetadata(def, m => m[workshopId] = ToSidecar(info)));
+            if (retained) _logger.LogWarning("Previous ARK mod directory retained after replacement of {ModId}", workshopId);
+
+            var modIdsHint = string.Equals(def.SteamAppId, "2430930", StringComparison.Ordinal)
+                ? $"Add this mod to your launch args: -mods={workshopId} (or append it to your existing -mods=A,B list)."
+                : $"Add this mod to your launch args: ?GameModIds={workshopId} (or append it to your existing ?GameModIds=A,B list).";
+            _logger.LogInformation(modIdsHint);
+            return new ModInstallResult(true, info with { Source = info.Source + " | " + modIdsHint }, null);
         }
-
-        var info = new ModInfo(
-            ModId: workshopId,
-            DisplayName: displayName ?? $"Workshop {workshopId}",
-            Version: null,   // Workshop doesn't expose a clean version string
-            Source: $"https://steamcommunity.com/sharedfiles/filedetails/?id={workshopId}",
-            InstalledAt: DateTimeOffset.UtcNow,
-            SizeBytes: installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(),
-            Files: installedFiles.ToArray());
-        UpdateMetadata(def, m => m[workshopId] = ToSidecar(info));
-
-        var modIdsHint = string.Equals(def.SteamAppId, "2430930", StringComparison.Ordinal)
-            ? $"Add this mod to your launch args: -mods={workshopId} (or append it to your existing -mods=A,B list)."
-            : $"Add this mod to your launch args: ?GameModIds={workshopId} (or append it to your existing ?GameModIds=A,B list).";
-        _logger.LogInformation(modIdsHint);
-
-        // Wrap the hint into the result so the UI can surface it. We use a fake "version" tag
-        // pattern: keep the real version null but stuff the hint into Source as a secondary line.
-        // (Cleaner approach: extend ModInstallResult with a Note field — leaving as TODO.)
-        return new ModInstallResult(true, info with { Source = info.Source + " | " + modIdsHint }, null);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ARK mod update failed for {Id}", workshopId);
+            return new ModInstallResult(false, null,
+                "Mod replacement or metadata persistence failed. Check Agent logs before retrying.");
+        }
+        finally
+        {
+            replacement?.Dispose();
+            if (Directory.Exists(stageDir)) try { Directory.Delete(stageDir, recursive: true); } catch { }
+        }
     }
 
     // ---- uninstall ----
@@ -163,11 +180,17 @@ public sealed class ArkWorkshopModManager : IModManager
     public Task<bool> UninstallAsync(ServerDef def, string modId, CancellationToken ct)
     {
         var modsDir = ModsFolder(def);
-        var dir = Path.Combine(modsDir, modId);
+        if (!Regex.IsMatch(modId, @"^[0-9]+$") ||
+            !ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var dir))
+            return Task.FromResult(false);
         var ok = false;
         try
         {
-            if (Directory.Exists(dir)) { Directory.Delete(dir, recursive: true); ok = true; }
+            if (Directory.Exists(dir) && ModRemovalSafety.CanDeleteDirectoryTree(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+                ok = true;
+            }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "ARK mod uninstall failed for {Id}", modId); }
         UpdateMetadata(def, m => m.Remove(modId));
@@ -236,16 +259,10 @@ public sealed class ArkWorkshopModManager : IModManager
     private void UpdateMetadata(ServerDef def, Action<Dictionary<string, SidecarEntry>> mutate)
     {
         var path = MetadataPath(def);
-        var dict = LoadMetadata(def);
+        var dict = ModMetadataStore.ReadForUpdate<SidecarEntry>(path);
         mutate(dict);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "ARK mod sidecar write failed at {Path}", path);
-        }
+        // A failed sidecar write must trigger file rollback, not silently succeed.
+        ModMetadataStore.WriteAtomic(path,
+            JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

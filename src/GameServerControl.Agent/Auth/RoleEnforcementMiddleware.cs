@@ -6,7 +6,8 @@ namespace GameServerControl.Agent.Auth;
 
 /// <summary>
 /// Rejects state-changing API requests from ReadOnly tokens and sanitizes sensitive GET responses.
-/// SignalR negotiation is outside /api and SendConsoleInput is independently Admin-only on the hub.
+/// Runs inside AuditMiddleware so denied mutations are recorded. SignalR
+/// console input is independently Admin-only on the hub.
 /// </summary>
 public sealed class RoleEnforcementMiddleware
 {
@@ -182,6 +183,13 @@ public sealed class RoleEnforcementMiddleware
                         && value.TryGetValue<string>(out var text)
                         && !string.IsNullOrEmpty(text);
                     values.Remove(key);
+                    // A dynamic schema can carry the live secret in "default" or
+                    // "description" as well as in "values". Suppress both.
+                    if (field is JsonObject secretField)
+                    {
+                        secretField["default"] = null;
+                        secretField["description"] = "Sensitive value hidden for ReadOnly access.";
+                    }
                     secretValues[key] = hasValue;
                 }
             }

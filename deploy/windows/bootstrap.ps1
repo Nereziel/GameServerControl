@@ -1,6 +1,7 @@
-# GameServerControl Windows one-line bootstrap.
-# Run from an elevated PowerShell:
-# irm https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/windows/bootstrap.ps1 | iex
+# GameServerControl Windows release-pinned bootstrap.
+# Download this script plus SHA256SUMS from a versioned GitHub Release;
+# verify its checksum, then execute the local file from elevated PowerShell.
+# Do NOT pipe mutable main-branch script text directly into iex.
 #
 # The bootstrap fetches the installer and checksum manifest from one stable GitHub Release,
 # verifies the installer SHA-256, then executes the verified local file. It never executes
