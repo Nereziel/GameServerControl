@@ -163,10 +163,10 @@ public sealed class RunnerProtocolTests
     {
         var identity = RunnerIdentity.ForServer("dragonwilds");
         var expected = "NT SERVICE\\" + identity.ServiceName;
-        var valid = "SERVICE_NAME: " + identity.ServiceName + "\\nSERVICE_START_NAME : " + expected;
-        var system = "SERVICE_NAME: " + identity.ServiceName + "\\nSERVICE_START_NAME : LocalSystem";
+        var valid = "SERVICE_NAME: " + identity.ServiceName + "\nSERVICE_START_NAME : " + expected;
+        var system = "SERVICE_NAME: " + identity.ServiceName + "\nSERVICE_START_NAME : LocalSystem";
         var other = "SERVICE_NAME: " + identity.ServiceName +
-                    "\\nSERVICE_START_NAME : NT SERVICE\\GameServerControlRunner_other";
+                    "\nSERVICE_START_NAME : NT SERVICE\\GameServerControlRunner_other";
 
         Assert.True(RunnerServiceSecurity.HasExpectedAccount(valid, expected));
         Assert.True(RunnerServiceSecurity.HasExpectedAccount(valid.ToLowerInvariant(), expected));
