@@ -28,6 +28,15 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
 
     public async Task<RunnerResponse> StartAsync(ServerDef def, CancellationToken ct = default)
     {
+        // Provisioning can update the SCM logon account while the service is already
+        // running, but that does not replace its process token. Fail closed before
+        // reprovisioning rather than launching a game through a live LocalSystem Runner.
+        if (Supports(def))
+        {
+            var preflight = await RefuseUnexpectedRunningAccountAsync(RunnerIdentity.ForServer(def.Id), ct);
+            if (!preflight.Ok) return new RunnerResponse(false, preflight.Error);
+        }
+
         var provision = await EnsureProvisionedAsync(def, ct);
         if (!provision.Ok) return new RunnerResponse(false, provision.Error);
         var serviceIdentity = await EnsureExpectedServiceAccountAsync(def, provision.Identity, ct);
@@ -214,6 +223,19 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     }
 
     private static bool IsTransportFailure(RunnerPipeResult result) => result.TransportFailure;
+
+    private async Task<(bool Ok, string Error)> RefuseUnexpectedRunningAccountAsync(
+        RunnerIdentityInfo identity, CancellationToken ct)
+    {
+        if (!await IsRunnerServiceRunningAsync(identity, ct)) return (true, "");
+
+        var query = await RunToolAsync("sc.exe", ["qc", identity.ServiceName], ToolTimeout, ct);
+        var expectedAccount = "NT SERVICE\\" + identity.ServiceName;
+        if (!query.Ok || !RunnerServiceSecurity.HasExpectedAccount(query.Output, expectedAccount))
+            return (false, "Runner service is already running under an unexpected or unverifiable Windows account. Stop its game and Runner service before reprovisioning.");
+
+        return (true, "");
+    }
 
     private async Task<(bool Ok, string Error)> EnsureExpectedServiceAccountAsync(
         ServerDef def, RunnerIdentityInfo identity, CancellationToken ct)
