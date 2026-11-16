@@ -2,11 +2,95 @@ function jobKey(){return'gsc.install.jobs.'+CFG.url+'.'+ACTIVE_HOST_ID}
 function loadJobRefs(){try{return JSON.parse(localStorage.getItem(jobKey())||'[]')}catch{return[]}}
 function saveJobRefs(v){localStorage.setItem(jobKey(),JSON.stringify(v.slice(0,30)))}
 function rememberJob(m){const a=loadJobRefs().filter(x=>x.jobId!==m.jobId);a.unshift(m);saveJobRefs(a)}
-async function refreshJobs(render=true){const refs=loadJobRefs();let active=0;for(const r of refs){try{JOB_CACHE[r.jobId]=await api('/api/servers/install/'+encodeURIComponent(r.jobId));if(!JOB_CACHE[r.jobId].finished)active++}catch{JOB_CACHE[r.jobId]={jobId:r.jobId,phase:'expired',line:'Job no longer available (Agent may have restarted).',finished:true,success:false,logLines:[]}}}$('#installBadge').textContent=active;$('#installBadge').classList.toggle('hidden',active===0);if(render||CURRENT_VIEW==='installs')renderJobs()}
-function phaseText(p){return({queued:'Queued',steamcmd:'SteamCMD',download:'Downloading fallback',verify:'Verifying',register:'Registering',done:'Completed',failed:'Failed',expired:'Expired'})[p]||p}
-function renderJobs(){const refs=loadJobRefs(),root=$('#jobs');if(ACTIVE_HOST_ID==='all'){root.innerHTML='<div class="empty">Select a computer from the sidebar to see its installation jobs.</div>';return;}if(!refs.length){root.innerHTML='<div class="empty">No installation history in this browser.</div>';return}root.innerHTML=refs.map(r=>{const p=JOB_CACHE[r.jobId]||{},pct=p.percentHint??0,cls=p.finished?(p.success?'finished':'failed'):'';return `<div class="job ${cls}"><div class="jobtop"><div style="font-size:24px">${r.icon||'⬇'}</div><div class="grow"><div class="jobname">${esc(r.name||r.jobId)}</div><div class="jobphase">${esc(phaseText(p.phase||'loading'))} · ${esc(r.path||'')} · ${esc(r.jobId)}</div></div><div class="state ${p.success?'up':p.finished?'down':'warn'}">${p.finished?(p.success?'DONE':'FAILED'):'ACTIVE'}</div></div><div class="progress"><div class="bar" style="width:${Math.max(0,Math.min(100,pct))}%"></div></div><div class="jobline">${esc(p.line||'Loading…')}</div><div class="jobbuttons"><button class="btn" ${uiAction('openJob',[r.jobId])}>Details & log</button>${p.success?`<button class="btn" ${uiActions([['showView',['servers']],['loadServers',[]]])}>Open servers</button>`:''}</div></div>`}).join('')}
+
+const INSTALL_HISTORY_POLL_AT={};
+async function recoverServerInstallJobs(){
+  if(ACTIVE_HOST_ID==='all'||!supportsAgentFeature('install.history')||
+      (typeof isReadOnly==='function'&&isReadOnly()))return;
+  const key=jobKey(), now=Date.now();
+  if(now-(INSTALL_HISTORY_POLL_AT[key]||0)<30000)return;
+  INSTALL_HISTORY_POLL_AT[key]=now;
+  try{
+    const records=await api('/api/servers/install/jobs');
+    if(!Array.isArray(records))return;
+    const existing=loadJobRefs();
+    const known=new Set(existing.map(x=>x.jobId));
+    const recovered=[];
+    for(const p of records){
+      if(!p||typeof p.jobId!=='string'||p.jobId.length>64)continue;
+      JOB_CACHE[p.jobId]=p;
+      if(!known.has(p.jobId)){
+        known.add(p.jobId);
+        recovered.push({jobId:p.jobId,name:p.serverName||p.gameKey||'Install job',
+          icon:'⬇',path:p.installPath||''});
+      }
+    }
+    if(recovered.length)saveJobRefs([...recovered,...existing]);
+  }catch{
+    // The selected host may be offline. Existing browser history still works.
+  }
+}
+
+async function refreshJobs(render=true){
+  if(ACTIVE_HOST_ID==='all'){if(render||CURRENT_VIEW==='installs')renderJobs();return}
+  await recoverServerInstallJobs();
+  const refs=loadJobRefs();let active=0;
+  for(const r of refs){
+    try{
+      JOB_CACHE[r.jobId]=await api('/api/servers/install/'+encodeURIComponent(r.jobId));
+      if(!JOB_CACHE[r.jobId].finished)active++;
+    }catch{
+      JOB_CACHE[r.jobId]={jobId:r.jobId,phase:'expired',
+        line:'Job history unavailable on this Agent.',finished:true,success:false,logLines:[]};
+    }
+  }
+  const badge=$('#installBadge');
+  if(badge){badge.textContent=active;badge.classList.toggle('hidden',active===0)}
+  if(render||CURRENT_VIEW==='installs')renderJobs();
+}
+function phaseText(p){return({queued:'Queued',steamcmd:'SteamCMD',download:'Downloading',verify:'Verifying',
+  register:'Registering',done:'Completed',failed:'Failed',cancelled:'Cancelled',
+  interrupted:'Interrupted by Agent restart',expired:'Unavailable'})[p]||p}
+function mayCancelInstall(p){
+  return !!p&&!p.finished&&supportsAgentFeature('install.cancel')&&
+    !(typeof isReadOnly==='function'&&isReadOnly());
+}
+function renderJobs(){
+  const refs=loadJobRefs(),root=$('#jobs');
+  if(!root)return;
+  if(ACTIVE_HOST_ID==='all'){
+    root.innerHTML='<div class="empty">Select a computer from the sidebar to see its installation jobs.</div>';return;
+  }
+  if(!refs.length){
+    root.innerHTML='<div class="empty">No installation history on this computer.</div>';return;
+  }
+  root.innerHTML=refs.map(r=>{
+    const p=JOB_CACHE[r.jobId]||{},pct=p.percentHint??0,
+      cls=p.finished?(p.success?'finished':'failed'):'',
+      state=p.finished?(p.success?'DONE':p.phase==='cancelled'?'CANCELLED':p.phase==='interrupted'?'INTERRUPTED':'FAILED'):'ACTIVE',
+      cancel=mayCancelInstall(p)
+        ?`<button class="btn danger" ${uiAction('cancelInstallJob',[r.jobId])}>Cancel install</button>`:'';
+    return `<div class="job ${cls}"><div class="jobtop"><div style="font-size:24px">${r.icon||'⬇'}</div><div class="grow"><div class="jobname">${esc(r.name||r.jobId)}</div><div class="jobphase">${esc(phaseText(p.phase||'loading'))} · ${esc(r.path||'')} · ${esc(r.jobId)}</div></div><div class="state ${p.success?'up':p.finished?'down':'warn'}">${state}</div></div><div class="progress"><div class="bar" style="width:${Math.max(0,Math.min(100,pct))}%"></div></div><div class="jobline">${esc(p.line||'Loading…')}</div><div class="jobbuttons"><button class="btn" ${uiAction('openJob',[r.jobId])}>Details & log</button>${cancel}${p.success?`<button class="btn" ${uiActions([['showView',['servers']],['loadServers',[]]])}>Open servers</button>`:''}</div></div>`;
+  }).join('');
+}
+async function cancelInstallJob(id){
+  if(!confirm('Cancel this installation? Any completed game files will be left in place.'))return;
+  try{
+    await api('/api/servers/install/'+encodeURIComponent(id)+'/cancel',{method:'POST'});
+    toast('Cancellation requested.','warn');
+    await refreshJobs();
+  }catch(e){toast('Could not cancel installation: '+e.message,'err')}
+}
 function clearFinishedJobs(){saveJobRefs(loadJobRefs().filter(r=>!(JOB_CACHE[r.jobId]&&JOB_CACHE[r.jobId].finished)));renderJobs();refreshJobs(false)}
-async function openJob(id){await refreshJobs(false);const r=loadJobRefs().find(x=>x.jobId===id)||{jobId:id},p=JOB_CACHE[id]||{},log=(p.logLines||[]).join('\n');openModal(r.name||id,`<div class="jobphase">Job ${esc(id)} · ${esc(phaseText(p.phase||''))}</div><div class="progress"><div class="bar" style="width:${Math.max(0,Math.min(100,p.percentHint??0))}%"></div></div><div class="jobline" style="margin-bottom:10px">${esc(p.line||'')}</div><pre class="log">${esc(log||'No log lines yet.')}</pre>`,`<button class="btn" ${uiAction('openJob',[id])}>Refresh</button><button class="btn" ${uiAction('closeModal')}>Run in background</button>`,true)}
+async function openJob(id){
+  await refreshJobs(false);
+  const r=loadJobRefs().find(x=>x.jobId===id)||{jobId:id},p=JOB_CACHE[id]||{},
+    log=(p.logLines||[]).join('\n'),
+    cancel=mayCancelInstall(p)?`<button class="btn danger" ${uiAction('cancelInstallJob',[id])}>Cancel install</button>`:'';
+  openModal(r.name||id,
+    `<div class="jobphase">Job ${esc(id)} · ${esc(phaseText(p.phase||''))}</div><div class="progress"><div class="bar" style="width:${Math.max(0,Math.min(100,p.percentHint??0))}%"></div></div><div class="jobline" style="margin-bottom:10px">${esc(p.line||'')}</div><pre class="log">${esc(log||'No log lines yet.')}</pre>`,
+    `<button class="btn" ${uiAction('openJob',[id])}>Refresh</button>${cancel}<button class="btn" ${uiAction('closeModal')}>Run in background</button>`,true);
+}
 async function openMods(id){const d=SERVERS.find(x=>x.id===id);MOD_CTX={id,def:d,tab:'installed',serverSideOnly:true,hideDeprecated:true,category:'',sort:'downloads'};openModal('Mods — '+(d?.name||id),'<div id="modsRoot">Loading…</div>','',true);await renderMods()}
 async function renderMods(){const root=$('#modsRoot');if(!root)return;root.innerHTML=`<div class="subtabs"><button class="subtab ${MOD_CTX.tab==='installed'?'active':''}" ${uiAction('switchMods',['installed'])}>Installed</button><button class="subtab ${MOD_CTX.tab==='browse'?'active':''}" ${uiAction('switchMods',['browse'])}>Browse</button><button class="subtab ${MOD_CTX.tab==='updates'?'active':''}" ${uiAction('switchMods',['updates'])}>Updates</button></div><div id="modsPane"><div class="muted">Loading…</div></div>`;if(MOD_CTX.tab==='installed')await loadInstalledMods();else if(MOD_CTX.tab==='browse')await loadBrowseMods();else await loadModUpdates()}
 async function switchMods(tab){MOD_CTX.tab=tab;await renderMods()}
