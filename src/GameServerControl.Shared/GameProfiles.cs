@@ -246,7 +246,7 @@ public static class GameProfiles
 
         new("minecraft-bedrock", "Minecraft Bedrock – Official", "⛏", GameType.Minecraft, null, "MinecraftBedrock", "bedrock_server.exe",
             Array.Empty<string>(), new[]{ @"{root}\worlds" }, null,
-            new GameCapabilities(LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.Stdin),
+            new GameCapabilities(Mods: true, LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.Stdin),
             Notes: "Official Bedrock Dedicated Server, UDP 19132. Supported on Windows and Ubuntu Linux; uses behavior/resource packs, not Java plugins.",
             Installable: true, EstimatedSize: "~1 GB + worlds",
             DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 19132) },

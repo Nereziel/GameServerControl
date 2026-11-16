@@ -171,7 +171,7 @@ loadInstalledMods = async function(){
 window.installBedrockAddon=async function(){
   const file=$('#bedrockAddonFile')?.files?.[0];
   if(!file)return toast('Choose a .mcpack or .mcaddon file first.','err');
-  if(!/\\.(mcpack|mcaddon)$/i.test(file.name))return toast('Only .mcpack or .mcaddon files are supported.','err');
+  if(!/\.(mcpack|mcaddon)$/i.test(file.name))return toast('Only .mcpack or .mcaddon files are supported.','err');
   const id=MOD_CTX?.id;
   if(!id)return;
   const body=new FormData();body.append('file',file,file.name);
