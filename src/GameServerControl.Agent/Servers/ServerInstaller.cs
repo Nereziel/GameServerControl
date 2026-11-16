@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO.Compression;
+using System.Text.Json;
 using GameServerControl.Agent.Hubs;
 using GameServerControl.Shared;
 using Microsoft.AspNetCore.SignalR;
@@ -24,6 +25,8 @@ public sealed class ServerInstaller
     private readonly ServerStore _store;
     private readonly IHubContext<StatusHub> _hub;
     private readonly ILogger<ServerInstaller> _logger;
+    private readonly InstallJobJournal _journal;
+    private readonly object _journalGate = new();
     private readonly SemaphoreSlim _installGate = new(1, 1);
     private readonly ConcurrentDictionary<string, JobState> _jobs = new();
     private readonly object _pruneGate = new();
@@ -34,18 +37,66 @@ public sealed class ServerInstaller
         public object Gate { get; } = new();
         public List<string> Lines { get; } = new();
         public InstallProgress Snapshot { get; set; }
+        public CancellationTokenSource Cancellation { get; } = new();
         public JobState(InstallProgress snapshot) => Snapshot = snapshot;
     }
 
     public ServerInstaller(SteamCmdManager steamCmd, ServerStore store,
         IHubContext<StatusHub> hub, ILogger<ServerInstaller> logger,
-        MinecraftServerPackages minecraft)
+        MinecraftServerPackages minecraft, IConfiguration config, IHostEnvironment hostEnvironment)
     {
         _minecraft = minecraft;
         _steamCmd = steamCmd;
         _store = store;
         _hub = hub;
         _logger = logger;
+        var dataDir = config["Agent:DataDir"] ?? hostEnvironment.ContentRootPath;
+        var configured = config["Agent:InstallJobsPath"] ?? "install-jobs.json";
+        var journalPath = Path.IsPathFullyQualified(configured)
+            ? configured : Path.Combine(dataDir, configured);
+        _journal = new InstallJobJournal(journalPath);
+        try
+        {
+            foreach (var snapshot in _journal.Load())
+            {
+                var state = new JobState(snapshot);
+                if (!string.IsNullOrWhiteSpace(snapshot.Line)) state.Lines.Add(snapshot.Line);
+                _jobs[snapshot.JobId] = state;
+            }
+            PersistJournal(); // Terminalize any jobs interrupted by an Agent restart.
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException or InvalidDataException)
+        {
+            _logger.LogWarning(ex, "Could not recover install job journal; new jobs will still be tracked.");
+        }
+    }
+
+    public bool CancelJob(string jobId)
+    {
+        if (!_jobs.TryGetValue(jobId, out var state)) return false;
+        lock (state.Gate)
+            if (state.Snapshot.Finished) return false;
+        state.Cancellation.Cancel();
+        return true;
+    }
+
+    private void PersistJournal()
+    {
+        lock (_journalGate)
+        {
+            try
+            {
+                var snapshots = _jobs.Values.Select(state =>
+                {
+                    lock (state.Gate) return state.Snapshot;
+                }).ToArray();
+                _journal.Save(snapshots);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                _logger.LogWarning(ex, "Could not persist installation progress.");
+            }
+        }
     }
 
     public InstallProgress? Get(string jobId)
@@ -67,7 +118,8 @@ public sealed class ServerInstaller
         var state = new JobState(initial);
         state.Lines.Add("Queued for background installation.");
         _jobs[jobId] = state;
-        _ = Task.Run(() => RunAsync(jobId, req, CancellationToken.None));
+        PersistJournal();
+        _ = Task.Run(() => RunAsync(jobId, req, state.Cancellation.Token));
         return jobId;
     }
 
@@ -84,7 +136,8 @@ public sealed class ServerInstaller
         var state = new JobState(snapshot);
         state.Lines.Add("Queued for Minecraft installation.");
         _jobs[jobId] = state;
-        _ = Task.Run(() => RunMinecraftAsync(jobId, request, CancellationToken.None));
+        PersistJournal();
+        _ = Task.Run(() => RunMinecraftAsync(jobId, request, state.Cancellation.Token));
         return jobId;
     }
 
@@ -99,10 +152,25 @@ public sealed class ServerInstaller
             var result = await _minecraft.InstallAsync(request,
                 message => _ = PublishAsync(jobId, "download", message, 40, false, false), ct);
             await PublishAsync(jobId, "register", "Registering Minecraft server…", 96, false, false);
-            _store.Add(result.Definition);
+            ct.ThrowIfCancellationRequested();
+            try { _store.Add(result.Definition); }
+            catch (Exception ex)
+            {
+                await PublishAsync(jobId, "failed",
+                    "Minecraft files were downloaded into " + result.Definition.GuestWorkingDir +
+                    ", but registration failed: " + ex.Message +
+                    ". Files were kept. Use Add Existing to register the installed Minecraft server without downloading again.",
+                    null, true, false);
+                return;
+            }
             await PublishAsync(jobId, "done",
                 "Minecraft " + result.Version + " installed. Server ready to start.",
                 100, true, true);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await PublishAsync(jobId, "cancelled",
+                "Minecraft installation cancelled. Check for leftover staged files before retrying.", null, true, false);
         }
         catch (Exception ex)
         {
@@ -268,6 +336,11 @@ public sealed class ServerInstaller
                 $"Done. Server '{req.ServerDef.Name}' is installed and registered.{postInstall}",
                 100, true, true);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await PublishAsync(jobId, "cancelled",
+                "Installation cancelled; any partially downloaded game files have been retained.", null, true, false);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Install job {Id} crashed", jobId);
@@ -388,6 +461,7 @@ public sealed class ServerInstaller
     {
         if (!_jobs.TryGetValue(jobId, out var state)) return;
         InstallProgress snapshot;
+        bool journalCheckpoint;
         lock (state.Gate)
         {
             if (addToLog && !string.IsNullOrWhiteSpace(line))
@@ -407,8 +481,10 @@ public sealed class ServerInstaller
                 LogLines = state.Lines.ToArray()
             };
             snapshot = state.Snapshot;
+            journalCheckpoint = finished || !string.Equals(previous.Phase, phase, StringComparison.Ordinal);
         }
 
+        if (journalCheckpoint) PersistJournal();
         try { await _hub.Clients.All.SendAsync("installProgress", snapshot); }
         catch (Exception ex) { _logger.LogDebug(ex, "Install progress SignalR broadcast failed for {JobId}", jobId); }
 
@@ -430,8 +506,13 @@ public sealed class ServerInstaller
             lock (state.Gate) snapshots.Add(state.Snapshot);
         }
 
-        foreach (var jobId in InstallJobRetention.SelectEvictions(snapshots, now))
-            _jobs.TryRemove(jobId, out _);
+        var evicted = InstallJobRetention.SelectEvictions(snapshots, now);
+        foreach (var jobId in evicted)
+        {
+            if (_jobs.TryRemove(jobId, out var removed))
+                removed.Cancellation.Dispose();
+        }
+        if (evicted.Count > 0) PersistJournal();
     }
 
     private static string GameKey(string appId) => appId switch
