@@ -10,19 +10,29 @@ async function openConfig(id) {
     let html = '';
     for (const sec of r.schema.sections || []) {
       html += `<div class="section">${esc(sec.title)}</div><div class="formgrid">`;
-      for (const f of sec.fields || []) html += configField(f, vals[f.key] ?? f.default ?? '');
+      for (const f of sec.fields || []) html += configField(f, configValue(vals, f));
       html += '</div>';
     }
 
     openModal(
       'Configuration — ' + (d?.name || id),
-      `<form>${html}</form>`,
+      `<div class="gsc-managed-config">${html}</div>`,
       `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button class="btn primary" ${uiAction('saveConfig',[id])}>Save</button>`,
       true
     );
   } catch (e) {
     toast('Configuration failed: ' + e.message, 'err');
   }
+}
+
+// Third-party INI/schema extensions may preserve noncanonical key casing.
+function configValue(values, field) {
+  const current = values || {};
+  if (Object.prototype.hasOwnProperty.call(current, field.key) && current[field.key] != null)
+    return current[field.key];
+  const found = Object.entries(current).find(([key]) =>
+    key.toLowerCase() === String(field.key).toLowerCase());
+  return found && found[1] != null ? found[1] : (field.default ?? '');
 }
 
 function configField(f, v) {
@@ -41,12 +51,16 @@ function configField(f, v) {
   }
 
   const type = f.type === 'Password' ? 'password' : (f.type === 'Integer' || f.type === 'Decimal' ? 'number' : 'text');
-  return `<div class="field"><label>${lab}</label><input data-cfg="${key}" type="${type}" value="${esc(v)}" ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} ${f.step != null ? `step="${f.step}"` : ''}>${desc}</div>`;
+  // Best-effort opt-out: password managers may still choose to ignore these hints.
+  const secretAttrs = f.type === 'Password'
+    ? 'name="gsc-game-setting" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" spellcheck="false" autocorrect="off" autocapitalize="off"'
+    : '';
+  return `<div class="field"><label>${lab}</label><input data-cfg="${key}" type="${type}" value="${esc(v)}" ${secretAttrs} ${f.min != null ? `min="${f.min}"` : ''} ${f.max != null ? `max="${f.max}"` : ''} ${f.step != null ? `step="${f.step}"` : ''}>${desc}</div>`;
 }
 
 async function saveConfig(id) {
   const vals = {};
-  document.querySelectorAll('[data-cfg]').forEach(el => {
+  document.querySelectorAll('#modal [data-cfg]').forEach(el => {
     vals[el.dataset.cfg] = el.type === 'checkbox' ? String(el.checked) : String(el.value);
   });
 
@@ -176,7 +190,7 @@ function openAddExisting() {
   const options = existingProfiles().map(g => `<option value="${esc(g.key)}">${esc(g.label)}</option>`).join('');
   openModal(
     'Add existing server',
-    `<div class="callout info">Registers an existing installation. Pick its game profile first so saves, logs and supported features can be filled automatically.</div><div class="field"><label>Game profile</label><select id="aProfile" ${uiAction('applyExistingProfile',[],{event:'change'})}><option value="">Custom / unknown</option>${options}</select></div><div class="formgrid"><div class="field"><label>Name</label><input id="aName" placeholder="My Server"></div><div class="field"><label>Server ID</label><input id="aId" placeholder="my-server"></div></div><div class="field"><label>Server folder</label><input id="aWork" class="mono" placeholder="C:\\GameServers\\Example" ${uiAction('applyExistingProfile',[false],{event:'input'})}></div><div class="field"><label>Server executable</label><input id="aExe" class="mono"></div><div class="formgrid"><div class="field"><label>Save folders</label><textarea id="aSaves" class="mono"></textarea></div><div id="aLogWrap" class="field"><label>Log file</label><input id="aLog" class="mono"></div></div><details class="advanced"><summary>Advanced settings</summary><div class="advanced-body"><div class="field"><label>Start args — one per line</label><textarea id="aArgs" class="mono"></textarea></div><div class="formgrid three"><div class="field"><label>Steam App ID</label><input id="aSteam"></div><div class="field"><label>Game type</label><select id="aGame"><option>SteamGeneric</option><option>Windrose</option><option>Minecraft</option><option>Custom</option></select></div></div><div id="aRcon" class="hidden"><div class="section">RCON</div><div class="formgrid three"><div class="field"><label>Host</label><input id="aRhost" value="auto"></div><div class="field"><label>Port</label><input id="aRport" type="number" min="1" max="65535"></div><div class="field"><label>Password</label><input id="aRpass" type="password"></div></div></div></div></details>`,
+    `<div class="callout info">Registers an existing installation. Pick its game profile first so saves, logs and supported features can be filled automatically.</div><div class="field"><label>Game profile</label><select id="aProfile" ${uiAction('applyExistingProfile',[],{event:'change'})}><option value="">Custom / unknown</option>${options}</select></div><div class="formgrid"><div class="field"><label>Name</label><input id="aName" placeholder="My Server"></div><div class="field"><label>Server ID</label><input id="aId" placeholder="my-server"></div></div><div class="field"><label>Server folder</label><input id="aWork" class="mono" placeholder="C:\\GameServers\\Example" ${uiAction('applyExistingProfile',[false],{event:'input'})}></div><div class="field"><label>Server executable</label><input id="aExe" class="mono"></div><div class="formgrid"><div class="field"><label>Save folders</label><textarea id="aSaves" class="mono"></textarea></div><div id="aLogWrap" class="field"><label>Log file</label><input id="aLog" class="mono"></div></div><details class="advanced"><summary>Advanced settings</summary><div class="advanced-body"><div class="field"><label>Start args — one per line</label><textarea id="aArgs" class="mono"></textarea></div><div class="formgrid three"><div class="field"><label>Steam App ID</label><input id="aSteam"></div><div class="field"><label>Game type</label><select id="aGame"><option>SteamGeneric</option><option>Windrose</option><option>Minecraft</option><option>Custom</option></select></div></div><div id="aRcon" class="hidden"><div class="section">RCON</div><div class="formgrid three"><div class="field"><label>Host</label><input id="aRhost" value="auto"></div><div class="field"><label>Port</label><input id="aRport" type="number" min="1" max="65535"></div><div class="field"><label>Password</label><input id="aRpass" type="password" name="gsc-rcon-setting" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" spellcheck="false"></div></div></div></div></details>`,
     `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button id="aSaveExisting" class="btn primary" ${uiAction('saveAddExisting')}>Add server</button><button id="aRecoverMinecraft" class="btn primary hidden" ${uiAction('recoverExistingMinecraft')}>Recover Minecraft installation</button>`,
     true
   );

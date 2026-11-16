@@ -460,7 +460,10 @@ api.MapGet("/servers/{id}/config", async (
     var composedSchema = schema is null
         ? (sections.Count == 0 ? null : new ConfigSchema("auto", def.Name, sections.ToArray()))
         : schema with { Sections = sections.ToArray() };
-    return Results.Ok(new { schema = composedSchema, values });
+    // Vendor config keys may differ in casing from schema fields. The browser
+    // compares JSON property names case-sensitively, including password fields.
+    var displayValues = composedSchema is null ? values : ManagedConfigValues.Canonicalize(composedSchema, values);
+    return Results.Ok(new { schema = composedSchema, values = displayValues });
 });
 
 api.MapPost("/servers/{id}/logs/tail", (string id, LogTailRequest req, ServerRegistry reg, LogTailService tail) =>
