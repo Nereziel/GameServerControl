@@ -60,6 +60,34 @@ public sealed class OffsiteBackupMirrorTests
     }
 
     [Fact]
+    public async Task Missing_mount_marker_rejects_fallback_to_local_directory()
+    {
+        var root = CreateFixture(out var archive, out var offsite);
+        try
+        {
+            File.Delete(Path.Combine(offsite, ".gsc-offsite-ready"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                OffsiteBackupMirror.CopyAsync(archive, offsite, "minecraft-one", CancellationToken.None));
+            Assert.False(Directory.Exists(Path.Combine(offsite, "minecraft-one")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public async Task Local_backup_root_cannot_be_reused_as_offsite_destination()
+    {
+        var root = CreateFixture(out var archive, out _);
+        try
+        {
+            var localRoot = Path.GetDirectoryName(Path.GetDirectoryName(archive)!)!;
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                OffsiteBackupMirror.CopyAsync(archive, localRoot, "minecraft-one", CancellationToken.None));
+            Assert.True(File.Exists(archive));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public async Task Invalid_server_ids_cannot_escape_target_directory()
     {
         var root = CreateFixture(out var archive, out var offsite);
@@ -96,6 +124,7 @@ public sealed class OffsiteBackupMirrorTests
         File.WriteAllText(archive + ".meta.json", Metadata);
         offsite = Path.Combine(root, "mounted-remote");
         Directory.CreateDirectory(offsite); // Represents an already mounted external share.
+        File.WriteAllText(Path.Combine(offsite, ".gsc-offsite-ready"), "GSC offsite share ready");
         return root;
     }
 }
