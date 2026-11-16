@@ -86,11 +86,11 @@ public sealed class ServerInstaller
     {
         if (!_jobs.TryGetValue(jobId, out var state)) return false;
         lock (state.Gate)
-        {
             if (state.Snapshot.Finished) return false;
-            try { state.Cancellation.Cancel(); }
-            catch (ObjectDisposedException) { return false; }
-        }
+        // Cancellation callbacks may trigger status publication and journal
+        // writes, so never invoke them while holding the per-job lock.
+        try { state.Cancellation.Cancel(); }
+        catch (ObjectDisposedException) { return false; }
         return true;
     }
 
