@@ -4,10 +4,22 @@ function intOrNull(v){const s=String(v||'').trim();if(!s)return null;const n=Num
 function fieldValue(id,fallback=''){const el=$(id);return el?el.value:fallback}
 function expandList(list,root){return (list||[]).map(x=>expandRoot(x,root))}
 
-function openCreate(){renderGamePicker('')}
+function openCreate(){renderGamePicker('');$('#gameSearch')?.focus()}
+function gamePickerResults(q=''){
+  const query=String(q).toLowerCase().trim();
+  const list=GAMES.filter(g=>(g.label+' '+(g.appId||'')).toLowerCase().includes(query));
+  return list.length
+    ? list.map(g=>`<button class="game" ${uiAction('openCreateSettings',[g.key])}><div class="gicon">${g.icon}</div><div class="gname">${esc(g.label)}</div><div class="gmeta">${g.appId?'Steam App '+esc(g.appId):'Minecraft dedicated server'} · ${esc(g.size)}</div></button>`).join('')
+    : '<div class="empty">No matching games found.</div>';
+}
+function filterGamePicker(q=''){
+  // Only change the results, not the input or modal. Recreating the input
+  // on every keystroke used to discard focus after the first character.
+  const results=$('#gamePickerResults');
+  if(results)results.innerHTML=gamePickerResults(q);
+}
 function renderGamePicker(q=''){
-  const list=GAMES.filter(g=>(g.label+' '+g.appId).toLowerCase().includes(q.toLowerCase()));
-  openModal('Create server',`<div class="callout info">Choose a game. GameServerControl fills safe defaults automatically and hides unsupported features later.</div><div class="field"><input id="gameSearch" placeholder="Search game…" value="${esc(q)}" ${uiAction('renderGamePicker',[],{event:'input',pass:'value'})}></div><div class="games">${list.map(g=>`<button class="game" ${uiAction('openCreateSettings',[g.key])}><div class="gicon">${g.icon}</div><div class="gname">${esc(g.label)}</div><div class="gmeta">${g.appId?'Steam App '+esc(g.appId):'Minecraft dedicated server'} · ${esc(g.size)}</div></button>`).join('')}</div>`)
+  openModal('Create server',`<div class="callout info">Choose a game. GameServerControl fills safe defaults automatically and hides unsupported features later.</div><div class="field"><input id="gameSearch" placeholder="Search game…" value="${esc(q)}" ${uiAction('filterGamePicker',[],{event:'input',pass:'value'})}></div><div id="gamePickerResults" class="games">${gamePickerResults(q)}</div>`);
 }
 function openCreateSettings(key){
   const g=GAMES.find(x=>x.key===key),path=`C:\\GameServers\\${g.dir}`,saves=expandList(g.saveRel,path),log=g.logRel?expandRoot(g.logRel,path):null;
