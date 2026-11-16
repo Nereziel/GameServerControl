@@ -389,6 +389,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             psi.ArgumentList.Add("-File");
             psi.ArgumentList.Add(_updateHelper);
             psi.ArgumentList.Add("-FromTray");
+            psi.ArgumentList.Add("-Tag");
+            psi.ArgumentList.Add(tag);
             // Propagate the *selected* release through elevation and the
             // release-verified installer. Never trust inherited pin variables.
             psi.Environment["GSC_VERSION"] = tag;

@@ -24,3 +24,12 @@ required(linuxInstaller, 'Rollback previous Agent payload', 'Linux installer mus
 required(linuxInstaller, '.previous', 'Linux installer must retain the previous payload until startup succeeds');
 
 console.log('Update/install UX contract OK.');
+
+const tray = read('src/GameServerControl.Tray/Program.cs');
+required(tray, 'ReadInstalledAgentVersion(_installRoot', 'Tray must compare releases with the installed Agent executable');
+required(tray, 'FetchLatestReleaseAsync()', 'Tray must refresh GitHub release before launching');
+required(tray, 'if (latest <= installed)', 'Tray must skip reinstallation and downgrades');
+required(tray, 'psi.ArgumentList.Add("-Tag");', 'Tray must explicitly pass selected release to updater');
+required(tray, 'psi.ArgumentList.Add(tag);', 'Tray must pin the resolved release tag');
+required(windowsInstaller, 'if ($requestedTag) { $flags += \'-Tag\'; $flags += $requestedTag }',
+  'Windows updater must preserve the explicit tag across UAC elevation');
