@@ -69,8 +69,10 @@ public static class OffsiteBackupMirror
         else Directory.CreateDirectory(outputDir);
 
         var output = Path.Combine(outputDir, Path.GetFileName(source));
-        await CopyVerifiedAsync(source, output, ct);
+        // Publish metadata first. If the archive copy is interrupted, an
+        // orphan sidecar is harmless; never expose a ZIP without its metadata.
         await CopyVerifiedAsync(metadata, output + ".meta.json", ct);
+        await CopyVerifiedAsync(source, output, ct);
         return output;
     }
 
