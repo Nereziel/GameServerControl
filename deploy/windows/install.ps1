@@ -437,6 +437,15 @@ if (-not $isElevated) {
     $p.WaitForExit()
     if ($FromTray) {
         Start-TrayAgain
+        if ($p.ExitCode -ne 0) {
+            Add-Type -AssemblyName System.Windows.Forms
+            [System.Windows.Forms.MessageBox]::Show(
+                "GameServerControl update was cancelled or failed (exit code $($p.ExitCode)). " +
+                "The previous Agent may have been restored. Check the installed version and run the verified installer manually for detailed errors.",
+                'GameServerControl update',
+                [System.Windows.Forms.MessageBoxButtons]::OK,
+                [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
     } elseif (-not $Silent) {
         Write-Host ''
         Read-Host 'Update finished. Press Enter to close'
