@@ -65,6 +65,24 @@ public sealed class RoleEnforcementMiddlewareTests
     }
 
     [Fact]
+    public async Task ReadOnly_redacts_secret_schema_metadata_as_well_as_values()
+    {
+        var middleware = new RoleEnforcementMiddleware(async context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status200OK;
+            await context.Response.WriteAsync("{\"schema\":{\"sections\":[{\"fields\":[{\"type\":\"Password\",\"key\":\"AccessToken\",\"default\":\"metadata-secret\",\"description\":\"Default: metadata-secret\"}]}]},\"values\":{\"AccessToken\":\"live-secret\",\"Visible\":\"ok\"}}");
+        });
+        var context = CreateReadOnlyContext(HttpMethods.Get, "/api/servers/alpha/config");
+        await middleware.InvokeAsync(context);
+
+        context.Response.Body.Position = 0;
+        var json = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        Assert.DoesNotContain("metadata-secret", json);
+        Assert.DoesNotContain("live-secret", json);
+        Assert.Contains("\"secretValues\":{\"AccessToken\":true}", json);
+    }
+
+    [Fact]
     public async Task ReadOnly_trailing_slash_config_redacts_password_values()
     {
         var middleware = new RoleEnforcementMiddleware(async context =>

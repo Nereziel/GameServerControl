@@ -45,9 +45,10 @@ test('ReadOnly users cannot mutate through the cloud gateway', () => {
   assert.equal(authorizeGatewayRequest('POST', 'Admin', '/api/hosts/pc1/api/servers/example/start').allowed, true);
 });
 
-test('ReadOnly users can negotiate SignalR and control read-only live-log subscriptions', () => {
+test('ReadOnly users can negotiate SignalR, but cannot modify log-tail state', () => {
   assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/hosts/pc1/hubs/status/negotiate').allowed, true);
-  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/hosts/pc1/api/servers/example/logs/tail').allowed, true);
+  assert.equal(authorizeGatewayRequest('GET', 'ReadOnly', '/api/hosts/pc1/api/servers/example/logs/tail').allowed, true);
+  assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/hosts/pc1/api/servers/example/logs/tail').allowed, false);
   assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/servers/example/start').allowed, false);
   assert.equal(authorizeGatewayRequest('POST', 'ReadOnly', '/api/hosts/pc1/api/servers/example/rcon/command').allowed, false);
 });

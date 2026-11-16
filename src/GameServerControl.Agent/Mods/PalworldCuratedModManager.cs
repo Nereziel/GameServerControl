@@ -153,7 +153,7 @@ public sealed class PalworldCuratedModManager : IModManager
 
     // ---- install ----
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
             return new ModInstallResult(false, null, "URL must be an http(s) link.");
@@ -164,6 +164,8 @@ public sealed class PalworldCuratedModManager : IModManager
             url.Contains($"{e.Owner}/{e.Repo}", StringComparison.OrdinalIgnoreCase));
         var kind = entry?.Kind ?? InstallKind.Win64ZipExtract;
         var modId = entry?.ModId ?? displayName ?? Path.GetFileNameWithoutExtension(uri.Segments.LastOrDefault() ?? "mod");
+        if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+            return new ModInstallResult(false, null, "The downloaded Palworld package ID does not match the installed mod.");
 
         var tmpRoot = Path.Combine(Path.GetTempPath(), "gsc-mod-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(tmpRoot);
@@ -187,11 +189,12 @@ public sealed class PalworldCuratedModManager : IModManager
             Directory.CreateDirectory(installRoot);
 
             var installedFiles = new List<string>();
+            ModInstallTransaction.IReplacement replacement;
             if (kind == InstallKind.Win64Dll)
             {
                 // Single DLL: copy verbatim
                 var dst = Path.Combine(installRoot, Path.GetFileName(uri.LocalPath));
-                File.Copy(downloadPath, dst, overwrite: true);
+                replacement = ModInstallTransaction.BeginFiles(installRoot, new[] { (Source: downloadPath, Destination: dst) });
                 installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
             }
             else
@@ -200,16 +203,13 @@ public sealed class PalworldCuratedModManager : IModManager
                 var extract = Path.Combine(tmpRoot, "extract");
                 try { ZipFile.ExtractToDirectory(downloadPath, extract, overwriteFiles: true); }
                 catch (Exception ex) { return new ModInstallResult(false, null, "Asset isn't a valid zip: " + ex.Message); }
-                foreach (var f in Directory.EnumerateFiles(extract, "*", SearchOption.AllDirectories))
-                {
-                    var rel = Path.GetRelativePath(extract, f);
-                    var dst = Path.Combine(installRoot, rel);
-                    Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
-                    File.Copy(f, dst, overwrite: true);
-                    installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
-                }
+                var files = Directory.EnumerateFiles(extract, "*", SearchOption.AllDirectories)
+                    .Select(f => (Source: f, Destination: Path.Combine(installRoot, Path.GetRelativePath(extract, f)))).ToArray();
+                replacement = ModInstallTransaction.BeginFiles(installRoot, files);
+                installedFiles.AddRange(files.Select(f => Path.GetRelativePath(def.GuestWorkingDir, f.Destination)));
             }
 
+            using var pendingReplacement = replacement;
             var version = entry is not null
                 ? (await _gh.GetLatestAsync(entry.Owner, entry.Repo, entry.AssetNameContains, ct))?.Tag
                 : null;
@@ -221,7 +221,8 @@ public sealed class PalworldCuratedModManager : IModManager
                 InstalledAt: DateTimeOffset.UtcNow,
                 SizeBytes: installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(),
                 Files: installedFiles.ToArray());
-            UpdateMetadata(def, m => m[modId] = ToSidecar(info));
+            var retained = pendingReplacement.Complete(() => UpdateMetadata(def, m => m[modId] = ToSidecar(info)));
+            if (retained) _logger.LogWarning("Previous Palworld mod files retained after replacement of {ModId}", modId);
             return new ModInstallResult(true, info, null);
         }
         catch (Exception ex)
@@ -242,10 +243,28 @@ public sealed class PalworldCuratedModManager : IModManager
         var meta = LoadMetadata(def);
         if (!meta.TryGetValue(modId, out var sidecar)) return Task.FromResult(false);
         var ok = false;
+        var allowedRoots = new[]
+        {
+            Path.Combine(def.GuestWorkingDir, "Pal", "Binaries", "Win64"),
+            Path.Combine(def.GuestWorkingDir, "Pal", "Content", "Paks", "~mods")
+        };
         foreach (var rel in sidecar.Files ?? Array.Empty<string>())
         {
-            var abs = Path.Combine(def.GuestWorkingDir, rel);
-            try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { /* ignore */ }
+            string? safeFile = null;
+            foreach (var allowed in allowedRoots)
+            {
+                if (ModRemovalSafety.TryResolveInstalledFile(def.GuestWorkingDir, allowed, rel, out var resolved))
+                {
+                    safeFile = resolved;
+                    break;
+                }
+            }
+            if (safeFile is null)
+            {
+                _logger.LogWarning("Skipping unsafe Palworld mod metadata path {Path}", rel);
+                continue;
+            }
+            try { if (File.Exists(safeFile)) { File.Delete(safeFile); ok = true; } } catch { /* ignore */ }
         }
         UpdateMetadata(def, m => m.Remove(modId));
         return Task.FromResult(ok);
@@ -275,16 +294,10 @@ public sealed class PalworldCuratedModManager : IModManager
     private void UpdateMetadata(ServerDef def, Action<Dictionary<string, SidecarEntry>> mutate)
     {
         var path = MetadataPath(def);
-        var dict = LoadMetadata(def);
+        var dict = ModMetadataStore.ReadForUpdate<SidecarEntry>(path);
         mutate(dict);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Palworld mod sidecar write failed at {Path}", path);
-        }
+        // A failed sidecar write must trigger file rollback, not silently succeed.
+        ModMetadataStore.WriteAtomic(path,
+            JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
     }
 }
