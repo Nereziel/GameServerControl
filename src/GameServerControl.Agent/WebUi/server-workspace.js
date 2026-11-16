@@ -416,7 +416,7 @@ async function renderServerConfig(def, body) {
   let fields = '';
   for (const section of result.schema.sections || []) {
     fields += `<div class="sw-section"><h3>${esc(section.title)}</h3><div class="formgrid">`;
-    for (const field of section.fields || []) fields += configField(field, values[field.key] ?? field.default ?? '');
+    for (const field of section.fields || []) fields += configField(field, configValue(values, field));
     fields += '</div></div>';
   }
   body.innerHTML = `<div class="sw-toolbar"><div class="muted tiny">Game-specific settings from the ${esc(profileFor(def)?.label || def.gameType)} profile.</div><div class="spacer"></div><button class="btn primary" ${uiAction('serverWorkspaceSaveConfig',[def.id])}>Save configuration</button></div>${fields}`;
