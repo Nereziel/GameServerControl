@@ -102,6 +102,9 @@ jobs:
           bash -n deploy/relay/ufw-reconcile.sh
           bash -n scripts/test-relay-ufw-reconcile.sh
 
+      - name: Test Linux release archive integrity
+        run: bash scripts/test-linux-release-integrity.sh
+
       - name: Test Relay UFW reconciliation
         run: bash scripts/test-relay-ufw-reconcile.sh
 
@@ -266,6 +269,7 @@ jobs:
           bash -n deploy/relay/ufw-reconcile.sh
           bash -n scripts/test-relay-ufw-reconcile.sh
           bash scripts/test-relay-ufw-reconcile.sh
+          bash scripts/test-linux-release-integrity.sh
 
       - name: Publish agent (linux-x64, self-contained)
         run: >-
