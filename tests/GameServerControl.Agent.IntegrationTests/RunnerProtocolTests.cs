@@ -141,6 +141,34 @@ public sealed class RunnerProtocolTests
         Assert.NotNull(new RunnerRequest(RunnerCommand.SendConsoleInput, ConsoleInput: new string('x', RunnerProtocolLimits.MaxConsoleInputChars + 1)).Validate());
     }
 
+    [Fact]
+    public void Runner_manifest_revision_detects_stale_live_paths_and_args()
+    {
+        var original = Manifest(@"D:\\GameServers\\Valheim\\old.exe", @"D:\\GameServers\\Valheim", Array.Empty<string>());
+        var updatedPath = original with { ExecutablePath = @"D:\\GameServers\\Valheim\\valheim_server.exe" };
+        var updatedArgs = original with { Arguments = new[] { "-savedir", @"D:\\GameServers\\Valheim\\data" } };
+
+        Assert.NotEqual(original.Revision(), updatedPath.Revision());
+        Assert.NotEqual(original.Revision(), updatedArgs.Revision());
+        Assert.Equal(original.Revision(), System.Text.Json.JsonSerializer.Deserialize<RunnerManifest>(
+            System.Text.Json.JsonSerializer.Serialize(original))!.Revision());
+    }
+
+    [Fact]
+    public void Runner_manifest_revision_only_restarts_an_idle_game()
+    {
+        const string oldRevision = "old";
+        const string newRevision = "new";
+        Assert.Equal(RunnerManifestUpdateAction.Current,
+            RunnerManifestUpdate.Decide(newRevision, newRevision, gameRunning: false));
+        Assert.Equal(RunnerManifestUpdateAction.RestartIdle,
+            RunnerManifestUpdate.Decide(newRevision, oldRevision, gameRunning: false));
+        Assert.Equal(RunnerManifestUpdateAction.DeferUntilStopped,
+            RunnerManifestUpdate.Decide(newRevision, oldRevision, gameRunning: true));
+        Assert.Equal(RunnerManifestUpdateAction.RestartIdle,
+            RunnerManifestUpdate.Decide(newRevision, null, gameRunning: false));
+    }
+
     private static RunnerManifest Manifest(string executable, string workingDirectory, string[] stopProcessNames) =>
         new(
             "alpha",
