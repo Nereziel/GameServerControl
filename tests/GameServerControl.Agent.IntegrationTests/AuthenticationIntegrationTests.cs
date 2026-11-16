@@ -65,6 +65,37 @@ public sealed class AuthenticationIntegrationTests
         Assert.Contains("alpha", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alpha-rcon-secret", body, StringComparison.Ordinal);
         Assert.DoesNotContain("alpha-webhook-secret", body, StringComparison.Ordinal);
+        Assert.DoesNotContain(factory.TempRoot, body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"guestCredentialId\":null", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReadOnly_server_list_omits_launch_passwords_but_admin_can_access_args()
+    {
+        using var factory = new AgentTestFactory();
+        var token = factory.CreateReadOnlyToken();
+        var registry = factory.Services.GetRequiredService<ServerRegistry>();
+        var original = registry.Get("alpha")!;
+        var secret = "launch-password-not-for-readonly";
+        factory.Services.GetRequiredService<ServerStore>().Update("alpha", original with
+        {
+            StartArgs = new[] { "-password", secret, "?ServerAdminPassword=another-secret" },
+            DiscordWebhookUrl = null
+        });
+
+        using var viewer = factory.CreateClientWithToken(token);
+        using var admin = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+        using var viewerResult = await viewer.GetAsync("/api/servers");
+        using var adminResult = await admin.GetAsync("/api/servers");
+        var viewerBody = await viewerResult.Content.ReadAsStringAsync();
+        var adminBody = await adminResult.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.OK, viewerResult.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, adminResult.StatusCode);
+        Assert.DoesNotContain(secret, viewerBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("another-secret", viewerBody, StringComparison.Ordinal);
+        Assert.Contains("\"startArgs\":[]", viewerBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(secret, adminBody, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -81,6 +112,20 @@ public sealed class AuthenticationIntegrationTests
         Assert.Contains("alpha", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("alpha-rcon-secret", body, StringComparison.Ordinal);
         Assert.DoesNotContain("alpha-webhook-secret", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadOnly_cannot_delete_server_through_audit_middleware()
+    {
+        using var factory = new AgentTestFactory();
+        var token = factory.CreateReadOnlyToken();
+        using var viewer = factory.CreateClientWithToken(token);
+        using var request = new StringContent(
+            "{\"confirmation\":\"Alpha\",\"createFinalBackup\":false}",
+            System.Text.Encoding.UTF8, "application/json");
+        using var response = await viewer.PostAsync("/api/servers/alpha/delete-completely", request);
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.NotNull(factory.Services.GetRequiredService<ServerRegistry>().Get("alpha"));
     }
 
     [Fact]

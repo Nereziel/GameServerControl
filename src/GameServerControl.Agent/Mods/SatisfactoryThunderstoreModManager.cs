@@ -70,6 +70,9 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         foreach (var sub in Directory.EnumerateDirectories(dir))
         {
             var id = Path.GetFileName(sub);
+            if (id.StartsWith(".gsc-stage-", StringComparison.OrdinalIgnoreCase) ||
+                id.StartsWith(".gsc-mod-prev-", StringComparison.OrdinalIgnoreCase))
+                continue; // Internal mod transaction directory.
             var sidecar = meta.GetValueOrDefault(id);
             long size = 0;
             try { size = new DirectoryInfo(sub).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length); }
@@ -89,7 +92,7 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
 
     // ---- install ----
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
             return new ModInstallResult(false, null, "URL must be an http(s) link to a zip.");
@@ -123,58 +126,62 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     "No Satisfactory mod files (.smod / .pak / .uplugin) found in the zip.");
 
             var modId = SanitizeFolderName(payloadName);
-            var destDir = Path.Combine(modsDir, modId);
-            if (Directory.Exists(destDir))
+            if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+                return new ModInstallResult(false, null, "The downloaded Satisfactory package ID does not match the installed mod.");
+            if (!ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var destDir))
+                return new ModInstallResult(false, null, "Unsafe mod folder name or linked destination.");
+            var stageDir = Path.Combine(modsDir, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(stageDir);
+            try
             {
-                // Allow upgrade-in-place
-                try { Directory.Delete(destDir, recursive: true); } catch { /* ignore */ }
-            }
-            Directory.CreateDirectory(destDir);
+                if (sourceDir is not null)
+                    CopyDirectory(sourceDir, stageDir);
+                else
+                    foreach (var f in looseFiles!)
+                        File.Copy(f, Path.Combine(stageDir, Path.GetFileName(f)), overwrite: false);
 
-            var installedFiles = new List<string>();
-            if (sourceDir is not null)
-            {
-                CopyDirectory(sourceDir, destDir);
-                foreach (var f in Directory.EnumerateFiles(destDir, "*", SearchOption.AllDirectories))
-                    installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, f));
-            }
-            else
-            {
-                foreach (var f in looseFiles!)
+                var installedFiles = Directory.EnumerateFiles(stageDir, "*", SearchOption.AllDirectories)
+                    .Select(f => Path.GetRelativePath(stageDir, f))
+                    .Select(f => Path.GetRelativePath(def.GuestWorkingDir, Path.Combine(destDir, f)))
+                    .ToList();
+                var installedBytes = Directory.EnumerateFiles(stageDir, "*", SearchOption.AllDirectories)
+                    .Select(f => new FileInfo(f).Length).Sum();
+                using var replacement = ModInstallTransaction.BeginDirectory(stageDir, destDir);
+
+                // Extract version + nicer name from Thunderstore manifest.json if present
+                string? version = null;
+                string? finalName = displayName;
+                var manifest = Path.Combine(extractPath, "manifest.json");
+                if (File.Exists(manifest))
                 {
-                    var dst = Path.Combine(destDir, Path.GetFileName(f));
-                    File.Copy(f, dst, overwrite: true);
-                    installedFiles.Add(Path.GetRelativePath(def.GuestWorkingDir, dst));
+                    try
+                    {
+                        var json = JsonNode.Parse(await File.ReadAllTextAsync(manifest, ct));
+                        version = json?["version_number"]?.ToString();
+                        finalName ??= json?["name"]?.ToString();
+                    }
+                    catch { /* tolerate */ }
                 }
-            }
+                finalName ??= modId;
 
-            // Extract version + nicer name from Thunderstore manifest.json if present
-            string? version = null;
-            string? finalName = displayName;
-            var manifest = Path.Combine(extractPath, "manifest.json");
-            if (File.Exists(manifest))
+                var info = new ModInfo(
+                    ModId: modId,
+                    DisplayName: finalName,
+                    Version: version,
+                    Source: url,
+                    InstalledAt: DateTimeOffset.UtcNow,
+                    SizeBytes: installedBytes,
+                    Files: installedFiles.ToArray());
+                var retained = replacement.Complete(() => UpdateMetadata(def, m => m[modId] = ToSidecar(info)));
+                if (retained) _logger.LogWarning("Previous Satisfactory mod directory retained after replacement of {ModId}", modId);
+                return new ModInstallResult(true, info, null);
+            }
+            finally
             {
-                try
-                {
-                    var json = JsonNode.Parse(await File.ReadAllTextAsync(manifest, ct));
-                    version = json?["version_number"]?.ToString();
-                    finalName ??= json?["name"]?.ToString();
-                }
-                catch { /* tolerate */ }
+                if (Directory.Exists(stageDir)) try { Directory.Delete(stageDir, recursive: true); } catch { }
             }
-            finalName ??= modId;
 
-            var info = new ModInfo(
-                ModId: modId,
-                DisplayName: finalName,
-                Version: version,
-                Source: url,
-                InstalledAt: DateTimeOffset.UtcNow,
-                SizeBytes: installedFiles.Select(f => new FileInfo(Path.Combine(def.GuestWorkingDir, f)).Length).Sum(),
-                Files: installedFiles.ToArray());
-            UpdateMetadata(def, m => m[modId] = ToSidecar(info));
 
-            return new ModInstallResult(true, info, null);
         }
         catch (Exception ex)
         {
@@ -194,6 +201,8 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         var modsDir = ModsFolder(def);
         if (!Directory.Exists(modsDir)) return Task.FromResult(false);
 
+        if (!ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var modFolder))
+            return Task.FromResult(false);
         var meta = LoadMetadata(def);
         var ok = false;
 
@@ -201,11 +210,14 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
         {
             foreach (var rel in files)
             {
-                var abs = Path.Combine(def.GuestWorkingDir, rel);
+                if (!ModRemovalSafety.TryResolveInstalledFile(def.GuestWorkingDir, modFolder, rel, out var abs))
+                {
+                    _logger.LogWarning("Skipping unsafe Satisfactory mod metadata path {Path}", rel);
+                    continue;
+                }
                 try { if (File.Exists(abs)) { File.Delete(abs); ok = true; } } catch { /* ignore */ }
             }
-            var modFolder = Path.Combine(modsDir, modId);
-            if (Directory.Exists(modFolder))
+            if (Directory.Exists(modFolder) && ModRemovalSafety.CanDeleteDirectoryTree(modFolder))
             {
                 try { Directory.Delete(modFolder, recursive: true); ok = true; } catch { /* ignore */ }
             }
@@ -213,11 +225,10 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
             return Task.FromResult(ok);
         }
 
-        // No metadata (manual install) — delete by folder match
-        var folderPath = Path.Combine(modsDir, modId);
-        if (Directory.Exists(folderPath))
+        // No sidecar: only delete a direct, non-linked child of the mods directory.
+        if (Directory.Exists(modFolder) && ModRemovalSafety.CanDeleteDirectoryTree(modFolder))
         {
-            try { Directory.Delete(folderPath, recursive: true); ok = true; } catch { /* ignore */ }
+            try { Directory.Delete(modFolder, recursive: true); ok = true; } catch { /* ignore */ }
         }
         return Task.FromResult(ok);
     }
@@ -273,7 +284,7 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
     {
         var invalid = Path.GetInvalidFileNameChars();
         var clean = string.Concat(name.Select(c => invalid.Contains(c) ? '_' : c));
-        return string.IsNullOrWhiteSpace(clean) ? "mod" : clean;
+        return string.IsNullOrWhiteSpace(clean) || clean is "." or ".." ? "mod" : clean;
     }
 
     // ---- metadata sidecar (same layout as Valheim, different file path) ----
@@ -302,16 +313,10 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
     private void UpdateMetadata(ServerDef def, Action<Dictionary<string, SidecarEntry>> mutate)
     {
         var path = MetadataPath(def);
-        var dict = LoadMetadata(def);
+        var dict = ModMetadataStore.ReadForUpdate<SidecarEntry>(path);
         mutate(dict);
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Mod sidecar write failed at {Path}", path);
-        }
+        // A failed sidecar write must trigger file rollback, not silently succeed.
+        ModMetadataStore.WriteAtomic(path,
+            JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true }));
     }
 }

@@ -29,16 +29,6 @@ public sealed class BackupService
 
     private sealed record SaveTarget(string Path, string Prefix);
 
-    private sealed class RestoreSwap
-    {
-        public required string Target { get; init; }
-        public required string Stage { get; init; }
-        public required string Old { get; init; }
-        public bool HadOriginal { get; init; }
-        public bool OriginalMoved { get; set; }
-        public bool StageMoved { get; set; }
-    }
-
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,
@@ -287,7 +277,7 @@ public sealed class BackupService
 
         await PruneBareMetalAsync(def, ct);
 
-        var swaps = targets.Select(t => new RestoreSwap
+        var swaps = targets.Select(t => new RestoreSwapStep
         {
             Target = t.Path,
             Stage = t.Path + ".gsc-restore-" + corr,
@@ -299,33 +289,25 @@ public sealed class BackupService
         {
             ExtractArchiveToStages(zipPath, targets, swaps, ct);
 
-            foreach (var swap in swaps)
-            {
-                ct.ThrowIfCancellationRequested();
-                Directory.CreateDirectory(Path.GetDirectoryName(swap.Target) ?? throw new InvalidOperationException("Save directory has no parent."));
-                if (swap.HadOriginal)
-                {
-                    Directory.Move(swap.Target, swap.Old);
-                    swap.OriginalMoved = true;
-                }
-                Directory.Move(swap.Stage, swap.Target);
-                swap.StageMoved = true;
-            }
+            BackupRestoreSwapTransactions.Commit(swaps, ct);
 
-            foreach (var swap in swaps)
-                if (swap.OriginalMoved && Directory.Exists(swap.Old)) Directory.Delete(swap.Old, recursive: true);
+            // All swap steps must succeed before any original data is deleted.
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Restore swap failed for {ServerId}; attempting rollback", def.Id);
-            RollbackSwaps(swaps);
-            CleanupStages(swaps);
+            BackupRestoreSwapTransactions.Rollback(swaps, _logger);
+            CleanupStages(swaps); // Only staging paths. Never delete a retained .gsc-old copy here.
             return new ActionResult(false, "Restore failed and rollback was attempted: " + ex.Message, corr);
         }
 
+        // Commit completed: cleanup failures must NOT trigger a rollback. The restored
+        // saves are already live and other .Old copies may have been deleted.
         CleanupStages(swaps);
+        var retainedOriginals = BackupRestoreSwapTransactions.CleanupCommitted(swaps, _logger);
         return new ActionResult(true,
-            $"Restored from {safeName}. Safety copy: {Path.GetFileName(safety.Path)}", corr);
+            $"Restored from {safeName}. Safety copy: {Path.GetFileName(safety.Path)}" +
+            (retainedOriginals ? " Warning: one or more old save directories could not be removed; inspect .gsc-old folders before removing them." : ""), corr);
     }
 
     private async Task<ActionResult> RestoreHyperVAsync(ServerDef def, string checkpointName, string corr, CancellationToken ct)
@@ -545,13 +527,15 @@ public sealed class BackupService
     private void ExtractArchiveToStages(
         string zipPath,
         IReadOnlyList<SaveTarget> targets,
-        IReadOnlyList<RestoreSwap> swaps,
+        IReadOnlyList<RestoreSwapStep> swaps,
         CancellationToken ct)
     {
         foreach (var swap in swaps)
         {
-            if (Directory.Exists(swap.Stage)) Directory.Delete(swap.Stage, recursive: true);
-            if (Directory.Exists(swap.Old)) Directory.Delete(swap.Old, recursive: true);
+            // A stale .Old path can contain the last recoverable copy from an
+            // interrupted restore. Refuse to overwrite/delete it.
+            if (Directory.Exists(swap.Stage) || Directory.Exists(swap.Old))
+                throw new IOException("Restore staging or prior-original directory already exists: " + swap.Target);
             Directory.CreateDirectory(swap.Stage);
         }
 
@@ -583,30 +567,13 @@ public sealed class BackupService
         }
     }
 
-    private void RollbackSwaps(IReadOnlyList<RestoreSwap> swaps)
-    {
-        foreach (var swap in swaps.Reverse())
-        {
-            try
-            {
-                if (swap.StageMoved && Directory.Exists(swap.Target))
-                    Directory.Delete(swap.Target, recursive: true);
-                if (swap.OriginalMoved && Directory.Exists(swap.Old))
-                    Directory.Move(swap.Old, swap.Target);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Backup restore rollback failed for {Target}", swap.Target);
-            }
-        }
-    }
-
-    private static void CleanupStages(IEnumerable<RestoreSwap> swaps)
+    private static void CleanupStages(IEnumerable<RestoreSwapStep> swaps)
     {
         foreach (var swap in swaps)
         {
+            // During rollback the old directory may still contain the only original
+            // data if a move failed. Never delete it from generic stage cleanup.
             TryDeleteDirectory(swap.Stage);
-            if (!swap.OriginalMoved || swap.StageMoved) TryDeleteDirectory(swap.Old);
         }
     }
 

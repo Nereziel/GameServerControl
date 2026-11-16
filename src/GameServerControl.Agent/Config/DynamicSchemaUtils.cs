@@ -23,15 +23,20 @@ internal static class DynamicSchemaUtils
         var isDec = !isInt && double.TryParse(v, System.Globalization.NumberStyles.Float,
                                               System.Globalization.CultureInfo.InvariantCulture, out _);
 
-        var type = isBool       ? ConfigFieldType.Toggle
-                 : isPasswordKey ? ConfigFieldType.Password
+        var type = isPasswordKey ? ConfigFieldType.Password
+                 : isBool       ? ConfigFieldType.Toggle
                  : isInt         ? ConfigFieldType.Integer
                  : isDec         ? ConfigFieldType.Decimal
                  :                 ConfigFieldType.Text;
 
         var label = Humanize(key);
-        var description = $"Auto-discovered from {source}. Default: {(string.IsNullOrEmpty(v) ? "(empty)" : v)}";
-        return new ConfigField(key, label, type, description, Default: isBool ? v.ToLowerInvariant() : v);
+        // Some dynamic providers pass the LIVE current value as rawDefault.
+        // Never copy secrets into schema defaults or descriptions, even for Admin.
+        var description = isPasswordKey
+            ? $"Auto-discovered sensitive setting from {source}."
+            : $"Auto-discovered from {source}. Default: {(string.IsNullOrEmpty(v) ? "(empty)" : v)}";
+        return new ConfigField(key, label, type, description,
+            Default: isPasswordKey ? null : isBool ? v.ToLowerInvariant() : v);
     }
 
     /// <summary>

@@ -32,9 +32,8 @@ foreach ($required in @('SHA256SUMS', 'Get-FileHash', '$env:GSC_VERSION = $tag',
 
 Write-Host 'Generated Windows updater helper syntax/security contract OK.'
 
-# Bootstrap is the only Windows installer entry point intended for "irm ... | iex".
-# It may execute text from main, but must never execute downloaded installer text:
-# installer bytes are pinned to one release and verified before powershell.exe -File.
+# Release bootstrap must be downloaded and SHA-256 verified before local execution.
+# It may fetch release installer bytes but must never evaluate downloaded script text.
 $bootstrapPath = 'deploy/windows/bootstrap.ps1'
 $bootstrapSource = Get-Content -LiteralPath $bootstrapPath -Raw
 $bootstrapTokens = $null
