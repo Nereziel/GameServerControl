@@ -57,6 +57,7 @@ async function runUiActions(actions){for(const [name,args=[]] of actions||[]){co
 let CFG={url:'',token:''};
 let SERVERS=[],STATUS={},CURRENT_VIEW='servers',JOB_CACHE={},MOD_CTX=null,MOD_RESULTS=[],MOD_UPDATES=[],MODAL_CLEANUP=null;
 let PROFILES=[],GAMES=[],UPDATE_STATUS=null;
+let HOST_CAPABILITIES={schemaVersion:0,features:[]};
 const CFG_KEY='gsc.connection.v2';
 const HOST_KEY='gsc.activeHost.v1';
 let ACTIVE_HOST_ID='local',HOST_DIRECTORY=[],HOST_OVERVIEW=[],HOST_SWITCH_EPOCH=0,LAST_HOST_OVERVIEW=0;
@@ -111,7 +112,10 @@ async function selectHost(id){
   showView('servers');
   setHostChrome();
   try{
-    if(id!=='all')try{await loadProfiles()}catch(e){setNotice('Profile refresh failed: '+e.message,'err',false)}
+    if(id!=='all'){
+      await loadCapabilities();
+      try{await loadProfiles()}catch(e){setNotice('Profile refresh failed: '+e.message,'err',false)}
+    }else HOST_CAPABILITIES={schemaVersion:0,features:[]};
     await loadServers(false);
     await refreshJobs(false);
   }catch(e){setNotice('Computer connection failed: '+e.message,'err',false)}
@@ -219,6 +223,25 @@ function profileToGame(p){
   };
 }
 
+async function loadCapabilities(){
+  if(ACTIVE_HOST_ID==='all'){HOST_CAPABILITIES={schemaVersion:0,features:[]};return}
+  const selectedHost=ACTIVE_HOST_ID;
+  let capabilities={schemaVersion:0,features:[]};
+  try{
+    const payload=await api('/api/capabilities');
+    if(payload&&Number.isInteger(payload.schemaVersion)&&Array.isArray(payload.features)){
+      capabilities={schemaVersion:payload.schemaVersion,
+        features:payload.features.filter(feature=>typeof feature==='string')};
+    }
+  }catch{
+    // Older Agents do not implement capabilities; do not offer new-only actions.
+  }
+  if(selectedHost===ACTIVE_HOST_ID)HOST_CAPABILITIES=capabilities;
+}
+function supportsAgentFeature(name){
+  return HOST_CAPABILITIES.schemaVersion>=1&&HOST_CAPABILITIES.features.includes(name);
+}
+
 async function loadProfiles(){
   const profiles=await api('/api/game-profiles');
   PROFILES=(profiles||[]).map(profileToGame);
@@ -255,6 +278,7 @@ function logout(){sessionStorage.removeItem(CFG_KEY);location.reload()}
 
 async function boot(){
   $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
+  await loadCapabilities();
   try{await loadProfiles()}catch(e){toast('Game profiles failed: '+e.message,'err')}
   await refreshAll();
   await checkForUpdate(false);
