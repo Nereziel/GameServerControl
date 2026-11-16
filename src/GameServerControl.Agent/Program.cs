@@ -313,6 +313,25 @@ api.MapPost("/servers/minecraft/install", (MinecraftInstallRequest request,
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
 });
+api.MapPost("/servers/minecraft/recover", (MinecraftRecoveryRequest request, ServerStore store,
+    ServerRegistry registry) =>
+{
+    if (registry.Get(request.ServerId) is not null)
+        return Results.Conflict(new { error = "A server with this ID is already registered." });
+    try
+    {
+        var definition = MinecraftServerPackages.RecoverDefinition(request);
+        return Results.Ok(store.Add(definition));
+    }
+    catch (Exception ex) when (ex is ArgumentException or InvalidDataException or System.Text.Json.JsonException)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (InvalidOperationException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}).RequireAuthorization("admin");
 api.MapPost("/servers/{id}/minecraft/bedrock/addons", async (
     string id, HttpRequest request, ServerRegistry registry,
     GameServerControl.Agent.Mods.MinecraftBedrockAddOnManager addOns, CancellationToken ct) =>
