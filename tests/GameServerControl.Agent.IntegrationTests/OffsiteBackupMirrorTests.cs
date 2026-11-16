@@ -95,6 +95,7 @@ public sealed class OffsiteBackupMirrorTests
         File.WriteAllBytes(archive, Encoding.UTF8.GetBytes("zip world data for test"));
         File.WriteAllText(archive + ".meta.json", Metadata);
         offsite = Path.Combine(root, "mounted-remote");
+        Directory.CreateDirectory(offsite); // Represents an already mounted external share.
         return root;
     }
 }
