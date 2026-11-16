@@ -104,6 +104,9 @@ public sealed class MinecraftServerPackages
                 File.WriteAllText(Path.Combine(stage, "eula.txt"), "eula=true\n");
             }
 
+            File.WriteAllText(Path.Combine(stage, ".gsc-minecraft.json"),
+                JsonSerializer.Serialize(new { profileKey = profile.Key, version }, new JsonSerializerOptions { WriteIndented = true }));
+
             // The generated server.properties exists on Bedrock installs; for
             // Java install it is safe to write the initial file before first start.
             var port = req.Port == 0 ? profile.DefaultPorts![0].Port : req.Port;

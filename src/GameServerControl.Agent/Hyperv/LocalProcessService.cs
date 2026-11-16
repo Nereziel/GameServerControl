@@ -112,6 +112,9 @@ public sealed class LocalProcessService
                 WindowStyle = interactive ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Minimized
             };
             foreach (var a in args) psi.ArgumentList.Add(a);
+            // Bedrock Linux loads native libraries from its server directory.
+            if (def?.GameProfileKey == "minecraft-bedrock" && OperatingSystem.IsLinux())
+                psi.Environment["LD_LIBRARY_PATH"] = psi.WorkingDirectory;
 
             var p = Process.Start(psi);
             if (p is null)

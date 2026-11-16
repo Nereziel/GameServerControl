@@ -136,6 +136,16 @@ builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServ
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.SatisfactoryThunderstoreModManager>();
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.PalworldCuratedModManager>();
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.ArkWorkshopModManager>();
+builder.Services.AddSingleton<GameServerControl.Agent.Mods.IModManager, GameServerControl.Agent.Mods.MinecraftJavaModManager>();
+builder.Services.AddHttpClient("minecraft-modding", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(2);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("GameServerControl/1.1 (+https://github.com/Nereziel/GameServerControl)");
+}).ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+{
+    AllowAutoRedirect = false,
+    UseProxy = false
+});
 builder.Services.AddSingleton<GameServerControl.Agent.Mods.ModManagerRegistry>();
 builder.Services.AddSingleton<SourceRconClient>();
 builder.Services.AddSingleton<IGameRcon, PalworldRcon>();

@@ -345,7 +345,24 @@ public sealed class ServerOrchestrator
         if (def.HostingMode == HostingMode.BareMetal)
         {
             var pid = _tracker.Get(id).PidInGuest;
-            await _local.StopProcessAsync(def, pid, force, ct);
+            var stoppedGracefully = false;
+            if (def.GameType == GameType.Minecraft && !force)
+            {
+                var (sent, _) = await _local.SendConsoleInputAsync(def, "stop", ct);
+                if (sent)
+                {
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var (found, runningPid) = await _local.FindProcessAsync(def, ct);
+                        if (found && runningPid is null) { stoppedGracefully = true; break; }
+                        await Task.Delay(500, ct);
+                    }
+                }
+            }
+            if (!stoppedGracefully)
+                await _local.StopProcessAsync(def, pid, force, ct);
 
             if (def.StopProcessNames is { Length: > 0 } extras)
             {
