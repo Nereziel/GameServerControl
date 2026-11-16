@@ -117,13 +117,13 @@ public sealed class BackupService
                 return new ActionResult(false, created.Error ?? "Backup failed", corr);
 
             await PruneBareMetalAsync(def, ct);
-            _tracker.Update(id, s => s with { LastBackupAt = DateTimeOffset.UtcNow });
             var mb = (created.SizeBytes ?? 0) / 1024d / 1024d;
             if (created.Metadata?.SkippedFiles is > 0)
                 return new ActionResult(false,
                     $"Incomplete backup retained for inspection: {Path.GetFileName(created.Path)} ({mb:0.##} MB); " +
                     $"{created.Metadata.SkippedFiles} file(s) were skipped. Restore is disabled. Complete backups are preserved independently.",
                     corr);
+            _tracker.Update(id, state => state with { LastBackupAt = DateTimeOffset.UtcNow });
             return new ActionResult(true,
                 $"Backup created: {Path.GetFileName(created.Path)} ({mb:0.##} MB).", corr);
         }
