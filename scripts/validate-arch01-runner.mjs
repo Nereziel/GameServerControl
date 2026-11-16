@@ -64,8 +64,8 @@ requireCheck(manager.includes('NT SERVICE\\'), 'Runner services must use Windows
 requireCheck(manager.includes('ArgumentList'), 'Runner provisioning commands must use ProcessStartInfo.ArgumentList instead of shell interpolation.');
 requireCheck(!manager.includes('cmd.exe') && !manager.includes('powershell.exe'), 'Runner service provisioning must not shell through cmd.exe or powershell.exe.');
 requireCheck(manager.includes('RunnerManifest') && manager.includes('JsonSerializer'), 'Agent must persist manifest-defined launch metadata instead of sending it over IPC.');
-requireCheck(manager.includes('icacls.exe') && manager.includes('(OI)(CI)(M)') && manager.includes('(OI)(CI)(RX)'), 'Agent must grant per-server Modify access to game roots and read/execute access to Runner payload.');
 const aclPolicy = read('src/GameServerControl.Agent/Hyperv/RunnerServiceSecurity.cs');
+requireCheck(manager.includes('icacls.exe') && manager.includes('(OI)(CI)(M)') && aclPolicy.includes('(OI)(CI)(RX)'), 'Agent must grant per-server Modify access to game roots and read/execute access to Runner payload.');
 requireCheck(aclPolicy.includes('ExistingPayloadGrant') && aclPolicy.includes('"/T"') &&
     manager.includes('RunnerServiceSecurity.ExistingPayloadGrant(runnerRoot, serviceAccount)'),
     'Each new Runner must receive explicit read/execute access to already-installed EXE/DLL payload files.');
