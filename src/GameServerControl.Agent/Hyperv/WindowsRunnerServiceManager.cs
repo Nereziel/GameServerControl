@@ -35,8 +35,14 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
         await gate.WaitAsync(ct);
         try
         {
+            // Do not change the SCM identity of a live Runner before checking its token.
+            var preflight = await RefuseUnexpectedRunningAccountAsync(RunnerIdentity.ForServer(def.Id), ct);
+            if (!preflight.Ok) return new RunnerResponse(false, preflight.Error);
+
             var provision = await EnsureProvisionedAsync(def, ct);
             if (!provision.Ok) return new RunnerResponse(false, provision.Error);
+            var serviceIdentity = await EnsureExpectedServiceAccountAsync(def, provision.Identity, ct);
+            if (!serviceIdentity.Ok) return new RunnerResponse(false, serviceIdentity.Error);
 
             var started = await EnsureRunnerServiceRunningAsync(provision.Identity, ct);
             if (!started.Ok) return new RunnerResponse(false, started.Error);
@@ -157,8 +163,12 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     public async Task<(bool Ok, string Error)> SetAutostartAsync(ServerDef def, bool enabled, CancellationToken ct = default)
     {
         if (!Supports(def)) return (false, "Windows Runner autostart applies only to Windows BareMetal servers.");
+        var preflight = await RefuseUnexpectedRunningAccountAsync(RunnerIdentity.ForServer(def.Id), ct);
+        if (!preflight.Ok) return preflight;
         var provision = await EnsureProvisionedAsync(def, ct);
         if (!provision.Ok) return (false, provision.Error);
+        var serviceIdentity = await EnsureExpectedServiceAccountAsync(def, provision.Identity, ct);
+        if (!serviceIdentity.Ok) return serviceIdentity;
 
         var manifestPath = ManifestPath(provision.Identity);
         var manifest = await ReadManifestAsync(manifestPath, ct);
@@ -252,7 +262,11 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
 
     private static async Task<(bool Ok, string Error)> RemoveGrantAsync(string path, string serviceAccount, CancellationToken ct)
     {
-        var result = await RunToolAsync("icacls.exe", [path, "/remove:g", serviceAccount], ToolTimeout, ct);
+        // Revoke explicit grants from the protected Runner payload files as well.
+        var args = PathsEqual(path, RunnerRoot())
+            ? RunnerServiceSecurity.PayloadRevoke(path, serviceAccount)
+            : new[] { path, "/remove:g", serviceAccount };
+        var result = await RunToolAsync("icacls.exe", args, ToolTimeout, ct);
         return result.Ok ? (true, "") : (false, "Could not remove Runner ACL grant from " + path + ": " + result.Output);
     }
 
@@ -290,6 +304,54 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     }
 
     private static bool IsTransportFailure(RunnerPipeResult result) => result.TransportFailure;
+
+    private async Task<(bool Ok, string Error)> RefuseUnexpectedRunningAccountAsync(
+        RunnerIdentityInfo identity, CancellationToken ct)
+    {
+        var status = await RunToolAsync("sc.exe", ["query", identity.ServiceName], ToolTimeout, ct);
+        if (!status.Ok)
+            return status.Output.Contains("1060", StringComparison.OrdinalIgnoreCase)
+                ? (true, "")
+                : (false, "Could not verify Runner service state: " + status.Output);
+        if (!status.Output.Contains("RUNNING", StringComparison.OrdinalIgnoreCase))
+            return (true, "");
+
+        var query = await RunToolAsync("sc.exe", ["qc", identity.ServiceName], ToolTimeout, ct);
+        var expectedAccount = "NT SERVICE\\" + identity.ServiceName;
+        if (!query.Ok || !RunnerServiceSecurity.HasExpectedAccount(query.Output, expectedAccount))
+            return (false, "Runner service is already running under an unexpected or unverifiable Windows account. Stop its game and Runner service before reprovisioning.");
+
+        return (true, "");
+    }
+
+    private async Task<(bool Ok, string Error)> EnsureExpectedServiceAccountAsync(
+        ServerDef def, RunnerIdentityInfo identity, CancellationToken ct)
+    {
+        var expectedAccount = "NT SERVICE\\" + identity.ServiceName;
+        var query = await RunToolAsync("sc.exe", ["qc", identity.ServiceName], ToolTimeout, ct);
+        if (!query.Ok)
+            return (false, "Could not verify Runner service account: " + query.Output);
+        if (RunnerServiceSecurity.HasExpectedAccount(query.Output, expectedAccount))
+            return (true, "");
+
+        // Changing a Windows service account doesn't change the token of an already
+        // running service. Never continue launching a game through a possibly
+        // elevated service, and never kill a running game to repair its identity.
+        if (await IsRunnerServiceRunningAsync(identity, ct))
+            return (false, "Runner service is running with an unexpected account. Stop the game and Runner service before it can be repaired.");
+
+        // Bypass a previously cached provision and reapply sc.exe config + payload
+        // ACLs. This heals services whose account was changed outside the Agent.
+        _provisionedFingerprints.TryRemove(def.Id, out _);
+        var reprovisioned = await EnsureProvisionedAsync(def, ct);
+        if (!reprovisioned.Ok)
+            return (false, "Could not restore isolated Runner service account: " + reprovisioned.Error);
+
+        var verified = await RunToolAsync("sc.exe", ["qc", identity.ServiceName], ToolTimeout, ct);
+        if (!verified.Ok || !RunnerServiceSecurity.HasExpectedAccount(verified.Output, expectedAccount))
+            return (false, "Runner service account is not the expected isolated identity: " + identity.ServiceName);
+        return (true, "");
+    }
 
     private async Task<ProvisionResult> EnsureProvisionedAsync(ServerDef def, CancellationToken ct)
     {
@@ -438,8 +500,15 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
         ], ToolTimeout, ct);
         if (!stateGrant.Ok) return (false, "Could not grant Runner state access: " + stateGrant.Output);
 
-        var runnerGrant = await RunToolAsync("icacls.exe", [runnerRoot, "/grant", serviceAccount + ":(OI)(CI)(RX)"], ToolTimeout, ct);
+        var runnerGrant = await RunToolAsync("icacls.exe",
+            RunnerServiceSecurity.PayloadDirectoryGrant(runnerRoot, serviceAccount), ToolTimeout, ct);
         if (!runnerGrant.Ok) return (false, "Could not grant Runner payload access: " + runnerGrant.Output);
+
+        // Existing EXE/DLL files have protected ACLs installed without inheritance.
+        var existingPayloadGrant = await RunToolAsync("icacls.exe",
+            RunnerServiceSecurity.ExistingPayloadGrant(runnerRoot, serviceAccount), ToolTimeout, ct);
+        if (!existingPayloadGrant.Ok)
+            return (false, "Could not grant Runner executable/library access: " + existingPayloadGrant.Output);
 
         var workingGrant = await GrantModifyAsync(def.GuestWorkingDir, serviceAccount, ct);
         if (!workingGrant.Ok) return workingGrant;
