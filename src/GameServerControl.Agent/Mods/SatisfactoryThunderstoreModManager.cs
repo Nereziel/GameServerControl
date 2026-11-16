@@ -92,7 +92,7 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
 
     // ---- install ----
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
             return new ModInstallResult(false, null, "URL must be an http(s) link to a zip.");
@@ -126,6 +126,8 @@ public sealed class SatisfactoryThunderstoreModManager : IModManager
                     "No Satisfactory mod files (.smod / .pak / .uplugin) found in the zip.");
 
             var modId = SanitizeFolderName(payloadName);
+            if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+                return new ModInstallResult(false, null, "The downloaded Satisfactory package ID does not match the installed mod.");
             if (!ModRemovalSafety.TryResolveModDirectory(modsDir, modId, out var destDir))
                 return new ModInstallResult(false, null, "Unsafe mod folder name or linked destination.");
             var stageDir = Path.Combine(modsDir, ".gsc-stage-" + Guid.NewGuid().ToString("N"));

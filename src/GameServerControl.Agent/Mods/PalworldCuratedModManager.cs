@@ -153,7 +153,7 @@ public sealed class PalworldCuratedModManager : IModManager
 
     // ---- install ----
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
             return new ModInstallResult(false, null, "URL must be an http(s) link.");
@@ -164,6 +164,8 @@ public sealed class PalworldCuratedModManager : IModManager
             url.Contains($"{e.Owner}/{e.Repo}", StringComparison.OrdinalIgnoreCase));
         var kind = entry?.Kind ?? InstallKind.Win64ZipExtract;
         var modId = entry?.ModId ?? displayName ?? Path.GetFileNameWithoutExtension(uri.Segments.LastOrDefault() ?? "mod");
+        if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+            return new ModInstallResult(false, null, "The downloaded Palworld package ID does not match the installed mod.");
 
         var tmpRoot = Path.Combine(Path.GetTempPath(), "gsc-mod-" + Guid.NewGuid().ToString("n")[..8]);
         Directory.CreateDirectory(tmpRoot);

@@ -93,9 +93,11 @@ public sealed class ArkWorkshopModManager : IModManager
 
     // ---- install ----
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         var workshopId = ExtractWorkshopId(url);
+        if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, workshopId))
+            return new ModInstallResult(false, null, "The Workshop ID does not match the installed mod.");
         if (string.IsNullOrEmpty(workshopId))
             return new ModInstallResult(false, null,
                 "Couldn't extract a Steam Workshop ID from that URL. Paste either the full https://steamcommunity.com/sharedfiles/filedetails/?id=XXXXXX URL or just the numeric ID.");

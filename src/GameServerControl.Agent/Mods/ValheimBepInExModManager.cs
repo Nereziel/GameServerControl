@@ -92,7 +92,7 @@ public sealed class ValheimBepInExModManager : IModManager
         return Task.FromResult(result.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase).ToArray());
     }
 
-    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct)
+    public async Task<ModInstallResult> InstallFromUrlAsync(ServerDef def, string url, string? displayName, CancellationToken ct, string? expectedModId = null)
     {
         if (!Supports(def))
             return new ModInstallResult(false, null, "Valheim mod management is currently supported only for BareMetal servers.");
@@ -111,7 +111,9 @@ public sealed class ValheimBepInExModManager : IModManager
         if (parsedRequested is { owner: var owner, name: var name } &&
             owner.Equals(BepInExOwner, StringComparison.OrdinalIgnoreCase) &&
             name.Equals(BepInExPackage, StringComparison.OrdinalIgnoreCase))
-            return new ModInstallResult(true, null, null);
+            return expectedModId is null
+                ? new ModInstallResult(true, null, null)
+                : new ModInstallResult(false, null, "The update target does not match the BepInEx bootstrap package.");
 
         var modsDir = ModsFolder(def);
         Directory.CreateDirectory(modsDir);
@@ -143,6 +145,8 @@ public sealed class ValheimBepInExModManager : IModManager
             if (sourceDir is not null)
             {
                 modId = SanitizeFolderName(displayName ?? Path.GetFileName(sourceDir.TrimEnd('\\', '/')) ?? "mod");
+                if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+                    return new ModInstallResult(false, null, "The downloaded Valheim package ID does not match the installed mod.");
                 var destDir = PathContainment.ResolveDirectChild(modsDir, modId);
                 var stageDir = Path.Combine(modsDir, ".gsc-stage-" + Guid.NewGuid().ToString("N"));
                 try
@@ -161,12 +165,14 @@ public sealed class ValheimBepInExModManager : IModManager
             }
             else
             {
+                modId = Path.GetFileName(copyDlls![0]);
+                if (!ModInstallTransaction.MatchesExpectedModId(expectedModId, modId))
+                    return new ModInstallResult(false, null, "The downloaded Valheim DLL ID does not match the installed mod.");
                 var copies = copyDlls!.Select(dll =>
                     (Source: dll, Destination: PathContainment.ResolveDirectChild(modsDir, Path.GetFileName(dll)))).ToArray();
                 var retained = ModInstallTransaction.ReplaceFiles(modsDir, copies);
                 if (retained) _logger.LogWarning("Previous Valheim DLL copy retained after replacement");
                 installedFiles.AddRange(copies.Select(file => Path.GetRelativePath(def.GuestWorkingDir, file.Destination)));
-                modId = Path.GetFileName(copyDlls![0]);
             }
 
             string? version = null;
