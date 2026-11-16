@@ -188,11 +188,13 @@ installation view, with explicit port, edition, version and license acceptance.
   **compatible, version-pinned** JARs. Downloads are checked against the SHA-512
   published by Modrinth. Server-only plugins/mods need a restart to take effect;
   some Fabric mods also require installation on players' clients.
-- **Bedrock add-ons:** Bedrock uses behavior/resource packs, not Java JARs. These
-  can be installed manually in `behavior_packs/` and `resource_packs/`, with the
-  corresponding world pack configuration in `worlds/<world-name>/`. Use the GSC
-  **Files** tab to edit existing JSON and properties files. One-click Bedrock
-  add-on importing and world linking is not yet implemented.
+- **Bedrock add-ons:** Bedrock uses behavior/resource packs, not Java JARs.
+  Stop the Bedrock server after its first start, open **Mods**, and upload a
+  local `.mcpack` or `.mcaddon` file. GSC safely imports pack manifests,
+  copies the pack files, and links them into the active world's behavior/resource
+  pack JSON. Script modules are currently excluded. A server restart applies
+  the change. You can also edit existing pack settings in **Files**. Cloudflare
+  proxy upload limits may apply to large add-on bundles.
 - **Worlds/backups:** Java backs up `world/`, `world_nether/`,
   `world_the_end/`; Bedrock backs up `worlds/`. If you change Java
   `level-name`, update the registered save directories to match.

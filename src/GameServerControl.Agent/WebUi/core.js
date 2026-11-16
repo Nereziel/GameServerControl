@@ -192,7 +192,7 @@ function toast(msg,kind=''){
 
 async function api(path,opts={}){
   const h={Authorization:'Bearer '+CFG.token,...(opts.headers||{})};
-  if(opts.body)h['Content-Type']='application/json';
+  if(opts.body && !(opts.body instanceof FormData))h['Content-Type']='application/json';
   const r=await fetch(CFG.url+agentApiPath(path),{...opts,headers:h});
   const txt=await r.text();let d=null;
   try{d=txt?JSON.parse(txt):null}catch{d=txt}

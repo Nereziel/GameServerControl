@@ -154,3 +154,32 @@ window.addEventListener('DOMContentLoaded',()=>{
   const legacyOpenNetwork=window.openNetwork;
   window.openNetwork=function(id){if(typeof openServerPage==='function')return openServerPage(id,'network');return legacyOpenNetwork?legacyOpenNetwork(id):undefined};
 });
+/* Official Bedrock add-ons are local file uploads, not arbitrary HTTP URLs.
+   Keep the existing mod list/remove workflow; add an explicit import control. */
+const minecraftOriginalLoadInstalledMods = loadInstalledMods;
+loadInstalledMods = async function(){
+  await minecraftOriginalLoadInstalledMods();
+  if(MOD_CTX?.def?.gameProfileKey!=='minecraft-bedrock')return;
+  const pane=$('#modsPane');
+  if(!pane)return;
+  pane.insertAdjacentHTML('beforeend',
+    '<div class="section">Install Bedrock add-on</div>'+
+    '<div class="help">Stop the Bedrock server first. Upload a .mcpack or .mcaddon file, then GSC activates its behavior/resource packs for the current world. Start the server once to create a world before importing the first add-on.</div>'+
+    '<div class="toolbar"><input id="bedrockAddonFile" type="file" accept=".mcpack,.mcaddon">'+
+    '<button class="btn primary" '+uiAction('installBedrockAddon')+'>Import add-on</button></div>');
+};
+window.installBedrockAddon=async function(){
+  const file=$('#bedrockAddonFile')?.files?.[0];
+  if(!file)return toast('Choose a .mcpack or .mcaddon file first.','err');
+  if(!/\\.(mcpack|mcaddon)$/i.test(file.name))return toast('Only .mcpack or .mcaddon files are supported.','err');
+  const id=MOD_CTX?.id;
+  if(!id)return;
+  const body=new FormData();body.append('file',file,file.name);
+  try{
+    const result=await api('/api/servers/'+encodeURIComponent(id)+'/minecraft/bedrock/addons',
+      {method:'POST',body});
+    if(!result.ok)throw new Error(result.error||'Import failed');
+    toast('Bedrock add-on activated. Restart the server to apply it.','ok');
+    await loadInstalledMods();
+  }catch(e){toast('Bedrock add-on import failed: '+e.message,'err')}
+};
