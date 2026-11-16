@@ -85,8 +85,12 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     public async Task<(bool Ok, string Error)> SetAutostartAsync(ServerDef def, bool enabled, CancellationToken ct = default)
     {
         if (!Supports(def)) return (false, "Windows Runner autostart applies only to Windows BareMetal servers.");
+        var preflight = await RefuseUnexpectedRunningAccountAsync(RunnerIdentity.ForServer(def.Id), ct);
+        if (!preflight.Ok) return preflight;
         var provision = await EnsureProvisionedAsync(def, ct);
         if (!provision.Ok) return (false, provision.Error);
+        var serviceIdentity = await EnsureExpectedServiceAccountAsync(def, provision.Identity, ct);
+        if (!serviceIdentity.Ok) return serviceIdentity;
 
         var manifestPath = ManifestPath(provision.Identity);
         var manifest = await ReadManifestAsync(manifestPath, ct);
@@ -227,7 +231,13 @@ public sealed class WindowsRunnerServiceManager : IWindowsRunnerServiceManager
     private async Task<(bool Ok, string Error)> RefuseUnexpectedRunningAccountAsync(
         RunnerIdentityInfo identity, CancellationToken ct)
     {
-        if (!await IsRunnerServiceRunningAsync(identity, ct)) return (true, "");
+        var status = await RunToolAsync("sc.exe", ["query", identity.ServiceName], ToolTimeout, ct);
+        if (!status.Ok)
+            return status.Output.Contains("1060", StringComparison.OrdinalIgnoreCase)
+                ? (true, "")
+                : (false, "Could not verify Runner service state: " + status.Output);
+        if (!status.Output.Contains("RUNNING", StringComparison.OrdinalIgnoreCase))
+            return (true, "");
 
         var query = await RunToolAsync("sc.exe", ["qc", identity.ServiceName], ToolTimeout, ct);
         var expectedAccount = "NT SERVICE\\" + identity.ServiceName;
