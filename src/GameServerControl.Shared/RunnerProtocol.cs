@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using System.Text;
 
 namespace GameServerControl.Shared;
@@ -47,6 +48,11 @@ public sealed record RunnerManifest(
     string[]? StopProcessNames = null,
     bool AutoStart = false)
 {
+    // Revision of the complete launch contract. Compared with the manifest loaded by the
+    // live Runner so edits are not mistaken for a missing executable.
+    public string Revision() => Convert.ToHexString(
+        SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(this))).ToLowerInvariant();
+
     public string? Validate()
     {
         if (string.IsNullOrWhiteSpace(ServerId)) return "ServerId is required.";
@@ -72,6 +78,23 @@ public sealed record RunnerManifest(
         return char.IsLetter(path[0])
                && path[1] == ':'
                && (path[2] == '\\' || path[2] == '/');
+    }
+}
+
+public enum RunnerManifestUpdateAction
+{
+    Current,
+    RestartIdle,
+    DeferUntilStopped
+}
+
+public static class RunnerManifestUpdate
+{
+    public static RunnerManifestUpdateAction Decide(string expectedRevision, string? liveRevision, bool gameRunning)
+    {
+        if (string.Equals(expectedRevision, liveRevision, StringComparison.Ordinal))
+            return RunnerManifestUpdateAction.Current;
+        return gameRunning ? RunnerManifestUpdateAction.DeferUntilStopped : RunnerManifestUpdateAction.RestartIdle;
     }
 }
 
@@ -138,4 +161,5 @@ public sealed record RunnerResponse(
     int? Pid = null,
     bool InputAvailable = false,
     RunnerConsoleSnapshot? Console = null,
-    string? LocalApplicationData = null);
+    string? LocalApplicationData = null,
+    string? ManifestRevision = null);

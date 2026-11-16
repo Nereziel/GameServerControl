@@ -11,6 +11,7 @@ namespace GameServerControl.Runner;
 public sealed class RunnerPipeServer
 {
     private readonly RunnerIdentityInfo _identity;
+    private readonly RunnerManifest _manifest;
     private readonly RunnerProcessHost _processHost;
     private readonly ILogger<RunnerPipeServer> _logger;
     private readonly JsonSerializerOptions _json = new(JsonSerializerDefaults.Web)
@@ -19,9 +20,10 @@ public sealed class RunnerPipeServer
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public RunnerPipeServer(RunnerIdentityInfo identity, RunnerProcessHost processHost, ILogger<RunnerPipeServer> logger)
+    public RunnerPipeServer(RunnerIdentityInfo identity, RunnerManifest manifest, RunnerProcessHost processHost, ILogger<RunnerPipeServer> logger)
     {
         _identity = identity;
+        _manifest = manifest;
         _processHost = processHost;
         _logger = logger;
     }
@@ -95,7 +97,8 @@ public sealed class RunnerPipeServer
     {
         RunnerCommand.Ping => Task.FromResult(new RunnerResponse(
             true,
-            LocalApplicationData: Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData))),
+            LocalApplicationData: Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            ManifestRevision: _manifest.Revision())),
         RunnerCommand.Start => _processHost.StartAsync(ct),
         RunnerCommand.Find => _processHost.FindAsync(ct),
         RunnerCommand.Stop => _processHost.StopAsync(request.Force, ct),
