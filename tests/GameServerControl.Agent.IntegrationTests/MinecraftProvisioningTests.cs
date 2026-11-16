@@ -13,7 +13,7 @@ public sealed class MinecraftProvisioningTests
 {
     private static MinecraftInstallRequest Request(string key) => new(
         key, Path.Combine(Path.GetTempPath(), "gsc-mc-" + Guid.NewGuid().ToString("N")),
-        "minecraft-alpha", "Minecraft Alpha", "1.21.11", 4096,
+        "minecraft-alpha", "Minecraft Alpha", key == "minecraft-bedrock" ? null : "1.21.11", 4096,
         key == "minecraft-bedrock" ? 19132 : 25565,
         AcceptEula: true, AcceptBedrockTerms: true);
 
