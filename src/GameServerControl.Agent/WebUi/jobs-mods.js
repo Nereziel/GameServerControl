@@ -2,6 +2,19 @@ function jobKey(){return'gsc.install.jobs.'+CFG.url+'.'+ACTIVE_HOST_ID}
 function loadJobRefs(){try{return JSON.parse(localStorage.getItem(jobKey())||'[]')}catch{return[]}}
 function saveJobRefs(v){localStorage.setItem(jobKey(),JSON.stringify(v.slice(0,30)))}
 function rememberJob(m){const a=loadJobRefs().filter(x=>x.jobId!==m.jobId);a.unshift(m);saveJobRefs(a)}
+function dismissedJobKey(){return jobKey()+'.dismissed'}
+function loadDismissedJobIds(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(dismissedJobKey())||'[]');
+    return new Set(Array.isArray(saved)?saved.filter(id=>typeof id==='string'&&id.length>0&&id.length<=64):[]);
+  }catch{return new Set()}
+}
+function dismissJobIds(ids){
+  const dismissed=loadDismissedJobIds();
+  for(const id of ids)if(typeof id==='string'&&id.length>0&&id.length<=64)dismissed.add(id);
+  // The Agent keeps at most 100 install summaries; cap the browser tombstones as well.
+  localStorage.setItem(dismissedJobKey(),JSON.stringify([...dismissed].slice(-100)));
+}
 
 const INSTALL_HISTORY_POLL_AT={};
 async function recoverServerInstallJobs(){
@@ -14,10 +27,12 @@ async function recoverServerInstallJobs(){
     const records=await api('/api/servers/install/jobs');
     if(!Array.isArray(records))return;
     const existing=loadJobRefs();
+    const dismissed=loadDismissedJobIds();
     const known=new Set(existing.map(x=>x.jobId));
     const recovered=[];
     for(const p of records){
       if(!p||typeof p.jobId!=='string'||p.jobId.length>64)continue;
+      if(p.finished&&dismissed.has(p.jobId))continue;
       JOB_CACHE[p.jobId]=p;
       if(!known.has(p.jobId)){
         known.add(p.jobId);
@@ -81,7 +96,14 @@ async function cancelInstallJob(id){
     await refreshJobs();
   }catch(e){toast('Could not cancel installation: '+e.message,'err')}
 }
-function clearFinishedJobs(){saveJobRefs(loadJobRefs().filter(r=>!(JOB_CACHE[r.jobId]&&JOB_CACHE[r.jobId].finished)));renderJobs();refreshJobs(false)}
+function clearFinishedJobs(){
+  const refs=loadJobRefs();
+  const finished=refs.filter(r=>JOB_CACHE[r.jobId]?.finished).map(r=>r.jobId);
+  dismissJobIds(finished);
+  saveJobRefs(refs.filter(r=>!finished.includes(r.jobId)));
+  renderJobs();
+  refreshJobs(false);
+}
 async function openJob(id){
   await refreshJobs(false);
   const r=loadJobRefs().find(x=>x.jobId===id)||{jobId:id},p=JOB_CACHE[id]||{},
