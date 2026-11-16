@@ -394,7 +394,9 @@ $ErrorActionPreference = 'Stop'
 # Pass the exact release across the UAC elevation boundary. An environment
 # override alone may be lost when ShellExecute starts the elevated child.
 $requestedTag = if ($Tag) { $Tag } else { $env:GSC_VERSION }
-if ($requestedTag -and $requestedTag -notmatch '^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)
+if ($requestedTag -and $requestedTag -notmatch '^v[0-9]+[.][0-9]+[.][0-9]+$') {
+    throw 'Updater tag must be a stable vMAJOR.MINOR.PATCH release.'
+}
 $ProgressPreference = 'SilentlyContinue'
 $isElevated = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
