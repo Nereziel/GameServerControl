@@ -76,6 +76,79 @@ for (const token of ['bindServerDashboardFilters', 'serverWorkspaceSetTab',
 if (!coreForUi.includes('closeMobileNavigation') || !installsForUi.includes("querySelector('.sidebar-nav')"))
   throw new Error('Sidebar interactions or Settings navigation are not wired correctly.');
 
+// Files must be a single editable syntax-colored surface, not a duplicated
+// textarea and independent preview. Keep the plain textarea as the native input.
+if ((workspaceForUi.match(/id="fseText"/g) || []).length !== 1 ||
+    (workspaceForUi.match(/id="fseHighlight"/g) || []).length !== 1 ||
+    workspaceForUi.includes('fsePreview') ||
+    !workspaceForUi.includes("input.addEventListener('scroll',syncEditorScroll") ||
+    !cssForUi.includes('.fse-code-surface') ||
+    !cssForUi.includes('caret-color:') ||
+    !cssForUi.includes('pointer-events:none')) {
+  throw new Error('Files editor lost its single-pane syntax highlighting or scroll synchronization');
+}
+const highlightStart = workspaceForUi.indexOf('  function tokenSpan(');
+const highlightEnd = workspaceForUi.indexOf('  function currentInfo()', highlightStart);
+if (highlightStart < 0 || highlightEnd < 0) throw new Error('Files syntax highlighter not found');
+const syntaxContext = {
+  esc: value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+};
+vm.runInNewContext(workspaceForUi.slice(highlightStart, highlightEnd), syntaxContext);
+const jsonMarkup = syntaxContext.highlight('{"name":"Test","enabled":true,"count":12}', 'json');
+for (const token of ['fse-token-key', 'fse-token-string', 'fse-token-literal', 'fse-token-number']) {
+  if (!jsonMarkup.includes(token)) throw new Error(`Files JSON highlighting lost ${token}`);
+}
+const xmlMarkup = syntaxContext.highlight('<item value="a&b">', 'xml');
+if (xmlMarkup.includes('<item') || !xmlMarkup.includes('&lt;item') || !xmlMarkup.includes('&amp;')) {
+  throw new Error('Files syntax highlighting must escape untrusted file contents');
+}
+if (!syntaxContext.highlight('enabled: true\n# comment', 'yaml').includes('fse-token-comment'))
+  throw new Error('Files YAML comment highlighting missing');
+const largeContent = 'x'.repeat(140001);
+if (syntaxContext.highlight(largeContent, 'json') !== largeContent)
+  throw new Error('Large files must stay fully visible, even without token colors');
+
+const keyStart = workspaceForUi.indexOf('  window.gscFilesKeydown=function(event){');
+const keyEnd = workspaceForUi.indexOf('  async function refreshList()', keyStart);
+if (keyStart < 0 || keyEnd < 0) throw new Error('Files editor keyboard handler not found');
+let testEditor;
+let inputEvents = 0;
+let saveEvents = 0;
+const keyContext = {
+  window: {},
+  $: () => testEditor,
+  gscFilesInput: () => { inputEvents++; },
+  gscFilesSave: () => { saveEvents++; }
+};
+vm.runInNewContext(workspaceForUi.slice(keyStart, keyEnd), keyContext);
+function editorForTest(value, cursor = value.length) {
+  return {
+    value, selectionStart: cursor, selectionEnd: cursor,
+    setRangeText(replacement, start, end, mode) {
+      this.value = this.value.slice(0, start) + replacement + this.value.slice(end);
+      this.selectionStart = mode === 'start' ? start : start + replacement.length;
+      this.selectionEnd = this.selectionStart;
+    },
+    setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+  };
+}
+const editKey = (key, extras = {}) => keyContext.window.gscFilesKeydown({
+  key, preventDefault() {}, ctrlKey: false, metaKey: false,
+  altKey: false, shiftKey: false, isComposing: false, ...extras
+});
+testEditor = editorForTest('key');
+editKey('Tab');
+if (testEditor.value !== 'key  ') throw new Error('Files editor Tab insertion failed');
+testEditor = editorForTest('  {');
+editKey('Enter');
+if (testEditor.value !== '  {\n    ') throw new Error('Files editor auto-indent failed');
+testEditor = editorForTest('  key', 2);
+editKey('Tab', { shiftKey: true });
+if (testEditor.value !== 'key') throw new Error('Files editor Shift+Tab outdent failed');
+editKey('s', { ctrlKey: true });
+if (saveEvents !== 1 || inputEvents !== 3) throw new Error('Files editor edit/save callbacks failed');
+
 // Multi-Agent must preserve the authenticated coordinator as the only browser
 // origin. Remote server requests are routed through it rather than exposing
 // remote credentials, and browser controls remain role-aware.
