@@ -33,6 +33,21 @@ public sealed class ManagedConfigPasswordTests
     }
 
     [Fact]
+    public void Satisfactory_write_only_password_requires_explicit_clear_intent()
+    {
+        Assert.Null(SatisfactoryConfig.ResolveClientPasswordUpdate(
+            new Dictionary<string, string> { ["ClientPassword"] = "" }));
+        Assert.Null(SatisfactoryConfig.ResolveClientPasswordUpdate(
+            new Dictionary<string, string>()));
+        Assert.Equal("fixture-new-password", SatisfactoryConfig.ResolveClientPasswordUpdate(
+            new Dictionary<string, string> { ["ClientPassword"] = "fixture-new-password" }));
+        Assert.Equal("", SatisfactoryConfig.ResolveClientPasswordUpdate(
+            new Dictionary<string, string> { ["ClientPassword"] = "", ["ClearClientPassword"] = "true" }));
+        Assert.Throws<ArgumentException>(() => SatisfactoryConfig.ResolveClientPasswordUpdate(
+            new Dictionary<string, string> { ["ClientPassword"] = "fixture-new-password", ["ClearClientPassword"] = "true" }));
+    }
+
+    [Fact]
     public async Task Dragonwilds_admin_password_survives_ini_reload_with_case_variant_key()
     {
         var root = Path.Combine(Path.GetTempPath(), "gsc-dragon-config-" + Guid.NewGuid().ToString("N"));
