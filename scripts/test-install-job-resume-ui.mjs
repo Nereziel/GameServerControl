@@ -25,8 +25,13 @@ const context = {
   },
   api: async(path,opts={})=>{
     requestPaths.push([path,opts.method||'GET']);
-    if(path==='/api/servers/install/jobs')return [currentVersion];
-    if(path==='/api/servers/install/queued123')return currentVersion;
+    if(path==='/api/servers/install/jobs')return Array.isArray(currentVersion)?currentVersion:[currentVersion];
+    if(path.startsWith('/api/servers/install/')&&!path.endsWith('/cancel')){
+      const id=path.split('/').at(-1);
+      const records=Array.isArray(currentVersion)?currentVersion:[currentVersion];
+      const found=records.find(p=>p.jobId===id);
+      if(found)return found;
+    }
     if(path==='/api/servers/install/queued123/cancel'&&opts.method==='POST')
       return {requested:true};
     throw new Error('Unexpected endpoint '+path);
@@ -85,4 +90,21 @@ await reloaded.refreshJobs();
 assert.equal(reloaded.loadJobRefs().length,0,
   'Explicitly cleared jobs must stay hidden after a browser reload');
 
-console.log('Install history recovery, cancellation, dismissal and legacy Agent fallback passed.');
+
+// The Agent retains up to 100 jobs while the browser renders only 30.
+// Clear finished must not leak the remaining records back into the UI.
+storage.delete(context.jobKey());
+storage.delete(context.dismissedJobKey());
+context.JOB_CACHE={};
+currentVersion=Array.from({length:35},(_,i)=>({...job,jobId:'complete'+i,
+  phase:'done',line:'Installed',percentHint:100,finished:true,success:true}));
+vm.runInContext('INSTALL_HISTORY_POLL_AT[jobKey()] = 0',context);
+await context.refreshJobs();
+assert.equal(context.loadJobRefs().length,30,'Browser should display at most 30 jobs');
+context.clearFinishedJobs();
+vm.runInContext('INSTALL_HISTORY_POLL_AT[jobKey()] = 0',context);
+await context.refreshJobs();
+assert.equal(context.loadJobRefs().length,0,
+  'Clear finished must dismiss every terminal job returned by the Agent, not only visible cards');
+
+console.log('Install recovery, cancel, dismissal, multi-page history and legacy fallback passed.');
