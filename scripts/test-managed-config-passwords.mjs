@@ -72,6 +72,9 @@ for (const file of ['src/GameServerControl.Agent/WebUi/server-admin.js',
   }
 }
 const satisfactory = fs.readFileSync('src/GameServerControl.Agent/Config/SatisfactoryConfig.cs', 'utf8');
-assert.match(satisfactory, /ClientPassword"[^}]*!string\.IsNullOrEmpty\(rawVal\)/s,
-  'Satisfactory write-only client password must not be reset by an empty config field');
+const schema = fs.readFileSync('src/GameServerControl.Shared/ConfigSchema.cs', 'utf8');
+assert.ok(schema.includes('new ConfigField("ClearClientPassword", "Remove join password"'),
+  'Satisfactory must offer an explicit way to clear its write-only join password');
+assert.ok(satisfactory.includes('ResolveClientPasswordUpdate(values)'),
+  'Satisfactory must not blindly submit default-empty write-only passwords');
 console.log('Managed config password reload, modal scoping, and password-manager opt-out regressions passed.');
