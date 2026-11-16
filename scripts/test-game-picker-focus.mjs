@@ -46,7 +46,7 @@ for(const query of ['m','mi','min','mine','minec','minecr','minecra','minecraf',
   assert.equal(input.isFocused,true,'Search input must stay focused');
   assert.equal(modalRenders,1,'Search may not reopen modal on input');
   assert.ok(results.innerHTML.includes('Minecraft Paper'),'Matches should remain visible');
-  assert.ok(!results.innerHTML.includes('Valheim'),'Unrelated games should be filtered out');
+  if(query.length > 1) assert.ok(!results.innerHTML.includes('Valheim'),'Unrelated games should be filtered out');
 }
 context.filterGamePicker('not-a-game');
 assert.ok(results.innerHTML.includes('No matching games'));
