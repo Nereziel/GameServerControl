@@ -65,6 +65,50 @@ public sealed class MinecraftProvisioningTests
     }
 
     [Fact]
+    public void Recovery_registers_existing_Bedrock_files_without_download_or_world_changes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gsc-mc-recover-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, ".gsc-minecraft.json"),
+                """{"profileKey":"minecraft-bedrock","version":"1.21.0"}""");
+            File.WriteAllText(Path.Combine(root, "server.properties"), "server-port=19145\n");
+            File.WriteAllText(Path.Combine(root, OperatingSystem.IsWindows() ? "bedrock_server.exe" : "bedrock_server"), "test");
+            Directory.CreateDirectory(Path.Combine(root, "worlds", "Original World"));
+            var world = Path.Combine(root, "worlds", "Original World", "level.dat");
+            File.WriteAllText(world, "existing-world-data");
+            var result = MinecraftServerPackages.RecoverDefinition(
+                new MinecraftRecoveryRequest("recovered", "Recovered Bedrock", root));
+            Assert.Equal("minecraft-bedrock", result.GameProfileKey);
+            Assert.Equal(19145, Assert.Single(result.NetworkPorts!).Port);
+            Assert.Equal(NetworkProtocol.Udp, Assert.Single(result.NetworkPorts!).Protocol);
+            Assert.Equal(root, result.GuestWorkingDir);
+            Assert.Equal("existing-world-data", File.ReadAllText(world));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void Recovery_refuses_unmarked_or_incomplete_folders()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gsc-mc-unmarked-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Assert.Throws<InvalidDataException>(() =>
+                MinecraftServerPackages.RecoverDefinition(
+                    new MinecraftRecoveryRequest("recovered", "Recovered", root)));
+            File.WriteAllText(Path.Combine(root, ".gsc-minecraft.json"),
+                """{"profileKey":"minecraft-bedrock","version":"1.21.0"}""");
+            Assert.Throws<InvalidDataException>(() =>
+                MinecraftServerPackages.RecoverDefinition(
+                    new MinecraftRecoveryRequest("recovered", "Recovered", root)));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void Existing_installation_is_not_overwritten()
     {
         var path = Path.Combine(Path.GetTempPath(), "gsc-mc-existing-" + Guid.NewGuid().ToString("N"));
