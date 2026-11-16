@@ -35,6 +35,16 @@ public sealed class AgentCapabilitiesTests
     }
 
     [Fact]
+    public async Task Recover_endpoint_is_not_available_to_readonly()
+    {
+        using var factory = new AgentTestFactory();
+        using var client = factory.CreateClientWithToken(factory.CreateReadOnlyToken());
+        using var response = await client.PostAsync("/api/servers/minecraft/recover",
+            new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Cancel_endpoint_is_not_available_to_readonly()
     {
         using var factory = new AgentTestFactory();
