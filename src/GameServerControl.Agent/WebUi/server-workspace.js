@@ -85,10 +85,14 @@ function serverWorkspaceCleanupConsole() {
 
 let serverWorkspaceApprovedNavigation = false;
 function openServerPage(id, tab = 'overview') {
+  const nextHash = `#server/${encodeURIComponent(id)}/${tab}`;
+  // Assigning an unchanged hash fires no hashchange event. Do not leave the
+  // one-shot navigation approval armed for a later browser Back operation.
+  if (location.hash === nextHash) return;
   if (SERVER_WORKSPACE.serverId && !serverWorkspaceConfirmLeave()) return;
   serverWorkspaceApprovedNavigation = true;
   SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
-  location.hash = `server/${encodeURIComponent(id)}/${tab}`;
+  location.hash = nextHash;
 }
 function serverWorkspaceHome() {
   if (SERVER_WORKSPACE.serverId && !serverWorkspaceConfirmLeave()) return;
