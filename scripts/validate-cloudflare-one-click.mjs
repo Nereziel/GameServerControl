@@ -19,8 +19,10 @@ for (const [name, key] of [
 ]) {
   assert.ok(source.includes(name + ': $' + '{{ vars.' + key + ' }}'),
     'non-secret ' + name + ' must come from a persistent Actions Variable ' + key);
-  assert.ok(source.includes('"' + name + '"') ||
-    source.includes(' ' + name + ' \\\n'), 'missing-value preflight must validate ' + name);
+  const start=source.indexOf('for name in ');
+  const end=source.indexOf('; do',start);
+  const required=start>=0&&end>start ? source.slice(start,end) : '';
+  assert.ok(required.includes(name),'missing-value preflight must validate '+name);
 }
 assert.doesNotMatch(source, /inputs\.(?:panel_hostname|gateway_origin|access_team_domain|access_policy_aud)/,
   'no lingering dispatch-input references');
