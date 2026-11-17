@@ -499,19 +499,8 @@ function applyInstallPorts(g,args,ports){
 }
 
 function installNetworkUiHooks(){
-  if(typeof openManage==='function'&&!openManage.__networkWrapped){
-    const original=openManage;
-    const wrapped=function(id){
-      original(id);
-      const grid=document.querySelector('.manage-grid');
-      if(grid&&!grid.querySelector('[data-network-tile]')){
-        const b=document.createElement('button');b.className='manage-tile';b.dataset.networkTile='1';b.addEventListener('click',()=>openNetwork(id));
-        b.innerHTML='<span class="manage-icon">🌐</span><span><b>Network & firewall</b><small>Ports, conflicts and Windows Firewall</small></span>';
-        grid.appendChild(b);
-      }
-    };
-    wrapped.__networkWrapped=true;window.openManage=wrapped;
-  }
+  // Per-server network controls are available under Server → Settings → Network.
+  // The legacy Manage modal no longer exists, so no extra network tile is injected.
   if(typeof openCreateSettings==='function'&&!openCreateSettings.__networkWrapped){
     const originalCreate=openCreateSettings;
     const wrappedCreate=function(key){
