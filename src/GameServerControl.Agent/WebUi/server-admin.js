@@ -35,29 +35,8 @@ async function startInstall(key){
   try{const ack=await api('/api/servers/install',{method:'POST',body:JSON.stringify({steamAppId:g.appId,installPath:path,serverDef:def})});rememberJob({jobId:ack.jobId,name,icon:g.icon,path});closeModal();showView('installs');toast(`${g.label} installation started in background.`,'ok');await refreshJobs()}catch(e){err.textContent=e.message;err.classList.remove('hidden')}
 }
 
-function openManage(id){
-  const d=SERVERS.find(x=>x.id===id);if(!d)return;const g=profileFor(d),caps=g?.caps||{},s=STATUS[id]||{};
-  const tiles=[];
-  if(caps.config)tiles.push(manageTile('⚙','Configuration','Game-friendly settings','openConfig',[id]));
-  if(caps.mods)tiles.push(manageTile('🧩','Mods','Browse, install and update','openMods',[id]));
-  tiles.push(manageTile('💾','Backups','Create, restore and delete','openBackups',[id]));
-  if(caps.console==='log'&&d.logPathInGuest)tiles.push(manageTile('📜','Live console','Follow the server log live','openLog',[id]));
-  if(caps.console==='rcon'){
-    if(d.rconPort&&d.rconPassword){tiles.push(manageTile('⌨','RCON console','Send live admin commands','openConsole',[id]));if(caps.players)tiles.push(manageTile('👥','Players','View / kick / ban players','openPlayers',[id]))}
-    else tiles.push(manageTile('⌨','Set up RCON','Port/password required','openEdit',[id]));
-  }
-  tiles.push(manageTile('📊','Stats','CPU and RAM history','openStats',[id]));
-  tiles.push(manageTile('🗓','Schedule','Restart, update and backups','openSchedule',[id]));
-  if(d.steamAppId)tiles.push(manageTile('⬆','Update server','Run SteamCMD update','manageAction',[id,'update']));
-  if(d.gameType==='Minecraft'){
-    tiles.push(manageTile('⌨','Minecraft console','Send server commands and view output','openServerPage',[id,'console']));
-    tiles.push(manageTile('📁','Minecraft configuration','Edit server.properties and addon settings','openServerPage',[id,'files']));
-  }
-  if(caps.config)tiles.push(manageTile('✓','Apply config','Apply managed configuration','manageAction',[id,'apply']));
-  tiles.push(manageTile('✏','Edit server','Paths and advanced options','openEdit',[id]));
-  tiles.push(manageTile('ℹ','Details','Process and runtime details','openDetails',[id]));
-  openModal('Manage — '+d.name,`<div class="manage-head"><div><div class="title">${g?.icon||'🖥'} ${esc(d.name)}</div><div class="muted tiny">${esc(g?.label||d.gameType)} · ${d.hostingMode==='Vm'?'Hyper-V':'This machine'} · ${esc(s.processState||'Unknown')}</div></div></div><div class="manage-grid">${tiles.join('')}</div><div class="section">Danger zone</div><button class="btn danger" ${uiAction('deleteServer',[id])}>Remove from GameServerControl</button>`,`<button class="btn" ${uiAction('closeModal')}>Close</button>`,true)
-}
+// Legacy entry point: manage actions now live in the unified server workspace.
+function openManage(id){openServerPage(id,'overview')}
 function manageTile(icon,title,desc,actionName,args=[]){return `<button class="manage-tile" ${uiAction(actionName,args)}><span class="manage-icon">${icon}</span><span><b>${esc(title)}</b><small>${esc(desc)}</small></span></button>`}
 async function manageAction(id,a){closeModal();await action(id,a)}
 
