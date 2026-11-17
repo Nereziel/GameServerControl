@@ -83,17 +83,28 @@ function serverWorkspaceCleanupConsole() {
   SERVER_WORKSPACE.console = null;
 }
 
+let serverWorkspaceApprovedNavigation = false;
 function openServerPage(id, tab = 'overview') {
+  if (SERVER_WORKSPACE.serverId && !serverWorkspaceConfirmLeave()) return;
+  serverWorkspaceApprovedNavigation = true;
   SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
   location.hash = `server/${encodeURIComponent(id)}/${tab}`;
 }
 function serverWorkspaceHome() {
+  if (SERVER_WORKSPACE.serverId && !serverWorkspaceConfirmLeave()) return;
+  serverWorkspaceApprovedNavigation = true;
   serverWorkspaceCleanupConsole();
   location.hash = 'servers';
 }
 function serverWorkspaceSetTab(tab) {
   if (!SERVER_WORKSPACE.serverId) return;
-  location.hash = `server/${encodeURIComponent(SERVER_WORKSPACE.serverId)}/${tab}`;
+  const def = SERVERS.find(x => x.id === SERVER_WORKSPACE.serverId);
+  const resolved = def ? serverWorkspaceResolveTab(def, tab) : tab;
+  const nextHash = `#server/${encodeURIComponent(SERVER_WORKSPACE.serverId)}/${resolved}`;
+  if (location.hash === nextHash) return;
+  if (!serverWorkspaceConfirmLeave()) return;
+  serverWorkspaceApprovedNavigation = true;
+  location.hash = nextHash;
 }
 window.openServerPage = openServerPage;
 window.serverWorkspaceHome = serverWorkspaceHome;
@@ -104,6 +115,13 @@ showView = function (view) {
   if (view === 'servers' && SERVER_WORKSPACE.serverId) {
     serverWorkspaceHome();
     return;
+  }
+  if (view !== 'servers' && SERVER_WORKSPACE.serverId) {
+    if (!serverWorkspaceConfirmLeave()) return;
+    serverWorkspaceCleanupConsole();
+    SERVER_WORKSPACE.serverId = null;
+    SERVER_WORKSPACE.tab = 'overview';
+    history.replaceState(null, '', '#' + view);
   }
   originalServerWorkspaceShowView(view);
 };
@@ -125,11 +143,61 @@ function serverWorkspaceTabs(def) {
   return tabs;
 }
 
-function serverWorkspaceValidTab(def, tab) {
-  const tabs = serverWorkspaceTabs(def);
-  if (tabs.some(x => x[0] === tab)) return tab;
-  return tabs.some(x => x[0] === 'console') ? 'console' : 'overview';
+// The old routes remain leaf pages; the primary navigation presents six
+// task-oriented sections, each with capability-aware secondary pages.
+function serverWorkspaceSections(def) {
+  const available = new Map(serverWorkspaceTabs(def));
+  const rcon = !!profileFor(def)?.caps?.rcon || !!def.rconPort;
+  if (rcon) available.set('access', 'Access & RCON');
+  const groups = [
+    ['overview', 'Overview', ['overview']],
+    ['console', 'Console & players', ['console', 'players', 'admin']],
+    ['configuration', 'Settings', ['config', 'access', 'network', 'settings']],
+    ['content', 'Files & mods', ['files', 'mods']],
+    ['maintenance', 'Backups & automation', ['backups', 'schedule']],
+    ['diagnostics', 'Diagnostics', ['diagnostics']]
+  ];
+  return groups.map(([key, label, leaves]) => ({
+    key, label, tabs: leaves.filter(leaf => available.has(leaf)).map(leaf => [leaf,
+      leaf === 'config' ? 'Game settings' :
+      leaf === 'settings' ? 'Advanced & notifications' : available.get(leaf)])
+  })).filter(section => section.tabs.length);
 }
+
+function serverWorkspaceSectionFor(def, tab) {
+  const sections = serverWorkspaceSections(def);
+  return sections.find(section => section.key === tab ||
+    section.tabs.some(([leaf]) => leaf === tab)) || sections[0];
+}
+
+function serverWorkspaceResolveTab(def, tab) {
+  const section = serverWorkspaceSectionFor(def, tab);
+  if (section.tabs.some(([leaf]) => leaf === tab)) return tab;
+  return section.tabs[0][0];
+}
+
+function serverWorkspaceValidTab(def, tab) {
+  return serverWorkspaceResolveTab(def, tab);
+}
+
+function serverWorkspaceHasUnsavedChanges() {
+  if (SERVER_WORKSPACE.tab === 'files' && window.GSC_FILES?.dirty) return true;
+  const body = document.getElementById('swTabBody');
+  if (!body) return false;
+  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly')).some(input => {
+    if (input.disabled) return false;
+    if (input.type === 'checkbox') return input.checked !== input.defaultChecked;
+    if (input.tagName === 'SELECT')
+      return Array.from(input.options).some(option => option.selected !== option.defaultSelected);
+    return input.value !== input.defaultValue;
+  });
+}
+
+function serverWorkspaceConfirmLeave() {
+  return !serverWorkspaceHasUnsavedChanges() ||
+    confirm('You have unsaved changes on this server page. Discard them?');
+}
+
 
 
 function renderAllHostDashboard(root){
@@ -288,9 +356,10 @@ function updateServerWorkspaceHeader(def) {
 
 function renderServerWorkspace(def) {
   const root = $('#servers');
-  setWorkspaceHeading(def.name, 'SERVERS / ' + (SERVER_WORKSPACE.tab || 'OVERVIEW').toUpperCase());
   $('#serverListTools')?.classList.add('hidden');
   const requestedTab = serverWorkspaceValidTab(def, SERVER_WORKSPACE.tab);
+  const section = serverWorkspaceSectionFor(def, requestedTab);
+  setWorkspaceHeading(def.name, 'SERVERS / ' + section.label.toUpperCase());
   const existing = root.querySelector('.sw-workspace');
   if (existing && existing.dataset.serverId === def.id && existing.dataset.tab === requestedTab) {
     updateServerWorkspaceHeader(def);
@@ -300,7 +369,7 @@ function renderServerWorkspace(def) {
   serverWorkspaceCleanupConsole();
   SERVER_WORKSPACE.tab = requestedTab;
   const meta = serverMeta(def);
-  const tabs = serverWorkspaceTabs(def);
+  const sections = serverWorkspaceSections(def);
 
   root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}">
     <div class="sw-head">
@@ -313,7 +382,8 @@ function renderServerWorkspace(def) {
         <button id="swStop" type="button" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button>
       </div>
     </div>
-    <nav class="sw-tabs" aria-label="Server sections">${tabs.map(([key, label]) => `<button type="button" class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" ${SERVER_WORKSPACE.tab === key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[key])}>${esc(label)}</button>`).join('')}</nav>
+    <nav class="sw-tabs" aria-label="Server sections">${sections.map(group => `<button type="button" class="sw-tab ${section.key === group.key ? 'active' : ''}" ${section.key === group.key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[group.key])}>${esc(group.label)}</button>`).join('')}</nav>
+    ${section.tabs.length > 1 ? `<nav class="sw-subtabs" aria-label="${esc(section.label)} pages">${section.tabs.map(([key, label]) => `<button type="button" class="sw-subtab ${requestedTab === key ? 'active' : ''}" ${requestedTab === key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[key])}>${esc(label)}</button>`).join('')}</nav>` : ''}
     <div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div>
   </div>`;
   updateServerWorkspaceHeader(def);
@@ -330,6 +400,7 @@ async function renderServerWorkspaceTab(def, tab) {
     else if (tab === 'overview') renderServerOverview(def, body);
     else if (tab === 'diagnostics') await renderServerDiagnostics(def, body);
     else if (tab === 'config') await renderServerConfig(def, body);
+    else if (tab === 'access') renderServerAccess(def, body);
     else if (tab === 'players') await renderServerPlayers(def, body);
     else if (tab === 'mods') renderServerMods(def, body);
     else if (tab === 'backups') await renderServerBackups(def, body);
@@ -831,9 +902,22 @@ async function serverWorkspaceSendConsole(id) {
 window.serverWorkspaceSendConsole = serverWorkspaceSendConsole;
 
 serverWorkspaceParseHash();
+let serverWorkspaceLastHash = location.hash;
 window.addEventListener('hashchange', () => {
+  const nextHash = location.hash;
+  if (!serverWorkspaceApprovedNavigation && SERVER_WORKSPACE.serverId &&
+      !serverWorkspaceConfirmLeave()) {
+    history.replaceState(null, '', serverWorkspaceLastHash || '#servers');
+    return;
+  }
+  serverWorkspaceApprovedNavigation = false;
+  serverWorkspaceLastHash = nextHash;
   serverWorkspaceCleanupConsole();
   serverWorkspaceParseHash();
+  if (nextHash === '#system' || nextHash === '#installs') {
+    originalServerWorkspaceShowView(nextHash.slice(1));
+    return;
+  }
   if (CURRENT_VIEW !== 'servers') SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
   renderServers();
 });
