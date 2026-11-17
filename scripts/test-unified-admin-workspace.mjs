@@ -67,6 +67,14 @@ assert.equal(ctx.serverWorkspaceConfirmLeave(),false,'Cancel must keep unsaved i
 assert.equal(prompts,1);
 allowDiscard=true;
 assert.equal(ctx.serverWorkspaceConfirmLeave(),true,'Confirm allows navigation');
+controls=[{type:'select-one',tagName:'SELECT',disabled:false,multiple:false,selectedIndex:0,
+  options:[{selected:true,defaultSelected:false},{selected:false,defaultSelected:false}]}];
+assert.equal(ctx.serverWorkspaceHasUnsavedChanges(),false,
+  'implicit first option selection is the browser default, not an edit');
+controls[0].selectedIndex=1;
+controls[0].options[0].selected=false;
+controls[0].options[1].selected=true;
+assert.equal(ctx.serverWorkspaceHasUnsavedChanges(),true,'real changed selection must prompt');
 controls=[];
 ctx.SERVER_WORKSPACE.tab='files';
 ctx.window.GSC_FILES={dirty:true,content:{content:'unsaved fixture'}};
