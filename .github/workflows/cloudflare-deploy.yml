@@ -1,37 +1,45 @@
 name: Deploy Cloudflare panel
 
+# One-click deployment. Store the four non-sensitive target identifiers once in
+# Settings > Secrets and variables > Actions > Variables (see docs).
 on:
   workflow_dispatch:
-    inputs:
-      panel_hostname:
-        description: 'Cloudflare Access-protected Worker hostname, e.g. panel.example.com'
-        required: true
-        type: string
-      gateway_origin:
-        description: 'Public HTTPS hostname of the VPS Caddy gateway, e.g. https://gateway.example.com'
-        required: true
-        type: string
-      access_team_domain:
-        description: 'https://example.cloudflareaccess.com'
-        required: true
-        type: string
-      access_policy_aud:
-        description: 'AUD tag for the Access application protecting the Worker'
-        required: true
-        type: string
 
 permissions:
   contents: read
+
+# Do not let multiple live Cloudflare Worker deployments overlap.
+concurrency:
+  group: cloudflare-panel-production
+  cancel-in-progress: false
 
 jobs:
   deploy:
     name: Build and deploy independent Multi-Agent Cloudflare WebUI
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    env:
+      PANEL_HOSTNAME: ${{ vars.GSC_CF_PANEL_HOSTNAME }}
+      GATEWAY_ORIGIN: ${{ vars.GSC_CF_GATEWAY_ORIGIN }}
+      ACCESS_TEAM_DOMAIN: ${{ vars.GSC_CF_ACCESS_TEAM_DOMAIN }}
+      ACCESS_POLICY_AUD: ${{ vars.GSC_CF_ACCESS_POLICY_AUD }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # Fail before building or contacting Cloudflare if initial configuration
+      # was not saved as repository Actions Variables.
+      - name: Verify saved Cloudflare deployment variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in PANEL_HOSTNAME GATEWAY_ORIGIN ACCESS_TEAM_DOMAIN ACCESS_POLICY_AUD; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing GitHub Actions Variable GSC_CF_${name}. Set it once in Settings > Secrets and variables > Actions > Variables."
+              exit 1
+            fi
+          done
 
       - name: Setup Node 24
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
@@ -58,10 +66,6 @@ jobs:
           HOSTS_ENCRYPTION_KEY: ${{ secrets.GSC_CF_HOSTS_ENCRYPTION_KEY }}
           GATEWAY_SHARED_KEY: ${{ secrets.GSC_CF_GATEWAY_SHARED_KEY }}
           ACCESS_ADMIN_EMAILS: ${{ secrets.GSC_CF_ACCESS_ADMIN_EMAILS }}
-          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
-          GATEWAY_ORIGIN: ${{ inputs.gateway_origin }}
-          ACCESS_TEAM_DOMAIN: ${{ inputs.access_team_domain }}
-          ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
         run: |
           set -euo pipefail
           for name in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN HOSTS_DB_ID HOSTS_ENCRYPTION_KEY \
@@ -103,8 +107,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
-          ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
         run: |
           set -euo pipefail
           apps_file="$(mktemp)"
@@ -130,7 +132,6 @@ jobs:
       - name: Verify authenticated VPS HTTPS gateway
         shell: bash
         env:
-          GATEWAY_ORIGIN: ${{ inputs.gateway_origin }}
           GATEWAY_SHARED_KEY: ${{ secrets.GSC_CF_GATEWAY_SHARED_KEY }}
         run: |
           set -euo pipefail
@@ -150,6 +151,23 @@ jobs:
             exit 1
           fi
 
+      # Re-run jobs keeps the original commit. Refuse to replace the live
+      # panel with stale assets when someone reruns an older workflow.
+      - name: Verify deployment is the latest main revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Cloudflare deployment must be launched from main."
+            exit 1
+          fi
+          git fetch --no-tags --depth=1 origin refs/heads/main
+          latest="$(git rev-parse FETCH_HEAD)"
+          if [ "$GITHUB_SHA" != "$latest" ]; then
+            echo "::error::This rerun uses an outdated commit. Start a new Run workflow from main instead."
+            exit 1
+          fi
+
       - name: Apply D1 schema and deploy Cloudflare Worker
         shell: bash
         working-directory: src/GameServerControl.Cloud
@@ -160,10 +178,6 @@ jobs:
           HOSTS_ENCRYPTION_KEY: ${{ secrets.GSC_CF_HOSTS_ENCRYPTION_KEY }}
           GATEWAY_SHARED_KEY: ${{ secrets.GSC_CF_GATEWAY_SHARED_KEY }}
           ACCESS_ADMIN_EMAILS: ${{ secrets.GSC_CF_ACCESS_ADMIN_EMAILS }}
-          GATEWAY_ORIGIN: ${{ inputs.gateway_origin }}
-          ACCESS_TEAM_DOMAIN: ${{ inputs.access_team_domain }}
-          ACCESS_POLICY_AUD: ${{ inputs.access_policy_aud }}
-          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
         run: |
           set -euo pipefail
           config_file="$(mktemp "$PWD/wrangler.deploy.XXXXXX.jsonc")"
@@ -187,8 +201,6 @@ jobs:
 
       - name: Deployment summary
         env:
-          PANEL_HOSTNAME: ${{ inputs.panel_hostname }}
-          GATEWAY_ORIGIN: ${{ inputs.gateway_origin }}
         run: |
           {
             echo '### GameServerControl independent Multi-Agent Cloudflare panel'
