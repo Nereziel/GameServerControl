@@ -972,8 +972,8 @@ window.addEventListener('hashchange', () => {
   serverWorkspaceLastHash = nextHash;
   serverWorkspaceCleanupConsole();
   serverWorkspaceParseHash();
-  if (nextHash === '#system' || nextHash === '#installs') {
-    originalServerWorkspaceShowView(nextHash.slice(1));
+  if (nextHash === '#system' || nextHash === '#settings' || nextHash === '#installs') {
+    originalServerWorkspaceShowView(nextHash === '#settings' ? 'system' : nextHash.slice(1));
     return;
   }
   if (CURRENT_VIEW !== 'servers') SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');

@@ -232,7 +232,7 @@ function showView(v){
     if(v===name)nav?.setAttribute('aria-current','page');
     else nav?.removeAttribute('aria-current');
   }
-  setWorkspaceHeading(v==='installs'?'Installations':v==='system'?'System':'Servers',
+  setWorkspaceHeading(v==='installs'?'Installations':v==='system'?'Settings':'Servers',
     v==='installs'?'CONTROL PANEL / ACTIVITY':v==='system'?'CONTROL PANEL / ADMINISTRATION':'CONTROL PANEL / OVERVIEW');
   closeMobileNavigation();
   if(v==='installs')refreshJobs();
@@ -253,6 +253,7 @@ function renderSystemView(){
     const available=UPDATE_STATUS?.updateAvailable;
     version.textContent='Agent version: '+current+(available?' · Update available: '+(UPDATE_STATUS.latestVersion||'new version'):'');
   }
+  if(CURRENT_VIEW==='system' && typeof renderGlobalSettings==='function')renderGlobalSettings();
 }
 
 function openAddServerMenu(){
@@ -339,6 +340,7 @@ async function boot(){
   await loadCapabilities();
   try{await loadProfiles()}catch(e){toast('Game profiles failed: '+e.message,'err')}
   await refreshAll();
+  if(location.hash==='#settings')history.replaceState(null,'','#system');
   if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
   await checkForUpdate(false);
   setInterval(()=>{loadServers();refreshJobs(false)},5000);

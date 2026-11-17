@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.IO.Compression;
 using System.Text.Json.Nodes;
 using GameServerControl.Agent.Config;
@@ -13,7 +12,7 @@ namespace GameServerControl.Agent.Servers;
 
 public sealed class ServerOrchestrator
 {
-    private readonly ConcurrentDictionary<int, (TimeSpan cpu, DateTime at)> _cpuSamples = new();
+    private readonly ProcessMetricsSampler _metrics = new();
     private readonly ConcurrentDictionary<string, bool> _stopRequested = new();
     private readonly HypervService _hv;
     private readonly GuestProcessService _guest;
@@ -117,30 +116,9 @@ public sealed class ServerOrchestrator
             }
         }
 
-        double? cpuPct = null;
-        long? memMB = null;
-        if (def.HostingMode == HostingMode.BareMetal && pid is int pp)
-        {
-            try
-            {
-                using var p = Process.GetProcessById(pp);
-                memMB = p.WorkingSet64 / (1024 * 1024);
-                var now = DateTime.UtcNow;
-                var cpu = p.TotalProcessorTime;
-                if (_cpuSamples.TryGetValue(pp, out var prev))
-                {
-                    var dt = (now - prev.at).TotalMilliseconds;
-                    var dc = (cpu - prev.cpu).TotalMilliseconds;
-                    if (dt > 100)
-                        cpuPct = Math.Round(Math.Max(0, dc / dt / Environment.ProcessorCount * 100.0), 1);
-                }
-                _cpuSamples[pp] = (cpu, now);
-            }
-            catch
-            {
-                _cpuSamples.TryRemove(pp, out _);
-            }
-        }
+        (double? cpuPct, long? memMB) = def.HostingMode == HostingMode.BareMetal && pid is int pp
+            ? _metrics.Sample(def, pp)
+            : (null, null);
 
         var metadata = await BuildMetadataAsync(def, ct);
         var prevState = _tracker.Get(id).ProcessState;
