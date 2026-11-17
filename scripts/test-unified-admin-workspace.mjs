@@ -49,6 +49,32 @@ assert.deepEqual(Array.from(ctx.serverWorkspaceSections(bare),x=>x.key),
 assert.equal(ctx.serverWorkspaceResolveTab(bare,'configuration'),'network');
 assert.equal(ctx.serverWorkspaceResolveTab(bare,'invalid'),'overview');
 
+// Verify that a form with untouched defaults navigates freely, while an edited
+// field or a file-editor draft requests confirmation before leaving.
+let controls=[];
+let prompts=0;
+let allowDiscard=false;
+ctx.window={GSC_FILES:{dirty:false,content:null}};
+ctx.SERVER_WORKSPACE={tab:'config'};
+ctx.document={getElementById:id=>id==='swTabBody'?{querySelectorAll:()=>controls}:null};
+ctx.confirm=()=>{prompts++;return allowDiscard};
+assert.equal(ctx.serverWorkspaceHasUnsavedChanges(),false);
+assert.equal(ctx.serverWorkspaceConfirmLeave(),true);
+assert.equal(prompts,0,'untouched configuration must not prompt');
+controls=[{type:'text',tagName:'INPUT',value:'changed',defaultValue:'initial',disabled:false}];
+assert.equal(ctx.serverWorkspaceHasUnsavedChanges(),true);
+assert.equal(ctx.serverWorkspaceConfirmLeave(),false,'Cancel must keep unsaved inputs');
+assert.equal(prompts,1);
+allowDiscard=true;
+assert.equal(ctx.serverWorkspaceConfirmLeave(),true,'Confirm allows navigation');
+controls=[];
+ctx.SERVER_WORKSPACE.tab='files';
+ctx.window.GSC_FILES={dirty:true,content:{content:'unsaved fixture'}};
+assert.equal(ctx.serverWorkspaceHasUnsavedChanges(),true,'file-editor drafts must be guarded');
+assert.equal(ctx.serverWorkspaceConfirmLeave(),true);
+assert.equal(ctx.window.GSC_FILES.dirty,false,'discard confirmation must reset file draft state');
+assert.equal(ctx.window.GSC_FILES.content,null);
+
 assert.ok(html.includes('id="tabSystem"')&&html.includes('id="systemView"'),
   'system management must have its own sidebar destination');
 const top=html.match(/<div class="top-actions">([\s\S]*?)<\/div>/);
