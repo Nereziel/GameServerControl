@@ -200,7 +200,6 @@ jobs:
             --domain "$PANEL_HOSTNAME" --secrets-file "$secrets_file"
 
       - name: Deployment summary
-        env:
         run: |
           {
             echo '### GameServerControl independent Multi-Agent Cloudflare panel'
