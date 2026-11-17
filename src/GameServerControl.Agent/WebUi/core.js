@@ -100,6 +100,12 @@ async function refreshManagedHosts(){
 async function selectHost(id){
   if(id!=='all'&&!HOST_DIRECTORY.some(h=>h.id===id))return toast('Unknown computer.','err');
   if(id===ACTIVE_HOST_ID)return;
+  if(typeof SERVER_WORKSPACE!=='undefined' && SERVER_WORKSPACE.serverId &&
+      typeof serverWorkspaceConfirmLeave==='function' && !serverWorkspaceConfirmLeave()){
+    const select=$('#hostSwitch');
+    if(select)select.value=ACTIVE_HOST_ID;
+    return;
+  }
   ACTIVE_HOST_ID=id;
   HOST_SWITCH_EPOCH++;
   LAST_HOST_OVERVIEW=0;
@@ -122,6 +128,7 @@ async function selectHost(id){
 }
 async function selectHostAndOpen(hostId,serverId){
   await selectHost(hostId);
+  if(ACTIVE_HOST_ID!==hostId)return;
   const found=SERVERS.some(s=>s.id===serverId);
   if(found)openServerPage(serverId,'overview');
   else toast('The selected computer is unavailable or the server was removed.','err');
