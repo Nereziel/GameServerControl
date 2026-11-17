@@ -96,6 +96,9 @@ for(const id of ['tokensBtn','updateBtn','manageHostsBtn','discoverBtn','addExis
   assert.ok(html.includes('id="'+id+'"'),id+' action preserved');
 assert.ok(core.includes("v==='system'")&&core.includes("renderSystemView()")&&core.includes("renderGlobalSettings()"),
   'global Settings must be a routable page that includes Agent Relay settings');
+const activeBoot = core.slice(core.indexOf('boot=async function(){'));
+assert.ok(activeBoot.includes("location.hash==='#settings'") && activeBoot.includes("showView(location.hash.slice(1))"),
+  'active boot must restore System Settings and redirect old #settings bookmarks');
 assert.ok(core.includes('openAddServerMenu')&&core.includes('openAddExisting')&&core.includes('openDiscover'),
   'add server must offer install, existing and discovery without duplicate top-level buttons');
 assert.ok(admin.includes("openServerPage(id,'overview')"),
