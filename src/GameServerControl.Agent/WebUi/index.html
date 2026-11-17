@@ -30,12 +30,15 @@
     <div class="sidebar-host-picker">
       <label for="hostSwitch">ACTIVE HOST</label>
       <select id="hostSwitch" aria-label="Select a physical computer"><option value="all">All computers</option><option value="local">This computer</option></select>
-      <button id="manageHostsBtn" class="sidebar-host-manage" type="button">+ Connect computer</button>
     </div>
     <div class="sidebar-section-label">WORKSPACE</div>
     <nav class="tabs sidebar-nav" aria-label="Main navigation">
       <button id="tabServers" class="tab active" type="button"><span class="nav-icon" aria-hidden="true">▦</span><span>Servers</span></button>
       <button id="tabInstalls" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⇣</span><span>Installations</span><span id="installBadge" class="badge hidden">0</span></button>
+    </nav>
+    <div class="sidebar-section-label">SYSTEM</div>
+    <nav class="tabs sidebar-nav" aria-label="System navigation">
+      <button id="tabSystem" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⚙</span><span>System</span></button>
     </nav>
     <div class="sidebar-spacer"></div>
     <div class="sidebar-connection">
@@ -52,12 +55,8 @@
         <div class="page-heading"><div id="pageEyebrow" class="eyebrow">CONTROL PANEL / OVERVIEW</div><h1 id="pageHeading">Servers</h1></div>
       </div>
       <div class="top-actions">
-        <button id="updateBtn" class="btn hidden" type="button">Update</button>
-        <button id="discoverBtn" class="btn secondary-action" type="button">Discover</button>
-        <button id="addExistingBtn" class="btn secondary-action" type="button">Add existing</button>
-        <button id="tokensBtn" class="btn secondary-action" type="button">API tokens</button>
         <button id="refreshBtn" class="btn btn-icon" type="button" title="Refresh data" aria-label="Refresh data">↻</button>
-        <button id="createServerBtn" class="btn primary" type="button"><span aria-hidden="true">+</span> New server</button>
+        <button id="createServerBtn" class="btn primary" type="button"><span aria-hidden="true">+</span> Add server</button>
       </div>
     </header>
     <main class="shell" id="mainContent">
@@ -74,8 +73,34 @@
         <div id="servers"></div>
       </section>
       <section id="installsView" class="hidden" aria-label="Installations">
-        <div class="summarybar"><div><b>Installation activity</b><div class="muted tiny">Jobs continue on the Agent even when you close this page.</div></div><div class="spacer"></div><button id="clearFinishedJobsBtn" class="btn" type="button">Clear finished</button></div>
+        <div class="summarybar install-actions"><div><b>Installation activity</b><div class="muted tiny">Jobs continue on the Agent even when you close this page.</div></div><div class="spacer"></div><button id="discoverBtn" class="btn" type="button">Discover installs</button><button id="addExistingBtn" class="btn" type="button">Add existing</button><button id="clearFinishedJobsBtn" class="btn" type="button">Clear finished</button></div>
         <div id="jobs"></div>
+      </section>
+      <section id="systemView" class="hidden" aria-label="System administration">
+        <div class="dashboard-section-head"><div><h2>System administration</h2><p>Computer connections, access credentials and control panel updates live here — separately from game settings.</p></div></div>
+        <div class="system-grid">
+          <article class="system-card">
+            <div class="system-card-icon" aria-hidden="true">▣</div>
+            <h2>Connected computers</h2>
+            <p>Register or remove Agent hosts, then select a computer in the sidebar to manage its game servers.</p>
+            <div id="systemHostSummary" class="system-card-info">Loading computers…</div>
+            <button id="manageHostsBtn" class="btn" type="button">Manage computers</button>
+          </article>
+          <article class="system-card">
+            <div class="system-card-icon" aria-hidden="true">◇</div>
+            <h2>API access</h2>
+            <p>Create and revoke access tokens for the selected Agent. Game/RCON passwords remain in the server's Settings.</p>
+            <div class="system-card-info">Admin and ReadOnly roles are enforced by the Agent.</div>
+            <button id="tokensBtn" class="btn" type="button">Manage API tokens</button>
+          </article>
+          <article class="system-card">
+            <div class="system-card-icon" aria-hidden="true">↻</div>
+            <h2>GameServerControl updates</h2>
+            <p>Check the Agent software version and review updates without opening a game's settings.</p>
+            <div id="systemVersionSummary" class="system-card-info">Version information not loaded yet.</div>
+            <div class="system-card-actions"><button id="checkUpdateBtn" class="btn" type="button">Check for updates</button><button id="updateBtn" class="btn primary hidden" type="button">Update available</button></div>
+          </article>
+        </div>
       </section>
     </main>
   </div>

@@ -83,17 +83,32 @@ function serverWorkspaceCleanupConsole() {
   SERVER_WORKSPACE.console = null;
 }
 
+let serverWorkspaceApprovedNavigation = false;
 function openServerPage(id, tab = 'overview') {
+  const nextHash = `#server/${encodeURIComponent(id)}/${tab}`;
+  // Assigning an unchanged hash fires no hashchange event. Do not leave the
+  // one-shot navigation approval armed for a later browser Back operation.
+  if (location.hash === nextHash) return;
+  if (SERVER_WORKSPACE.serverId && !serverWorkspaceConfirmLeave()) return;
+  serverWorkspaceApprovedNavigation = true;
   SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
-  location.hash = `server/${encodeURIComponent(id)}/${tab}`;
+  location.hash = nextHash;
 }
 function serverWorkspaceHome() {
+  if (SERVER_WORKSPACE.serverId && !serverWorkspaceConfirmLeave()) return;
+  serverWorkspaceApprovedNavigation = true;
   serverWorkspaceCleanupConsole();
   location.hash = 'servers';
 }
 function serverWorkspaceSetTab(tab) {
   if (!SERVER_WORKSPACE.serverId) return;
-  location.hash = `server/${encodeURIComponent(SERVER_WORKSPACE.serverId)}/${tab}`;
+  const def = SERVERS.find(x => x.id === SERVER_WORKSPACE.serverId);
+  const resolved = def ? serverWorkspaceResolveTab(def, tab) : tab;
+  const nextHash = `#server/${encodeURIComponent(SERVER_WORKSPACE.serverId)}/${resolved}`;
+  if (location.hash === nextHash) return;
+  if (!serverWorkspaceConfirmLeave()) return;
+  serverWorkspaceApprovedNavigation = true;
+  location.hash = nextHash;
 }
 window.openServerPage = openServerPage;
 window.serverWorkspaceHome = serverWorkspaceHome;
@@ -104,6 +119,13 @@ showView = function (view) {
   if (view === 'servers' && SERVER_WORKSPACE.serverId) {
     serverWorkspaceHome();
     return;
+  }
+  if (view !== 'servers' && SERVER_WORKSPACE.serverId) {
+    if (!serverWorkspaceConfirmLeave()) return;
+    serverWorkspaceCleanupConsole();
+    SERVER_WORKSPACE.serverId = null;
+    SERVER_WORKSPACE.tab = 'overview';
+    history.replaceState(null, '', '#' + view);
   }
   originalServerWorkspaceShowView(view);
 };
@@ -125,11 +147,74 @@ function serverWorkspaceTabs(def) {
   return tabs;
 }
 
-function serverWorkspaceValidTab(def, tab) {
-  const tabs = serverWorkspaceTabs(def);
-  if (tabs.some(x => x[0] === tab)) return tab;
-  return tabs.some(x => x[0] === 'console') ? 'console' : 'overview';
+// The old routes remain leaf pages; the primary navigation presents six
+// task-oriented sections, each with capability-aware secondary pages.
+function serverWorkspaceSections(def) {
+  const available = new Map(serverWorkspaceTabs(def));
+  const rcon = !!profileFor(def)?.caps?.rcon || !!def.rconPort;
+  if (rcon) available.set('access', 'Access & RCON');
+  const groups = [
+    ['overview', 'Overview', ['overview']],
+    ['console', 'Console & players', ['console', 'players', 'admin']],
+    ['configuration', 'Settings', ['config', 'access', 'network', 'settings']],
+    ['content', 'Files & mods', ['files', 'mods']],
+    ['maintenance', 'Backups & automation', ['backups', 'schedule']],
+    ['diagnostics', 'Diagnostics', ['diagnostics']]
+  ];
+  return groups.map(([key, label, leaves]) => ({
+    key, label, tabs: leaves.filter(leaf => available.has(leaf)).map(leaf => [leaf,
+      leaf === 'config' ? 'Game settings' :
+      leaf === 'settings' ? 'Advanced & notifications' : available.get(leaf)])
+  })).filter(section => section.tabs.length);
 }
+
+function serverWorkspaceSectionFor(def, tab) {
+  const sections = serverWorkspaceSections(def);
+  return sections.find(section => section.key === tab ||
+    section.tabs.some(([leaf]) => leaf === tab)) || sections[0];
+}
+
+function serverWorkspaceResolveTab(def, tab) {
+  const section = serverWorkspaceSectionFor(def, tab);
+  if (section.tabs.some(([leaf]) => leaf === tab)) return tab;
+  return section.tabs[0][0];
+}
+
+function serverWorkspaceValidTab(def, tab) {
+  return serverWorkspaceResolveTab(def, tab);
+}
+
+function serverWorkspaceHasUnsavedChanges() {
+  if (SERVER_WORKSPACE.tab === 'files' && window.GSC_FILES?.dirty) return true;
+  const body = document.getElementById('swTabBody');
+  if (!body) return false;
+  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly, #swBackupLabel, #swBackupRetention')).some(input => {
+    if (input.disabled) return false;
+    if (input.type === 'checkbox') return input.checked !== input.defaultChecked;
+    if (input.tagName === 'SELECT') {
+      const options = Array.from(input.options);
+      const defaults = options.filter(option => option.defaultSelected);
+      // HTML single-select defaults to its first option when none declares
+      // "selected". That is not an unsaved edit.
+      if (!input.multiple && defaults.length === 0) return input.selectedIndex > 0;
+      return options.some(option => option.selected !== option.defaultSelected);
+    }
+    return input.value !== input.defaultValue;
+  });
+}
+
+function serverWorkspaceConfirmLeave() {
+  if (!serverWorkspaceHasUnsavedChanges()) return true;
+  if (!confirm('You have unsaved changes on this server page. Discard them?')) return false;
+  // The file editor maintains its own draft state. Explicitly discard it after
+  // user confirmation so returning to Files cannot silently restore old edits.
+  if (SERVER_WORKSPACE.tab === 'files' && window.GSC_FILES?.dirty) {
+    window.GSC_FILES.dirty = false;
+    window.GSC_FILES.content = null;
+  }
+  return true;
+}
+
 
 
 function renderAllHostDashboard(root){
@@ -288,9 +373,10 @@ function updateServerWorkspaceHeader(def) {
 
 function renderServerWorkspace(def) {
   const root = $('#servers');
-  setWorkspaceHeading(def.name, 'SERVERS / ' + (SERVER_WORKSPACE.tab || 'OVERVIEW').toUpperCase());
   $('#serverListTools')?.classList.add('hidden');
   const requestedTab = serverWorkspaceValidTab(def, SERVER_WORKSPACE.tab);
+  const section = serverWorkspaceSectionFor(def, requestedTab);
+  setWorkspaceHeading(def.name, 'SERVERS / ' + section.label.toUpperCase());
   const existing = root.querySelector('.sw-workspace');
   if (existing && existing.dataset.serverId === def.id && existing.dataset.tab === requestedTab) {
     updateServerWorkspaceHeader(def);
@@ -300,7 +386,7 @@ function renderServerWorkspace(def) {
   serverWorkspaceCleanupConsole();
   SERVER_WORKSPACE.tab = requestedTab;
   const meta = serverMeta(def);
-  const tabs = serverWorkspaceTabs(def);
+  const sections = serverWorkspaceSections(def);
 
   root.innerHTML = `<div class="sw-workspace" data-server-id="${esc(def.id)}" data-tab="${esc(SERVER_WORKSPACE.tab)}">
     <div class="sw-head">
@@ -313,7 +399,8 @@ function renderServerWorkspace(def) {
         <button id="swStop" type="button" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button>
       </div>
     </div>
-    <nav class="sw-tabs" aria-label="Server sections">${tabs.map(([key, label]) => `<button type="button" class="sw-tab ${SERVER_WORKSPACE.tab === key ? 'active' : ''}" ${SERVER_WORKSPACE.tab === key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[key])}>${esc(label)}</button>`).join('')}</nav>
+    <nav class="sw-tabs" aria-label="Server sections">${sections.map(group => `<button type="button" class="sw-tab ${section.key === group.key ? 'active' : ''}" ${section.key === group.key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[group.key])}>${esc(group.label)}</button>`).join('')}</nav>
+    ${section.tabs.length > 1 ? `<nav class="sw-subtabs" aria-label="${esc(section.label)} pages">${section.tabs.map(([key, label]) => `<button type="button" class="sw-subtab ${requestedTab === key ? 'active' : ''}" ${requestedTab === key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[key])}>${esc(label)}</button>`).join('')}</nav>` : ''}
     <div class="sw-body"><div id="swOperation" class="sw-operation"></div><div id="swTabBody"><div class="muted">Loading…</div></div></div>
   </div>`;
   updateServerWorkspaceHeader(def);
@@ -330,6 +417,7 @@ async function renderServerWorkspaceTab(def, tab) {
     else if (tab === 'overview') renderServerOverview(def, body);
     else if (tab === 'diagnostics') await renderServerDiagnostics(def, body);
     else if (tab === 'config') await renderServerConfig(def, body);
+    else if (tab === 'access') renderServerAccess(def, body);
     else if (tab === 'players') await renderServerPlayers(def, body);
     else if (tab === 'mods') renderServerMods(def, body);
     else if (tab === 'backups') await renderServerBackups(def, body);
@@ -349,11 +437,10 @@ function renderServerOverview(def, body) {
     `<div>${esc(key)}</div><div>${esc(value)}</div>`).join('');
   const profile = profileFor(def);
   const quickActions = [
-    ...(profile?.caps?.console ? [['Console', 'Live console or logs', 'console']] : []),
-    ['Diagnostics', 'Errors & activity', 'diagnostics'],
-    ['Backups', 'Snapshots & restore', 'backups'],
-    ['Network', 'Ports & relay', 'network'],
-    ['Settings', 'Configure instance', 'settings']
+    ...(profile?.caps?.console ? [['Console & players', 'Logs, commands and players', 'console']] : []),
+    ['Settings', 'Game rules, passwords and network', 'configuration'],
+    ['Backups & automation', 'Snapshots and scheduled jobs', 'maintenance'],
+    ['Diagnostics', 'Errors and operation history', 'diagnostics']
   ];
   body.innerHTML = `<div class="sw-metrics">
       <div class="sw-metric"><span>Processor</span><b id="swCpu">${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></div>
@@ -364,9 +451,9 @@ function renderServerOverview(def, body) {
     <div class="sw-overview-grid">
       <section class="sw-section"><div class="sw-section-heading"><h3>Server details</h3><span class="tiny muted">Configuration</span></div>
         <div class="sw-info"><div>Process status</div><div id="swOverviewState">${esc(status.processState || 'Unknown')}</div>
-          <div>Working directory</div><div class="mono">${esc(def.guestWorkingDir || '—')}</div>
-          <div>Executable</div><div class="mono">${esc(def.guestExePath || '—')}</div>
-          <div>Save directories</div><div class="mono">${(def.saveDirs || []).map(esc).join('<br>') || '—'}</div>
+          <div>Game</div><div>${esc(profile?.label || def.gameType || 'Custom')}</div>
+          <div>Host</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This computer'}</div>
+          <div>Server ID</div><div class="mono">${esc(def.id)}</div>
           <div>Network ports</div><div>${ports.length ? ports.map(formatNetworkPort).map(esc).join('<br>') : 'No ports configured'}</div>
           ${metadata}
         </div>
@@ -428,6 +515,7 @@ async function serverWorkspaceSaveConfig(id) {
   try {
     await api(`/api/servers/${encodeURIComponent(id)}/config`, { method: 'PUT', body: JSON.stringify(values) });
     toast('Configuration saved.', 'ok');
+    serverWorkspaceRefreshTab('config');
   } catch (e) { toast('Save failed: ' + e.message, 'err'); }
 }
 window.serverWorkspaceSaveConfig = serverWorkspaceSaveConfig;
@@ -446,6 +534,46 @@ async function serverWorkspacePlayerAction(id, command, payload) {
   } catch (e) { toast('RCON failed: ' + e.message, 'err'); }
 }
 window.serverWorkspacePlayerAction = serverWorkspacePlayerAction;
+
+// RCON credentials are configured in the server definition, separate from
+// game-specific admin passwords. Blank input preserves the existing secret.
+function renderServerAccess(def, body) {
+  const supportsRcon = !!profileFor(def)?.caps?.rcon || !!def.rconPort;
+  if (!supportsRcon) {
+    body.innerHTML = '<div class="sw-empty">This game does not expose a supported RCON connection.</div>';
+    return;
+  }
+  body.innerHTML = `<div class="sw-section"><div class="sw-section-heading"><h3>RCON connection</h3></div>
+    <p class="tiny muted">Configure the admin connection used by the console and supported player actions. This is separate from the game join/admin passwords.</p>
+    <div class="formgrid"><div class="field"><label for="swAccessHost">Host</label><input id="swAccessHost" autocomplete="off" value="${esc(def.rconHost || 'auto')}"><div class="help">auto uses localhost or the guest IP.</div></div>
+    <div class="field"><label for="swAccessPort">Port</label><input id="swAccessPort" type="number" min="1" max="65535" value="${esc(def.rconPort ?? '')}"></div></div>
+    <div class="field"><label for="swAccessPassword">RCON password</label><input id="swAccessPassword" type="password" name="gsc-rcon-setting" autocomplete="new-password" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" spellcheck="false" placeholder="Leave empty to keep the current password"><div class="help">Existing password: ${def.rconPassword ? 'configured' : 'not configured'}. Enter a new value only to replace it.</div></div>
+    <div class="checkrow"><input id="swAccessClear" type="checkbox"><label for="swAccessClear">Remove existing RCON password</label></div>
+    <button class="btn primary" ${uiAction('serverWorkspaceSaveAccess',[def.id])}>Save RCON connection</button>
+  </div>`;
+}
+async function serverWorkspaceSaveAccess(id) {
+  const def = SERVERS.find(x => x.id === id);
+  if (!def) return;
+  const portRaw = $('#swAccessPort')?.value.trim() || '';
+  const port = portRaw ? Number(portRaw) : null;
+  if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65535))
+    return toast('RCON port must be between 1 and 65535.', 'err');
+  const password = $('#swAccessPassword')?.value || '';
+  const remove = !!$('#swAccessClear')?.checked;
+  if (remove && password) return toast('Choose either a new password or remove the old one.', 'err');
+  const updated = { ...def, rconHost: $('#swAccessHost')?.value.trim() || 'auto',
+    rconPort: port, rconPassword: remove ? null : password || def.rconPassword || null };
+  try {
+    await api(`/api/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(updated) });
+    toast('RCON connection saved.', 'ok');
+    await loadServers();
+    const current = SERVERS.find(x => x.id === id);
+    if (current && SERVER_WORKSPACE.tab === 'access')
+      renderServerWorkspaceTab(current, 'access');
+  } catch (e) { toast('RCON connection failed: ' + e.message, 'err'); }
+}
+window.serverWorkspaceSaveAccess = serverWorkspaceSaveAccess;
 
 function renderServerMods(def, body) {
   body.innerHTML = `<div class="sw-section"><h3>Mods</h3><div class="muted tiny" style="margin-bottom:14px">The existing game-specific mod manager opens from here. Unsupported games do not get this tab.</div><button class="btn primary" ${uiAction('openMods',[def.id])}>Open mod manager</button></div>`;
@@ -567,6 +695,7 @@ async function serverWorkspaceSaveNetwork(id) {
     await api(`/api/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ ...def, networkPorts: ports }) });
     toast('Network settings saved.', 'ok');
     await loadServers();
+    serverWorkspaceRefreshTab('network');
   } catch (e) { toast('Network settings rejected: ' + e.message, 'err'); }
 }
 window.serverWorkspaceResetNetwork = serverWorkspaceResetNetwork;
@@ -588,7 +717,7 @@ async function serverWorkspaceSaveSchedule(id) {
     hourlyBackupEnabled: $('#swBackup').checked,
     hourlyBackupMinute: Number($('#swBackupMinute').value || 0)
   };
-  try { await api(`/api/servers/${encodeURIComponent(id)}/schedule`, { method: 'POST', body: JSON.stringify(body) }); toast('Schedule saved.', 'ok'); }
+  try { await api(`/api/servers/${encodeURIComponent(id)}/schedule`, { method: 'POST', body: JSON.stringify(body) }); toast('Schedule saved.', 'ok'); serverWorkspaceRefreshTab('schedule'); }
   catch (e) { toast('Schedule failed: ' + e.message, 'err'); }
 }
 async function serverWorkspaceClearSchedule(id) {
@@ -601,7 +730,7 @@ window.serverWorkspaceClearSchedule = serverWorkspaceClearSchedule;
 
 function renderServerSettings(def, body) {
   const profile = profileFor(def);
-  body.innerHTML = `<div class="sw-toolbar"><div><b>Server settings</b><div class="tiny muted">Profile-aware defaults first; raw launch fields stay under Advanced.</div></div><div class="spacer"></div><button class="btn" ${uiAction('openEdit',[def.id])}>Edit advanced settings</button></div><div class="sw-info"><div>Profile</div><div>${esc(profile?.label || 'Custom')}</div><div>Run on</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Steam App ID</div><div>${esc(def.steamAppId || '—')}</div><div>Log file</div><div class="mono">${esc(def.logPathInGuest || '—')}</div></div><div class="section">Maintenance</div><div class="sw-toolbar"><button class="btn" ${uiAction('action',[def.id,'update'])}>Update server</button>${profile?.caps?.config ? `<button class="btn" ${uiAction('action',[def.id,'apply'])}>Apply config</button>` : ''}<div class="spacer"></div><button class="btn danger" ${uiAction('deleteServer',[def.id])}>Delete / remove server</button></div>
+  body.innerHTML = `<div class="sw-toolbar"><div><b>Advanced server settings</b><div class="tiny muted">Use game settings, RCON and Network above for routine changes.</div></div><div class="spacer"></div><button class="btn" ${uiAction('openEdit',[def.id])}>Edit server definition</button></div><div class="sw-info"><div>Profile</div><div>${esc(profile?.label || 'Custom')}</div><div>Run on</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Steam App ID</div><div>${esc(def.steamAppId || '—')}</div><div>Log file</div><div class="mono">${esc(def.logPathInGuest || '—')}</div></div><details class="advanced"><summary>Danger zone</summary><div class="advanced-body"><p class="tiny muted">Removing a server affects its registration and may remove associated files, depending on the selected action. Back up your data first.</p><button class="btn danger" ${uiAction('deleteServer',[def.id])}>Remove server…</button></div></details>
   <div class="sw-section"><h3>Discord notifications</h3><div id="swDiscordStatus" class="tiny muted">Loading notification settings…</div><div class="field"><label>Discord webhook (HTTPS)</label><input id="swDiscordUrl" type="password" class="mono" autocomplete="new-password" placeholder="Paste a new URL to set or replace; blank keeps current"><div class="help">The webhook is optional. Its URL is never shown in this settings panel.</div></div><div class="checkrow"><input id="swDiscordAlertsOnly" type="checkbox"><label for="swDiscordAlertsOnly">Only failures and unexpected stops (no routine start/stop/success messages)</label></div><div class="sw-toolbar"><button class="btn primary" ${uiAction('serverWorkspaceSaveNotifications',[def.id])}>Save notifications</button><button class="btn" ${uiAction('serverWorkspaceSendTestNotification',[def.id])}>Send test</button><button class="btn danger" ${uiAction('serverWorkspaceClearNotifications',[def.id])}>Disable</button></div><div class="tiny muted">Discord webhooks only send alerts. Remote commands require a separate secured Discord bot.</div></div>`;
   serverWorkspaceLoadNotifications(def.id);
 }
@@ -614,7 +743,7 @@ async function serverWorkspaceLoadNotifications(id) {
     if (!$('#swDiscordStatus')) return;
     status.textContent = data.configured ? 'Discord webhook configured.' : 'Disabled — no webhook configured.';
     const only = $('#swDiscordAlertsOnly');
-    if (only) only.checked = !!data.alertsOnly;
+    if (only) { only.checked = !!data.alertsOnly; only.defaultChecked = only.checked; }
   } catch (e) {
     status.textContent = 'Unable to load Discord settings: ' + e.message;
   }
@@ -831,9 +960,22 @@ async function serverWorkspaceSendConsole(id) {
 window.serverWorkspaceSendConsole = serverWorkspaceSendConsole;
 
 serverWorkspaceParseHash();
+let serverWorkspaceLastHash = location.hash;
 window.addEventListener('hashchange', () => {
+  const nextHash = location.hash;
+  if (!serverWorkspaceApprovedNavigation && SERVER_WORKSPACE.serverId &&
+      !serverWorkspaceConfirmLeave()) {
+    history.replaceState(null, '', serverWorkspaceLastHash || '#servers');
+    return;
+  }
+  serverWorkspaceApprovedNavigation = false;
+  serverWorkspaceLastHash = nextHash;
   serverWorkspaceCleanupConsole();
   serverWorkspaceParseHash();
+  if (nextHash === '#system' || nextHash === '#installs') {
+    originalServerWorkspaceShowView(nextHash.slice(1));
+    return;
+  }
   if (CURRENT_VIEW !== 'servers') SERVER_WORKSPACE_BASE_SHOW_VIEW('servers');
   renderServers();
 });
@@ -907,7 +1049,9 @@ renderServerSchedule = async function (def, body) {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const linux = def.hostingMode !== 'Vm' && !serverWorkspaceLooksWindows(def);
   const platformInfo = linux ? '<div class="callout info">Dashboard maintenance scheduling currently uses Windows Task Scheduler. On Linux use systemd timers or cron to call the local GameServerControl API.</div>' : '';
-  body.innerHTML = `${platformInfo}<div class="sw-toolbar"><div><b>Schedule</b><div class="tiny muted">Automated restart, update and backup maintenance.</div></div><div class="spacer"></div><button class="btn danger" ${uiAction('serverWorkspaceClearSchedule',[def.id])}>Clear</button><button class="btn primary" ${linux ? 'disabled' : ''} ${uiAction('serverWorkspaceSaveSchedule',[def.id])}>Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
+  const autostart = !linux && def.hostingMode !== 'Vm' && serverWorkspaceLooksWindows(def)
+    ? `<button class="btn" ${uiAction('openAutostart',[def.id])}>Windows autostart</button>` : '';
+  body.innerHTML = `${platformInfo}<div class="sw-toolbar"><div><b>Automation & updates</b><div class="tiny muted">Plan restarts, updates and backups. Update runs on the game server.</div></div><div class="spacer"></div><button class="btn" ${uiAction('action',[def.id,'update'])}>Update game</button>${profileFor(def)?.caps?.config ? `<button class="btn" ${uiAction('action',[def.id,'apply'])}>Apply game configuration</button>` : ''}${autostart}</div><div class="sw-toolbar"><b>Schedule</b><div class="spacer"></div><button class="btn danger" ${uiAction('serverWorkspaceClearSchedule',[def.id])}>Clear</button><button class="btn primary" ${linux ? 'disabled' : ''} ${uiAction('serverWorkspaceSaveSchedule',[def.id])}>Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
 };
 
 const SERVER_WORKSPACE_BASE_OPEN_CREATE_SETTINGS = openCreateSettings;

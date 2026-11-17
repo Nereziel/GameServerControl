@@ -451,3 +451,50 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
   .host-group-name{font-size:12px}
   .host-group-count{width:100%;margin:0}
 }
+
+
+/* Task-oriented server administration: six primary sections, local secondary pages. */
+.sw-tabs{gap:4px;padding:6px 12px;background:#121e2d}
+.sw-tab{padding:11px 13px;border-radius:7px 7px 0 0;font-size:12px}
+.sw-tab.active{font-weight:780}
+.sw-subtabs{display:flex;flex-wrap:wrap;align-items:center;gap:7px;padding:11px 17px;border-bottom:1px solid #2d3d52;background:#172437}
+.sw-subtab{min-height:32px;padding:6px 12px;border:1px solid #3a4f67;border-radius:8px;background:#192a3e;color:#afc0d5;font-size:11px;font-weight:670;transition:background .15s,border-color .15s}
+.sw-subtab:hover{background:#29415a;color:#fff;border-color:#6b83a1}
+.sw-subtab.active{background:#304875;border-color:#718fff;color:#f3f6ff}
+.sw-subtab:focus-visible,.system-choice:focus-visible{outline:2px solid #92adff;outline-offset:2px}
+.sw-workspace .sw-section:only-child{margin-bottom:0}
+
+/* Setup actions are separated from daily control/monitoring activities. */
+.install-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.install-actions>div:first-child{min-width:185px}
+.system-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:stretch}
+.system-card{display:flex;flex-direction:column;align-items:flex-start;gap:12px;min-width:0;padding:22px;border:1px solid #31445d;border-radius:13px;background:linear-gradient(150deg,#19283b,#111c2b)}
+.system-card-icon{display:grid;place-items:center;width:43px;height:43px;border:1px solid #465d7b;border-radius:10px;background:#263a54;color:#bacbf6;font-size:23px}
+.system-card h2{margin:0;font-size:16px;font-weight:780;letter-spacing:-.25px}
+.system-card p{margin:0;color:#9fb2ca;font-size:12px;line-height:1.65;flex:1}
+.system-card-info{width:100%;min-height:40px;padding:10px 12px;border:1px solid #2d425c;border-radius:8px;background:#0f1b2b;color:#c0d2e7;font-size:11px;line-height:1.55;overflow-wrap:anywhere}
+.system-card-actions{display:flex;flex-wrap:wrap;gap:8px}
+.system-action-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.system-choice{display:flex;flex-direction:column;align-items:flex-start;gap:9px;min-height:145px;padding:17px;text-align:left;border:1px solid #39506c;border-radius:11px;background:#17263a;color:#dce8f5}
+.system-choice b{font-size:14px;font-weight:770}
+.system-choice span{font-size:11px;line-height:1.6;color:#a1b6ce}
+.system-choice:hover{border-color:#809cf0;background:#213654}
+.app-sidebar{overflow-y:auto;scrollbar-width:thin;scrollbar-color:#344a65 transparent}
+@media(max-width:1200px){
+  .system-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .system-card:last-child{grid-column:1/-1}
+}
+@media(max-width:760px){
+  .system-grid,.system-action-grid{grid-template-columns:1fr}
+  .system-card:last-child{grid-column:auto}
+  .system-card{padding:16px}
+  .system-choice{min-height:0}
+  .sw-subtabs{padding:10px;flex-wrap:nowrap;overflow-x:auto}
+  .sw-subtab{flex:0 0 auto}
+  .install-actions .spacer{display:none}
+}
+@media(max-width:600px){
+  .sw-tabs{padding:5px;gap:0}
+  .sw-tab{padding:9px 10px;font-size:11px}
+  .install-actions>div:first-child{flex:1 1 100%}
+}

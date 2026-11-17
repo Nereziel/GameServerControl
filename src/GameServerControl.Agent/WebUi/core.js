@@ -100,6 +100,12 @@ async function refreshManagedHosts(){
 async function selectHost(id){
   if(id!=='all'&&!HOST_DIRECTORY.some(h=>h.id===id))return toast('Unknown computer.','err');
   if(id===ACTIVE_HOST_ID)return;
+  if(typeof SERVER_WORKSPACE!=='undefined' && SERVER_WORKSPACE.serverId &&
+      typeof serverWorkspaceConfirmLeave==='function' && !serverWorkspaceConfirmLeave()){
+    const select=$('#hostSwitch');
+    if(select)select.value=ACTIVE_HOST_ID;
+    return;
+  }
   ACTIVE_HOST_ID=id;
   HOST_SWITCH_EPOCH++;
   LAST_HOST_OVERVIEW=0;
@@ -122,6 +128,7 @@ async function selectHost(id){
 }
 async function selectHostAndOpen(hostId,serverId){
   await selectHost(hostId);
+  if(ACTIVE_HOST_ID!==hostId)return;
   const found=SERVERS.some(s=>s.id===serverId);
   if(found)openServerPage(serverId,'overview');
   else toast('The selected computer is unavailable or the server was removed.','err');
@@ -207,7 +214,58 @@ async function api(path,opts={}){
 function cleanupModal(){if(!MODAL_CLEANUP)return;const fn=MODAL_CLEANUP;MODAL_CLEANUP=null;try{fn()}catch{}}
 function openModal(title,body,foot='',wide=false){cleanupModal();$('#modalTitle').textContent=title;$('#modalBody').innerHTML=body;$('#modalFoot').innerHTML=foot;$('#modal').classList.toggle('wide',wide);$('#overlay').classList.remove('hidden')}
 function closeModal(){cleanupModal();$('#overlay').classList.add('hidden')}
-function showView(v){CURRENT_VIEW=v;$('#serversView').classList.toggle('hidden',v!=='servers');$('#installsView').classList.toggle('hidden',v!=='installs');$('#tabServers').classList.toggle('active',v==='servers');$('#tabInstalls').classList.toggle('active',v==='installs');setWorkspaceHeading(v==='installs'?'Installations':'Servers',v==='installs'?'CONTROL PANEL / ACTIVITY':'CONTROL PANEL / OVERVIEW');closeMobileNavigation();if(v==='installs')refreshJobs()}
+function showView(v){
+  if (!['servers','installs','system'].includes(v)) return;
+  CURRENT_VIEW=v;
+  // Keep a stable direct link for non-server pages without re-triggering hash handlers.
+  if (v==='system' || v==='installs') {
+    if (location.hash !== '#'+v) history.replaceState(null,'','#'+v);
+  } else if (location.hash==='#system' || location.hash==='#installs') {
+    history.replaceState(null,'','#servers');
+  }
+  $('#serversView').classList.toggle('hidden',v!=='servers');
+  $('#installsView').classList.toggle('hidden',v!=='installs');
+  $('#systemView').classList.toggle('hidden',v!=='system');
+  for (const [name,id] of [['servers','tabServers'],['installs','tabInstalls'],['system','tabSystem']]) {
+    const nav=$('#'+id);
+    nav?.classList.toggle('active',v===name);
+    if(v===name)nav?.setAttribute('aria-current','page');
+    else nav?.removeAttribute('aria-current');
+  }
+  setWorkspaceHeading(v==='installs'?'Installations':v==='system'?'System':'Servers',
+    v==='installs'?'CONTROL PANEL / ACTIVITY':v==='system'?'CONTROL PANEL / ADMINISTRATION':'CONTROL PANEL / OVERVIEW');
+  closeMobileNavigation();
+  if(v==='installs')refreshJobs();
+  if(v==='system')renderSystemView();
+}
+
+function renderSystemView(){
+  const hosts=$('#systemHostSummary');
+  if(hosts){
+    const known=Array.isArray(HOST_DIRECTORY)?HOST_DIRECTORY:[];
+    const active=known.find(host=>host.id===ACTIVE_HOST_ID);
+    const label=ACTIVE_HOST_ID==='all'?'All computers':active?.name||'This computer';
+    hosts.textContent=known.length+' registered computer'+(known.length===1?'':'s')+' · Active: '+label;
+  }
+  const version=$('#systemVersionSummary');
+  if(version){
+    const current=UPDATE_STATUS?.currentVersion||'Unknown';
+    const available=UPDATE_STATUS?.updateAvailable;
+    version.textContent='Agent version: '+current+(available?' · Update available: '+(UPDATE_STATUS.latestVersion||'new version'):'');
+  }
+}
+
+function openAddServerMenu(){
+  if(ACTIVE_HOST_ID==='all')
+    return toast('Select a computer before adding a game server.','err');
+  openModal('Add a server',
+    `<div class="system-action-grid">
+      <button type="button" class="system-choice" ${uiAction('openCreate')}><b>Install a new game</b><span>Choose a supported game and start an installation.</span></button>
+      <button type="button" class="system-choice" ${uiAction('openAddExisting')}><b>Add an existing server</b><span>Register an installation without touching its game files.</span></button>
+      <button type="button" class="system-choice" ${uiAction('openDiscover')}><b>Discover installations</b><span>Scan known libraries and server directories.</span></button>
+    </div>`,
+    `<button class="btn" ${uiAction('closeModal')}>Cancel</button>`,true);
+}
 
 function profileToGame(p){
   const c=p.capabilities||{};
@@ -281,6 +339,7 @@ async function boot(){
   await loadCapabilities();
   try{await loadProfiles()}catch(e){toast('Game profiles failed: '+e.message,'err')}
   await refreshAll();
+  if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
   await checkForUpdate(false);
   setInterval(()=>{loadServers();refreshJobs(false)},5000);
   setInterval(()=>refreshJobs(false),2000);
@@ -300,7 +359,7 @@ async function init(){
 window.addEventListener('DOMContentLoaded',init);
 
 async function refreshAll(){await Promise.allSettled([loadServers(),refreshJobs(false),...(ACTIVE_HOST_ID==='all'?[]:[checkForUpdate(false)])])}
-async function loadServers(){try{const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;renderServers()}catch(e){toast('Refresh failed: '+e.message,'err')}}
+async function loadServers(){try{const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;if(CURRENT_VIEW==='servers')renderServers();else if(CURRENT_VIEW==='system')renderSystemView()}catch(e){toast('Refresh failed: '+e.message,'err')}}
 function profileFor(d){return PROFILES.find(g=>g.key===d.gameProfileKey)||PROFILES.find(g=>g.appId&&g.appId===d.steamAppId)||PROFILES.find(g=>g.gameType===d.gameType&&g.gameType!=='SteamGeneric')||null}
 function serverMeta(d){const g=profileFor(d);return g?{icon:g.icon,label:g.label,profile:g}:{icon:'🖥',label:d.gameType||'Server',profile:{caps:{}}}}
 
@@ -321,6 +380,7 @@ async function checkForUpdate(force=false){
     UPDATE_STATUS=await api(force?'/api/version/check':'/api/version',force?{method:'POST'}:{});
     const btn=$('#updateBtn');
     if(btn){btn.classList.toggle('hidden',!UPDATE_STATUS?.updateAvailable);btn.textContent=UPDATE_STATUS?.updateAvailable?`Update · ${UPDATE_STATUS.latestVersion}`:'Update'}
+    if(CURRENT_VIEW==='system')renderSystemView();
     return UPDATE_STATUS;
   }catch{return UPDATE_STATUS}
 }
@@ -453,19 +513,8 @@ function applyInstallPorts(g,args,ports){
 }
 
 function installNetworkUiHooks(){
-  if(typeof openManage==='function'&&!openManage.__networkWrapped){
-    const original=openManage;
-    const wrapped=function(id){
-      original(id);
-      const grid=document.querySelector('.manage-grid');
-      if(grid&&!grid.querySelector('[data-network-tile]')){
-        const b=document.createElement('button');b.className='manage-tile';b.dataset.networkTile='1';b.addEventListener('click',()=>openNetwork(id));
-        b.innerHTML='<span class="manage-icon">🌐</span><span><b>Network & firewall</b><small>Ports, conflicts and Windows Firewall</small></span>';
-        grid.appendChild(b);
-      }
-    };
-    wrapped.__networkWrapped=true;window.openManage=wrapped;
-  }
+  // Per-server network controls are available under Server → Settings → Network.
+  // The legacy Manage modal no longer exists, so no extra network tile is injected.
   if(typeof openCreateSettings==='function'&&!openCreateSettings.__networkWrapped){
     const originalCreate=openCreateSettings;
     const wrappedCreate=function(key){
@@ -650,9 +699,9 @@ function bindStaticUi(){
   const bind=(selector,event,handler)=>{const el=$(selector);if(el)el.addEventListener(event,handler)};
   bind('#mobileNavToggle','click',toggleMobileNavigation);
   bind('#navScrim','click',closeMobileNavigation);
-  document.querySelector('.sidebar-nav')?.addEventListener('click',event=>{
+  document.querySelectorAll('.sidebar-nav').forEach(nav=>nav.addEventListener('click',event=>{
     if(event.target.closest('.tab'))closeMobileNavigation();
-  });
+  }));
   document.addEventListener('keydown',event=>{
     if(event.key==='Escape')closeMobileNavigation();
   });
@@ -660,7 +709,8 @@ function bindStaticUi(){
   bind('#manageHostsBtn','click',openManagedHosts);
   bind('#loginConnectBtn','click',()=>login());
   bind('#updateBtn','click',()=>openUpdate());
-  bind('#createServerBtn','click',()=>openCreate());
+  bind('#checkUpdateBtn','click',()=>openUpdate());
+  bind('#createServerBtn','click',()=>openAddServerMenu());
   bind('#discoverBtn','click',()=>openDiscover());
   bind('#addExistingBtn','click',()=>openAddExisting());
   bind('#tokensBtn','click',()=>openTokens());
@@ -668,6 +718,7 @@ function bindStaticUi(){
   bind('#logoutBtn','click',()=>logout());
   bind('#tabServers','click',()=>showView('servers'));
   bind('#tabInstalls','click',()=>showView('installs'));
+  bind('#tabSystem','click',()=>showView('system'));
   bind('#noticeCloseBtn','click',()=>clearNotice());
   bind('#clearFinishedJobsBtn','click',()=>clearFinishedJobs());
   bind('#modalCloseBtn','click',()=>closeModal());
