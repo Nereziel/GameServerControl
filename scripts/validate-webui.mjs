@@ -73,8 +73,23 @@ for (const token of ['bindServerDashboardFilters', 'serverWorkspaceSetTab',
   if (!workspaceForUi.includes(token))
     throw new Error(`Server workspace lost responsive navigation: ${token}`);
 }
-if (!coreForUi.includes('closeMobileNavigation') || !installsForUi.includes("querySelector('.sidebar-nav')"))
-  throw new Error('Sidebar interactions or Settings navigation are not wired correctly.');
+if (!coreForUi.includes('closeMobileNavigation') ||
+    !installsForUi.includes('window.openGlobalSettings=function()') ||
+    !htmlForUi.includes('id="settingsRoot"') ||
+    htmlForUi.includes('id="tabSettings"'))
+  throw new Error('Single global Settings navigation and Relay entry point are not wired correctly.');
+
+// Status sampling must refresh quickly, while avoiding full VPS Relay
+// reconciliation on every metrics tick. Dragonwilds has a separate game process.
+const programForUi = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Program.cs'), 'utf8');
+const orchestratorForUi = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Servers/ServerOrchestrator.cs'), 'utf8');
+const metricsForUi = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Servers/ProcessMetricsSampler.cs'), 'utf8');
+for (const token of ['var syncRelay = statusCycle++ % 6 == 0', 'TimeSpan.FromSeconds(5)'])
+  if (!programForUi.includes(token)) throw new Error('Server metrics polling regression: '+token);
+if (!orchestratorForUi.includes('_metrics.Sample(def, pp)') ||
+    !metricsForUi.includes('RSDragonwildsServer-Win64-Shipping') ||
+    !metricsForUi.includes('Process.GetProcessById(pid)'))
+  throw new Error('Server process metrics must include the real Dragonwilds server process.');
 
 // Files must be a single editable syntax-colored surface, not a duplicated
 // textarea and independent preview. Keep the plain textarea as the native input.

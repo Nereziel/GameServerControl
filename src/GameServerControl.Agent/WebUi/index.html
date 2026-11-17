@@ -38,7 +38,7 @@
     </nav>
     <div class="sidebar-section-label">SYSTEM</div>
     <nav class="tabs sidebar-nav" aria-label="System navigation">
-      <button id="tabSystem" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⚙</span><span>System</span></button>
+      <button id="tabSystem" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>
     </nav>
     <div class="sidebar-spacer"></div>
     <div class="sidebar-connection">
@@ -77,7 +77,7 @@
         <div id="jobs"></div>
       </section>
       <section id="systemView" class="hidden" aria-label="System administration">
-        <div class="dashboard-section-head"><div><h2>System administration</h2><p>Computer connections, access credentials and control panel updates live here — separately from game settings.</p></div></div>
+        <div class="dashboard-section-head"><div><h2>Settings</h2><p>Manage connected computers, Agent access, updates and the public Relay. Individual game settings remain under each server.</p></div></div>
         <div class="system-grid">
           <article class="system-card">
             <div class="system-card-icon" aria-hidden="true">▣</div>
@@ -101,6 +101,7 @@
             <div class="system-card-actions"><button id="checkUpdateBtn" class="btn" type="button">Check for updates</button><button id="updateBtn" class="btn primary hidden" type="button">Update available</button></div>
           </article>
         </div>
+        <div id="settingsRoot" class="system-relay-settings"></div>
       </section>
     </main>
   </div>

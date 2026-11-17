@@ -232,7 +232,7 @@ function showView(v){
     if(v===name)nav?.setAttribute('aria-current','page');
     else nav?.removeAttribute('aria-current');
   }
-  setWorkspaceHeading(v==='installs'?'Installations':v==='system'?'System':'Servers',
+  setWorkspaceHeading(v==='installs'?'Installations':v==='system'?'Settings':'Servers',
     v==='installs'?'CONTROL PANEL / ACTIVITY':v==='system'?'CONTROL PANEL / ADMINISTRATION':'CONTROL PANEL / OVERVIEW');
   closeMobileNavigation();
   if(v==='installs')refreshJobs();
@@ -253,6 +253,7 @@ function renderSystemView(){
     const available=UPDATE_STATUS?.updateAvailable;
     version.textContent='Agent version: '+current+(available?' · Update available: '+(UPDATE_STATUS.latestVersion||'new version'):'');
   }
+  if(CURRENT_VIEW==='system' && typeof renderGlobalSettings==='function')renderGlobalSettings();
 }
 
 function openAddServerMenu(){
@@ -339,6 +340,7 @@ async function boot(){
   await loadCapabilities();
   try{await loadProfiles()}catch(e){toast('Game profiles failed: '+e.message,'err')}
   await refreshAll();
+  if(location.hash==='#settings')history.replaceState(null,'','#system');
   if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
   await checkForUpdate(false);
   setInterval(()=>{loadServers();refreshJobs(false)},5000);
@@ -610,6 +612,9 @@ boot=async function(){
   if(ACTIVE_HOST_ID!=='all')try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
   await Promise.allSettled([loadServers(),refreshJobs(false)]);
   if(ACTIVE_HOST_ID!=='all')await checkForUpdate(false);
+  // The later boot override is the active entry point; preserve legacy Settings links.
+  if(location.hash==='#settings')history.replaceState(null,'','#system');
+  if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
   setInterval(()=>loadServers(true),2000);
   setInterval(()=>{try{const active=loadJobRefs().some(r=>!(JOB_CACHE[r.jobId]?.finished));if(CURRENT_VIEW==='installs'||active)refreshJobs(false)}catch{}},1000);
   setInterval(()=>{if(ACTIVE_HOST_ID!=='all')checkForUpdate(false)},30*60*1000);

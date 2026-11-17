@@ -83,16 +83,22 @@ assert.equal(ctx.serverWorkspaceConfirmLeave(),true);
 assert.equal(ctx.window.GSC_FILES.dirty,false,'discard confirmation must reset file draft state');
 assert.equal(ctx.window.GSC_FILES.content,null);
 
-assert.ok(html.includes('id="tabSystem"')&&html.includes('id="systemView"'),
-  'system management must have its own sidebar destination');
+assert.ok(html.includes('id="tabSystem"')&&html.includes('id="systemView"')&&html.includes('id="settingsRoot"'),
+  'all global Agent settings must share one sidebar destination');
+assert.ok(!html.includes('id="tabSettings"')&&!html.includes('id="settingsView"'),
+  'duplicate global Settings destination must be removed');
+assert.match(html, /id="tabSystem"[^\n]*<span>Settings<\/span>/, 'global navigation should be named Settings');
 const top=html.match(/<div class="top-actions">([\s\S]*?)<\/div>/);
 assert.ok(top,'header actions');
 assert.ok(!/id="(?:tokensBtn|updateBtn|discoverBtn|addExistingBtn|manageHostsBtn)"/.test(top[1]),
   'secondary system/setup controls must leave the busy header');
 for(const id of ['tokensBtn','updateBtn','manageHostsBtn','discoverBtn','addExistingBtn','createServerBtn'])
   assert.ok(html.includes('id="'+id+'"'),id+' action preserved');
-assert.ok(core.includes("v==='system'")&&core.includes("renderSystemView()"),
-  'system section must be a routable, functional page');
+assert.ok(core.includes("v==='system'")&&core.includes("renderSystemView()")&&core.includes("renderGlobalSettings()"),
+  'global Settings must be a routable page that includes Agent Relay settings');
+const activeBoot = core.slice(core.indexOf('boot=async function(){'));
+assert.ok(activeBoot.includes("location.hash==='#settings'") && activeBoot.includes("showView(location.hash.slice(1))"),
+  'active boot must restore System Settings and redirect old #settings bookmarks');
 assert.ok(core.includes('openAddServerMenu')&&core.includes('openAddExisting')&&core.includes('openDiscover'),
   'add server must offer install, existing and discovery without duplicate top-level buttons');
 assert.ok(admin.includes("openServerPage(id,'overview')"),

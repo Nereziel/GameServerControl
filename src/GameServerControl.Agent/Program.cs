@@ -765,20 +765,27 @@ _ = Task.Run(async () =>
     var reg = app.Services.GetRequiredService<ServerRegistry>();
     var relay = app.Services.GetRequiredService<PublicRelayManager>();
     var log = app.Services.GetRequiredService<ILogger<Program>>();
+    var statusCycle = 0;
     while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
     {
+        // Sample live server CPU/RAM every five seconds; reconcile public Relay
+        // rules on the original ~30-second cadence to avoid unnecessary API calls.
+        var syncRelay = statusCycle++ % 6 == 0;
         foreach (var s in reg.All)
         {
             try
             {
                 var status = await orch.RefreshStatusAsync(s.Id, app.Lifetime.ApplicationStopping);
-                try { await relay.EnsureForServerAsync(s, status.ProcessState == ProcessState.Running, app.Lifetime.ApplicationStopping); }
-                catch (Exception ex) { log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
+                if (syncRelay)
+                {
+                    try { await relay.EnsureForServerAsync(s, status.ProcessState == ProcessState.Running, app.Lifetime.ApplicationStopping); }
+                    catch (Exception ex) { log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
+                }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex) { log.LogDebug(ex, "Status refresh failed for {Id}", s.Id); }
         }
-        try { await Task.Delay(TimeSpan.FromSeconds(30), app.Lifetime.ApplicationStopping); }
+        try { await Task.Delay(TimeSpan.FromSeconds(5), app.Lifetime.ApplicationStopping); }
         catch (OperationCanceledException) { break; }
     }
 });
