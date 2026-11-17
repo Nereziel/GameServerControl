@@ -108,7 +108,7 @@ The Cloudflare Worker serves the existing responsive Agent WebUI as static asset
 | `GSC_CF_ACCESS_TEAM_DOMAIN` | Cloudflare Access team URL, e.g. `https://team.cloudflareaccess.com` |
 | `GSC_CF_ACCESS_POLICY_AUD` | AUD of the Access application for the **panel** hostname |
 
-6. After that, use **Actions → Deploy Cloudflare panel → Run workflow → main → Run workflow**. No fields need to be reentered on future deploys. The action fails before contacting Cloudflare if a variable is missing; it continues to validate the Access audience, authenticated gateway health, and repository Secrets before deploying. **Re-run jobs does not select new code**: the workflow rejects stale commits, so to deploy a new UI always launch a new workflow on `main`.
+6. After that, use **Actions → Deploy Cloudflare panel → Run workflow → main → Run workflow**. No fields need to be reentered on future deploys. The action fails before contacting Cloudflare if a variable is missing; it continues to validate the Access audience, authenticated gateway health, and repository Secrets before deploying. **Re-run jobs does not select new code**: newly launched runs of this workflow reject stale commits. Older workflow runs created before this safeguard may still deploy their original code if rerun; to deploy a new UI always choose **Run workflow** on `main`.
 
 No per-PC Agent tokens are deployment secrets: add them through the authenticated WebUI instead. Keep Cloudflare API tokens, encryption keys, gateway shared keys, and admin email allowlists in **Secrets**, not Variables.
 
