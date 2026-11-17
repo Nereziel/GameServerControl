@@ -210,6 +210,12 @@ function closeModal(){cleanupModal();$('#overlay').classList.add('hidden')}
 function showView(v){
   if (!['servers','installs','system'].includes(v)) return;
   CURRENT_VIEW=v;
+  // Keep a stable direct link for non-server pages without re-triggering hash handlers.
+  if (v==='system' || v==='installs') {
+    if (location.hash !== '#'+v) history.replaceState(null,'','#'+v);
+  } else if (location.hash==='#system' || location.hash==='#installs') {
+    history.replaceState(null,'','#servers');
+  }
   $('#serversView').classList.toggle('hidden',v!=='servers');
   $('#installsView').classList.toggle('hidden',v!=='installs');
   $('#systemView').classList.toggle('hidden',v!=='system');
@@ -326,6 +332,7 @@ async function boot(){
   await loadCapabilities();
   try{await loadProfiles()}catch(e){toast('Game profiles failed: '+e.message,'err')}
   await refreshAll();
+  if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
   await checkForUpdate(false);
   setInterval(()=>{loadServers();refreshJobs(false)},5000);
   setInterval(()=>refreshJobs(false),2000);
