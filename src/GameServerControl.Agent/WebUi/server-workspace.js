@@ -194,8 +194,15 @@ function serverWorkspaceHasUnsavedChanges() {
 }
 
 function serverWorkspaceConfirmLeave() {
-  return !serverWorkspaceHasUnsavedChanges() ||
-    confirm('You have unsaved changes on this server page. Discard them?');
+  if (!serverWorkspaceHasUnsavedChanges()) return true;
+  if (!confirm('You have unsaved changes on this server page. Discard them?')) return false;
+  // The file editor maintains its own draft state. Explicitly discard it after
+  // user confirmation so returning to Files cannot silently restore old edits.
+  if (SERVER_WORKSPACE.tab === 'files' && window.GSC_FILES?.dirty) {
+    window.GSC_FILES.dirty = false;
+    window.GSC_FILES.content = null;
+  }
+  return true;
 }
 
 
