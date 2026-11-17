@@ -71,4 +71,7 @@ for (const asset of [
   'GameServerControl-Install-Relay.sh'
 ]) requireToken(asset, 'Release asset contract changed unexpectedly');
 
+// Reuse the normal Build CI gate to catch broken Cloudflare deployment controls.
+await import('./validate-cloudflare-one-click.mjs');
+
 console.log('Release validation gate contract OK.');

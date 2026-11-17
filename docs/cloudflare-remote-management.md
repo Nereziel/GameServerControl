@@ -99,7 +99,18 @@ The Cloudflare Worker serves the existing responsive Agent WebUI as static asset
 | `GSC_CF_GATEWAY_SHARED_KEY` | Random secret shared with VPS gateway (Caddy environment variable or private Nginx secret include) |
 | `GSC_CF_ACCESS_ADMIN_EMAILS` | Comma-separated allowlist for Cloudflare users permitted to administer servers and register PCs |
 
-5. Run GitHub Actions **Deploy Cloudflare panel** with `panel_hostname`, `gateway_origin`, `access_team_domain` and `access_policy_aud`. No per-PC Agent tokens are deployment secrets: add them through the authenticated WebUI instead.
+5. Set these **non-secret GitHub Actions Variables** once under **Settings → Secrets and variables → Actions → Variables** (repository level). They are fixed deployment targets, not credentials:
+
+| Variable | Value |
+|---|---|
+| `GSC_CF_PANEL_HOSTNAME` | Access-protected Worker hostname, e.g. `panel.example.com` (no scheme or path) |
+| `GSC_CF_GATEWAY_ORIGIN` | HTTPS origin of your VPS gateway, e.g. `https://gateway.example.com` (no path) |
+| `GSC_CF_ACCESS_TEAM_DOMAIN` | Cloudflare Access team URL, e.g. `https://team.cloudflareaccess.com` |
+| `GSC_CF_ACCESS_POLICY_AUD` | AUD of the Access application for the **panel** hostname |
+
+6. After that, use **Actions → Deploy Cloudflare panel → Run workflow → main → Run workflow**. No fields need to be reentered on future deploys. The action fails before contacting Cloudflare if a variable is missing; it continues to validate the Access audience, authenticated gateway health, and repository Secrets before deploying. **Re-run jobs does not select new code**: newly launched runs of this workflow reject stale commits. Older workflow runs created before this safeguard may still deploy their original code if rerun; to deploy a new UI always choose **Run workflow** on `main`.
+
+No per-PC Agent tokens are deployment secrets: add them through the authenticated WebUI instead. Keep Cloudflare API tokens, encryption keys, gateway shared keys, and admin email allowlists in **Secrets**, not Variables.
 
 The Worker also needs runtime variables `GATEWAY_ORIGIN`, `GATEWAY_SHARED_KEY`, `HOSTS_ENCRYPTION_KEY`, `ACCESS_TEAM_DOMAIN`, `ACCESS_POLICY_AUD`, `ACCESS_ADMIN_EMAILS`, plus the `HOSTS_DB` D1 binding. The action configures them when it deploys.
 
