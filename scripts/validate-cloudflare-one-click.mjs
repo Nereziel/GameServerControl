@@ -24,6 +24,8 @@ for (const [name, key] of [
   const required=start>=0&&end>start ? source.slice(start,end) : '';
   assert.ok(required.includes(name),'missing-value preflight must validate '+name);
 }
+assert.doesNotMatch(source, /^        env:\\s*\\n        run:/m,
+  'removing dispatch-specific env must not leave empty YAML env mappings');
 assert.doesNotMatch(source, /inputs\.(?:panel_hostname|gateway_origin|access_team_domain|access_policy_aud)/,
   'no lingering dispatch-input references');
 assert.match(source, /GSC_CF_PANEL_HOSTNAME/, 'missing-variable guidance should name Variables');
