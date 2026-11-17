@@ -184,11 +184,17 @@ function serverWorkspaceHasUnsavedChanges() {
   if (SERVER_WORKSPACE.tab === 'files' && window.GSC_FILES?.dirty) return true;
   const body = document.getElementById('swTabBody');
   if (!body) return false;
-  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly')).some(input => {
+  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly, #swBackupLabel, #swBackupRetention')).some(input => {
     if (input.disabled) return false;
     if (input.type === 'checkbox') return input.checked !== input.defaultChecked;
-    if (input.tagName === 'SELECT')
-      return Array.from(input.options).some(option => option.selected !== option.defaultSelected);
+    if (input.tagName === 'SELECT') {
+      const options = Array.from(input.options);
+      const defaults = options.filter(option => option.defaultSelected);
+      // HTML single-select defaults to its first option when none declares
+      // "selected". That is not an unsaved edit.
+      if (!input.multiple && defaults.length === 0) return input.selectedIndex > 0;
+      return options.some(option => option.selected !== option.defaultSelected);
+    }
     return input.value !== input.defaultValue;
   });
 }
