@@ -106,6 +106,7 @@ async function selectHost(id){
     if(select)select.value=ACTIVE_HOST_ID;
     return;
   }
+  stopStatusStream();
   ACTIVE_HOST_ID=id;
   HOST_SWITCH_EPOCH++;
   LAST_HOST_OVERVIEW=0;
@@ -124,6 +125,7 @@ async function selectHost(id){
     }else HOST_CAPABILITIES={schemaVersion:0,features:[]};
     await loadServers(false);
     await refreshJobs(false);
+    startStatusStream();
   }catch(e){setNotice('Computer connection failed: '+e.message,'err',false)}
 }
 async function selectHostAndOpen(hostId,serverId){
@@ -589,7 +591,7 @@ function installNetworkUiHooks(){
 window.addEventListener('DOMContentLoaded',installNetworkUiHooks);
 
 /* Control-room overrides externalized from index.html for CSP. */
-window.GSCUX={booted:false,selected:null,actions:{},refreshing:false,noticeTimer:null};
+window.GSCUX={booted:false,selected:null,actions:{},refreshing:false,noticeTimer:null,statusStream:null,statusStreamReady:false,statusStreamGeneration:0,statusStreamRetry:null,lastHttpSync:0};
 
 function clearNotice(){const n=$('#noticeBar');if(n)n.classList.add('hidden');if(GSCUX.noticeTimer){clearTimeout(GSCUX.noticeTimer);GSCUX.noticeTimer=null}}
 function setNotice(msg,kind='info',persistent=false,title=null){
@@ -615,7 +617,13 @@ boot=async function(){
   // The later boot override is the active entry point; preserve legacy Settings links.
   if(location.hash==='#settings')history.replaceState(null,'','#system');
   if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
-  setInterval(()=>loadServers(true),2000);
+  startStatusStream();
+  // With an active SignalR stream, keep a slow HTTP reconciliation for changes
+  // to the registered server list. If disconnected, retain the fast fallback.
+  setInterval(()=>{
+    if(GSCUX.statusStreamReady && Date.now()-GSCUX.lastHttpSync<60000)return;
+    loadServers(true);
+  },2000);
   setInterval(()=>{try{const active=loadJobRefs().some(r=>!(JOB_CACHE[r.jobId]?.finished));if(CURRENT_VIEW==='installs'||active)refreshJobs(false)}catch{}},1000);
   setInterval(()=>{if(ACTIVE_HOST_ID!=='all')checkForUpdate(false)},30*60*1000);
 };
@@ -637,6 +645,7 @@ loadServers=async function(silent=false){
       const[s,st]=await Promise.all([api('/api/servers'),api('/api/status')]);
       if(epoch!==HOST_SWITCH_EPOCH)return;
       SERVERS=s||[];STATUS={};for(const x of(st||[]))STATUS[x.id]=x;
+      GSCUX.lastHttpSync=Date.now();
       if(GSCUX.selected&&!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=null;
       if(!GSCUX.selected&&SERVERS.length)GSCUX.selected=SERVERS[0].id;
     }
@@ -644,6 +653,51 @@ loadServers=async function(silent=false){
   }catch(e){if(!silent)setNotice('Refresh failed: '+e.message,'err',false)}
   finally{if(GSCUX.refreshEpoch===epoch)GSCUX.refreshing=false}
 };
+
+
+function stopStatusStream(){
+  GSCUX.statusStreamGeneration++;
+  GSCUX.statusStreamReady=false;
+  if(GSCUX.statusStreamRetry){clearTimeout(GSCUX.statusStreamRetry);GSCUX.statusStreamRetry=null}
+  if(GSCUX.statusStream){GSCUX.statusStream.close();GSCUX.statusStream=null}
+}
+
+function startStatusStream(){
+  stopStatusStream();
+  if(ACTIVE_HOST_ID==='all'||typeof createServerStatusConnection!=='function')return;
+  const generation=GSCUX.statusStreamGeneration,host=ACTIVE_HOST_ID;
+  const connect=async()=>{
+    if(generation!==GSCUX.statusStreamGeneration||host!==ACTIVE_HOST_ID)return;
+    try{
+      const connection=await createServerStatusConnection(message=>{
+        if(generation!==GSCUX.statusStreamGeneration||host!==ACTIVE_HOST_ID||
+           message.type!==1||String(message.target||'').toLowerCase()!=='statuschanged')return;
+        const status=message.arguments?.[0];
+        if(!status||!SERVERS.some(server=>server.id===status.id))return;
+        STATUS[status.id]=status;
+        if(CURRENT_VIEW==='servers')renderServers();
+      },()=>{
+        if(generation!==GSCUX.statusStreamGeneration)return;
+        GSCUX.statusStreamReady=false;
+        GSCUX.statusStream=null;
+        GSCUX.statusStreamRetry=setTimeout(connect,5000);
+      });
+      if(generation!==GSCUX.statusStreamGeneration||host!==ACTIVE_HOST_ID){
+        connection.close();return;
+      }
+      GSCUX.statusStream=connection;
+      GSCUX.statusStreamReady=true;
+      // Recover server definitions and statuses possibly changed during handshake.
+      await loadServers(true);
+    }catch{
+      if(generation===GSCUX.statusStreamGeneration){
+        GSCUX.statusStreamReady=false;
+        GSCUX.statusStreamRetry=setTimeout(connect,5000);
+      }
+    }
+  };
+  void connect();
+}
 
 window.selectServer=function(id){GSCUX.selected=id;renderServers()};
 function actionVisual(id,actual){const a=GSCUX.actions[id];return a?.state||actual||'Unknown'}
