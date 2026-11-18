@@ -55,14 +55,17 @@ requireToken(example, '"TrustedTokenIds"', 'Example config must document trusted
 console.log('Security/access contract OK.');
 
 for (const [token, label] of [
-  ['HttpOnly = true', 'remember cookies must be HttpOnly'],
-  ['SameSite = SameSiteMode.Strict', 'remember cookies must be same-site'],
+  ['LocalBrowserKey', 'remembered browser credentials must use a dedicated request body'],
+  ['Hash(rememberKey)', 'remembered browser keys must be hashed before persistence'],
   ['SecretFilePermissions.WriteAllTextAtomic', 'browser session hashes need restricted storage'],
   ['IsAdminCredentialHashActive', 'browser sessions must follow origin token revocation'],
   ['System.Net.IPAddress.IsLoopback', 'browser session endpoints must restrict to loopback'],
   ['OperatingSystem.IsWindows()', 'browser session endpoints must be Windows-only']
 ]) requireToken(browserSession, token, label);
 requireToken(localWebUi, "if(await restoreBrowserLogin())", 'Web UI must restore a previously authorized local browser session');
+requireToken(localWebUi, "localStorage.setItem(LOCAL_REMEMBER_KEY", 'Remembered keys must be scoped to the WebUI origin and port');
+requireToken(localWebUi, "/auth/browser-session/restore", 'Restoration must require a POST body, never a URL credential');
 requireToken(localWebUi, "/auth/browser-session/forget", 'Logout must revoke remembered local browser sessions');
 rejectToken(traySource, '?token=', 'Tray must never inject the full Agent API token into a browser URL');
+rejectToken(browserSession, 'Response.Cookies', 'No cookie-based localhost sessions shared between ports');
 console.log('Local browser session security contract OK.');

@@ -99,14 +99,15 @@ The Tray icon already opens this URL: subsequent clicks automatically restore
 the authorized browser session without asking for the API token again.
 The first Admin login is still required. **Sign out** forgets this browser.
 
-The remembered browser cookie is `HttpOnly`, `SameSite=Strict`, and limited
-to the local Agent origin. The Agent stores only hashed opaque cookie credentials
-in its protected data directory and checks that the original Admin API token is
-still active, including after Agent restarts. Revoking that token also revokes
-remembered access. Browser API credentials are short-lived; the persistent
-Admin token is **never placed in a Tray/browser URL**. This feature does not
-work on the remote Tailscale/Cloudflare UI or for ReadOnly accounts.
-On shared Windows accounts, leave the checkbox unchecked.
+Only an opaque, revocable 30-day remember key is saved in the browser's
+origin-and-port-scoped local storage; the persistent Admin API token is not
+stored there. The Agent stores **only its hash** under protected state storage,
+verifies that the exact original Admin credential is still active, and issues
+short-lived session credentials. Revoking the original token or signing out
+revokes remembered access. Neither the Agent API token nor the remember key
+is placed in any URL. This feature is only for direct localhost access,
+not remote Tailscale/Cloudflare UI or ReadOnly accounts. Use the same browser
+profile and leave the checkbox off on shared Windows accounts.
 
 The first successful start generates and persists an API token in:
 

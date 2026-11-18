@@ -6,13 +6,12 @@ using GameServerControl.Shared;
 namespace GameServerControl.Agent.Auth;
 
 /// <summary>
-/// Opt-in loopback browser sessions: the cookie is a random opaque credential,
-/// only its hash is persisted, and API requests still use short-lived bearer
-/// credentials. Sessions are bound to the originating Admin token identity.
+/// Opt-in loopback browser sessions: a browser-origin-scoped opaque key is
+/// stored locally and only its hash is persisted by the Agent. API requests
+/// still use short-lived bearer credentials bound to an originating Admin token.
 /// </summary>
 public sealed class BrowserSessionStore
 {
-    public const string CookieName = "gsc_local_browser";
     public static readonly TimeSpan RememberDuration = TimeSpan.FromDays(30);
     public static readonly TimeSpan AccessDuration = TimeSpan.FromHours(8);
     private const int MaxSessions = 20;
@@ -75,8 +74,8 @@ public sealed class BrowserSessionStore
         var existing = registry.Lookup(originalCredential);
         if (existing is null || existing.Value.Id != tokenId || existing.Value.Role != TokenRole.Admin)
             throw new UnauthorizedAccessException("Remembered sessions require a current Admin API token.");
-        var cookie = Generate();
-        var hash = Hash(cookie);
+        var rememberKey = Generate();
+        var hash = Hash(rememberKey);
         var credentialHash = Hash(originalCredential).ToLowerInvariant();
         lock (_gate)
         {
@@ -94,17 +93,17 @@ public sealed class BrowserSessionStore
                 throw;
             }
         }
-        return cookie;
+        return rememberKey;
     }
 
-    public string? Restore(string? cookie, TokenRegistry registry)
+    public string? Restore(string? rememberKey, TokenRegistry registry)
     {
-        if (string.IsNullOrWhiteSpace(cookie) || cookie.Length != 43) return null;
+        if (string.IsNullOrWhiteSpace(rememberKey) || rememberKey.Length != 43) return null;
         lock (_gate)
         {
             var now = DateTimeOffset.UtcNow;
             Prune(now);
-            if (!_remembered.TryGetValue(Hash(cookie), out var entry)) return null;
+            if (!_remembered.TryGetValue(Hash(rememberKey), out var entry)) return null;
             if (!registry.IsAdminCredentialHashActive(entry.TokenId, entry.CredentialHash))
             {
                 _remembered.Remove(entry.Hash);
@@ -130,12 +129,12 @@ public sealed class BrowserSessionStore
         }
     }
 
-    public void Forget(string? cookie)
+    public void Forget(string? rememberKey)
     {
-        if (string.IsNullOrWhiteSpace(cookie) || cookie.Length != 43) return;
+        if (string.IsNullOrWhiteSpace(rememberKey) || rememberKey.Length != 43) return;
         lock (_gate)
         {
-            var hash = Hash(cookie);
+            var hash = Hash(rememberKey);
             foreach (var key in _access.Where(e => e.Value.ParentHash == hash).Select(e => e.Key).ToArray())
                 _access.Remove(key);
             if (_remembered.Remove(hash)) Save();
@@ -168,14 +167,6 @@ public static class BrowserSessionAccess
         }
         return true;
     }
-
-    public static CookieOptions CookieOptions(HttpRequest request) => new()
-    {
-        HttpOnly = true,
-        Secure = request.IsHttps,
-        SameSite = SameSiteMode.Strict,
-        Path = "/auth",
-        MaxAge = BrowserSessionStore.RememberDuration,
-        IsEssential = true
-    };
 }
+
+public sealed record LocalBrowserKey(string? RememberKey);

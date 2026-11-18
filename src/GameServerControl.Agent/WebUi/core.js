@@ -59,6 +59,7 @@ let SERVERS=[],STATUS={},CURRENT_VIEW='servers',JOB_CACHE={},MOD_CTX=null,MOD_RE
 let PROFILES=[],GAMES=[],UPDATE_STATUS=null;
 let HOST_CAPABILITIES={schemaVersion:0,features:[]};
 const CFG_KEY='gsc.connection.v2';
+const LOCAL_REMEMBER_KEY='gsc.remember.local.v1';
 const HOST_KEY='gsc.activeHost.v1';
 let ACTIVE_HOST_ID='local',HOST_DIRECTORY=[],HOST_OVERVIEW=[],HOST_SWITCH_EPOCH=0,LAST_HOST_OVERVIEW=0;
 
@@ -325,8 +326,10 @@ async function login(){
     await api('/api/health',{signal:controller.signal});
     clearTimeout(timeout);
     if(isLocalBrowserOrigin()&&$('#loginRememberBrowser')?.checked){
-      try{await api('/api/auth/browser-session',{method:'POST'})}
-      catch(e){toast('Could not remember this browser: '+e.message,'err')}
+      try{
+        const remember=await api('/api/auth/browser-session',{method:'POST'});
+        if(remember?.rememberKey)localStorage.setItem(LOCAL_REMEMBER_KEY,remember.rememberKey);
+      }catch(e){toast('Could not remember this browser: '+e.message,'err')}
     }
     sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
     await boot();
@@ -341,7 +344,10 @@ async function login(){
 }
 async function logout(){
   if(isLocalBrowserOrigin()){
-    try{await fetch('/auth/browser-session/forget',{method:'POST',credentials:'same-origin',cache:'no-store'})}catch{}
+    const key=localStorage.getItem(LOCAL_REMEMBER_KEY);
+    if(key)try{await fetch('/auth/browser-session/forget',{method:'POST',cache:'no-store',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({rememberKey:key})})}catch{}
+    localStorage.removeItem(LOCAL_REMEMBER_KEY);
   }
   sessionStorage.removeItem(CFG_KEY);
   location.reload();
@@ -367,9 +373,12 @@ function isLocalBrowserOrigin(){
 async function restoreBrowserLogin(){
   if(!isLocalBrowserOrigin()||window.GSC_CLOUD_MODE)return false;
   try{
-    const response=await fetch('/auth/browser-session',{credentials:'same-origin',cache:'no-store'});
+    const key=localStorage.getItem(LOCAL_REMEMBER_KEY);
+    if(!key)return false;
+    const response=await fetch('/auth/browser-session/restore',{method:'POST',cache:'no-store',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({rememberKey:key})});
     if(!response.ok)return false;
-    if(response.status===204)return false;
+    if(response.status===204){localStorage.removeItem(LOCAL_REMEMBER_KEY);return false}
     const result=await response.json();
     if(typeof result.token!=='string'||!result.token)return false;
     CFG={url:location.origin,token:result.token};
