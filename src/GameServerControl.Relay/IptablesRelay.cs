@@ -120,7 +120,7 @@ public sealed class IptablesRelay
             if (result.ExitCode != 0) return null;
             // iptables-save adds timestamp comments which change every run.
             // Counters are omitted by default; keep every actual rule and chain.
-            var stable = string.Join('\n', result.Output.Split('\n', StringSplitOptions.TrimEntries)
+            var stable = string.Join("\n", result.Output.Split('\n', StringSplitOptions.TrimEntries)
                 .Where(line => line.Length != 0 && !line.StartsWith('#')));
             if (!stable.Contains("*nat", StringComparison.Ordinal) ||
                 !stable.Contains("*filter", StringComparison.Ordinal))
