@@ -21,12 +21,15 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
     private const string ThrottleRetryAfterItem = "gsc:auth-throttle-retry-after";
 
     private readonly TokenRegistry _registry;
+    private readonly BrowserSessionStore? _browserSessions;
     private readonly AuthenticationFailureThrottle _failureThrottle = AuthenticationFailureThrottle.Shared;
 
-    public TokenAuthHandler(IOptionsMonitor<TokenAuthOptions> options, ILoggerFactory logger, UrlEncoder encoder, TokenRegistry registry)
+    public TokenAuthHandler(IOptionsMonitor<TokenAuthOptions> options, ILoggerFactory logger, UrlEncoder encoder,
+        TokenRegistry registry, BrowserSessionStore? browserSessions = null)
         : base(options, logger, encoder)
     {
         _registry = registry;
+        _browserSessions = browserSessions;
     }
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
@@ -89,7 +92,7 @@ public sealed class TokenAuthHandler : AuthenticationHandler<TokenAuthOptions>
                 new AuthenticationTicket(healthPrincipal, Scheme.Name)));
         }
 
-        var match = _registry.Lookup(presented);
+        var match = _registry.Lookup(presented) ?? _browserSessions?.Lookup(presented, _registry);
         if (match is null)
         {
             if (throttled)
