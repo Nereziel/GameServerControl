@@ -135,6 +135,17 @@ When an enabled game server starts, the Agent sends the desired route to the VPS
 
 The VPS provider/cloud firewall must still allow the selected public game ports.
 
+Relay game traffic stays in the Linux kernel's netfilter datapath; the .NET
+service manages configuration and health only. Every 30 seconds the Relay
+compares a single `iptables-save` ruleset snapshot with its last verified
+snapshot instead of spawning separate `iptables -C` checks for every rule.
+If the ruleset changes (including after UFW reload), it runs the original
+full checks to restore missing managed rules. Route updates still apply
+immediately. If `iptables-save` is absent or uses a different backend
+(`legacy` vs `nf_tables`), the Relay falls back to the original full
+checks. An alternative binary can be configured with
+`Relay:IptablesSavePath`.
+
 ## Multiple physical computers (Multi-Agent)
 
 Each Windows/Linux Agent independently manages its own game servers and offers a local WebUI. The **Cloudflare Worker** hosts a central panel with an encrypted D1 computer registry and reaches each PC independently over HTTPS through a forwarding-only VPS Caddy proxy and Tailscale. If PC1 is off, the dashboard still manages PC2. No `cloudflared` or main coordinator PC is required for this Cloudflare mode. The VPS **GameServerControl.Relay** stays separate and handles public game TCP/UDP ports only.

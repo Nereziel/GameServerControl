@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Relay;
@@ -11,6 +13,10 @@ public sealed class IptablesRelay
     private const string ForwardChain = "GSC_RELAY_FWD";
 
     private readonly string _iptables;
+    private readonly string _iptablesSave;
+    private string? _verifiedRulesetFingerprint;
+    private bool _backendChecked;
+    private bool _backendMatches;
     private readonly string _publicInterface;
     private readonly string _tailscaleInterface;
     private readonly bool _allowNonTailscaleTargets;
@@ -22,6 +28,10 @@ public sealed class IptablesRelay
     public IptablesRelay(IConfiguration configuration, ILogger<IptablesRelay> logger)
     {
         _iptables = configuration["Relay:IptablesPath"] ?? "iptables";
+        _iptablesSave = configuration["Relay:IptablesSavePath"] ??
+            (Path.IsPathRooted(_iptables)
+                ? Path.Combine(Path.GetDirectoryName(_iptables)!, "iptables-save")
+                : "iptables-save");
         _publicInterface = configuration["Relay:PublicInterface"] ?? "";
         _tailscaleInterface = configuration["Relay:TailscaleInterface"] ?? "tailscale0";
         _allowNonTailscaleTargets = bool.TryParse(configuration["Relay:AllowNonTailscaleTargets"], out var allow) && allow;
@@ -38,6 +48,8 @@ public sealed class IptablesRelay
         await _gate.WaitAsync(ct);
         try
         {
+            // Any route mutation invalidates the previously verified ruleset.
+            _verifiedRulesetFingerprint = null;
             var forwardAnchor = await EnsureInfrastructureAsync(ct);
             await RunAsync(new[] { "-t", "nat", "-F", DnatChain }, true, ct);
             await RunAsync(new[] { "-t", "nat", "-F", SnatChain }, true, ct);
@@ -62,13 +74,65 @@ public sealed class IptablesRelay
         await _gate.WaitAsync(ct);
         try
         {
+            // Comparing one ruleset snapshot is cheaper than invoking iptables
+            // once per managed rule every 30 seconds. Any change, including UFW
+            // reloads, falls back to full verification and repair.
+            if (_verifiedRulesetFingerprint is not null)
+            {
+                var current = await CaptureRulesetFingerprintAsync(ct);
+                if (current is not null && current == _verifiedRulesetFingerprint) return;
+            }
+
+            _verifiedRulesetFingerprint = null;
             await EnsureInfrastructureAsync(ct);
             foreach (var rule in BuildRules(routes))
                 await EnsureRuleAsync(rule, ct);
+
+            // If iptables-save is unavailable, keep the original full check path.
+            _verifiedRulesetFingerprint = await CaptureRulesetFingerprintAsync(ct);
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private async Task<string?> CaptureRulesetFingerprintAsync(CancellationToken ct)
+    {
+        try
+        {
+            if (!_backendChecked)
+            {
+                // iptables-legacy and iptables-nft use separate kernel rulesets.
+                // Never trust a snapshot from a different backend.
+                _backendChecked = true;
+                var iptablesVersion = await RunToolAsync(_iptables, ["--version"], false, ct);
+                var saveVersion = await RunToolAsync(_iptablesSave, ["--version"], false, ct);
+                _backendMatches = iptablesVersion.ExitCode == 0 && saveVersion.ExitCode == 0 &&
+                    (iptablesVersion.Output.Contains("(nf_tables)", StringComparison.Ordinal) &&
+                     saveVersion.Output.Contains("(nf_tables)", StringComparison.Ordinal) ||
+                     iptablesVersion.Output.Contains("(legacy)", StringComparison.Ordinal) &&
+                     saveVersion.Output.Contains("(legacy)", StringComparison.Ordinal));
+            }
+            if (!_backendMatches) return null;
+
+            var result = await RunToolAsync(_iptablesSave, Array.Empty<string>(), false, ct);
+            if (result.ExitCode != 0) return null;
+            // iptables-save adds timestamp comments which change every run.
+            // Counters are omitted by default; keep every actual rule and chain.
+            var stable = string.Join('\n', result.Output.Split('\n', StringSplitOptions.TrimEntries)
+                .Where(line => line.Length != 0 && !line.StartsWith('#')));
+            if (!stable.Contains("*nat", StringComparison.Ordinal) ||
+                !stable.Contains("*filter", StringComparison.Ordinal))
+                return null; // Never trust an incomplete snapshot.
+            return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(stable)));
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException
+                                   or InvalidOperationException)
+        {
+            // iptables-save can be missing on custom installations. Preserve the
+            // old reconciliation behavior, not a false cached success.
+            return null;
         }
     }
 
@@ -242,11 +306,15 @@ public sealed class IptablesRelay
         return result.ExitCode == 0;
     }
 
-    private async Task<(int ExitCode, string Output)> RunAsync(IEnumerable<string> args, bool throwOnError, CancellationToken ct)
+    private Task<(int ExitCode, string Output)> RunAsync(IEnumerable<string> args, bool throwOnError, CancellationToken ct)
+        => RunToolAsync(_iptables, args, throwOnError, ct);
+
+    private static async Task<(int ExitCode, string Output)> RunToolAsync(
+        string executable, IEnumerable<string> args, bool throwOnError, CancellationToken ct)
     {
         var psi = new ProcessStartInfo
         {
-            FileName = _iptables,
+            FileName = executable,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -254,7 +322,7 @@ public sealed class IptablesRelay
         };
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Could not start {_iptables}.");
+        using var process = Process.Start(psi) ?? throw new InvalidOperationException($"Could not start {executable}.");
         var stdout = process.StandardOutput.ReadToEndAsync(ct);
         var stderr = process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
