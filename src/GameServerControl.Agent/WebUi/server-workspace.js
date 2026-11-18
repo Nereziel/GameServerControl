@@ -787,7 +787,7 @@ function serverWorkspaceRefreshTab(tab = SERVER_WORKSPACE.tab) {
 }
 window.serverWorkspaceRefreshTab = serverWorkspaceRefreshTab;
 
-async function createServerStatusConnection(onMessage) {
+async function createServerStatusConnection(onMessage, onClosed) {
   const hubPath = ACTIVE_HOST_ID==='local'||ACTIVE_HOST_ID==='all' ? '/hubs/status'
     : '/api/hosts/'+encodeURIComponent(ACTIVE_HOST_ID)+'/hubs/status';
   const negotiate = await fetch(CFG.url + hubPath + '/negotiate?negotiateVersion=1', {
@@ -808,13 +808,29 @@ async function createServerStatusConnection(onMessage) {
   const pending = new Map();
   let sequence = 0;
   let ping = null;
+  let handshakeComplete = false;
 
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('WebSocket connection timed out.')), 7000);
+    const timer = setTimeout(() => {
+      try { ws.close(); } catch { }
+      reject(new Error('WebSocket connection timed out.'));
+    }, 7000);
 
     ws.onerror = () => {
-      clearTimeout(timer);
-      reject(new Error('WebSocket connection failed.'));
+      if (!handshakeComplete) {
+        clearTimeout(timer);
+        reject(new Error('WebSocket connection failed.'));
+      }
+    };
+
+    ws.onclose = () => {
+      if (ping) { clearInterval(ping); ping=null; }
+      for (const request of pending.values()) request.reject(new Error('Connection closed.'));
+      pending.clear();
+      if (!handshakeComplete) {
+        clearTimeout(timer);
+        reject(new Error('WebSocket connection closed before handshake.'));
+      } else onClosed?.();
     };
 
     ws.onopen = () => {
@@ -827,6 +843,7 @@ async function createServerStatusConnection(onMessage) {
         try {
           const message = JSON.parse(raw);
           if (message.type == null) {
+            handshakeComplete = true;
             clearTimeout(timer);
             resolve();
             continue;
@@ -851,7 +868,7 @@ async function createServerStatusConnection(onMessage) {
   return {
     invoke(target, args = []) {
       return new Promise((resolve, reject) => {
-        if (ws.readyState !== WebSocket.OPEN) return reject(new Error('Console connection is closed.'));
+        if (ws.readyState !== WebSocket.OPEN) return reject(new Error('Status connection is closed.'));
         const invocationId = String(++sequence);
         pending.set(invocationId, { resolve, reject });
         ws.send(JSON.stringify({ type: 1, invocationId, target, arguments: args }) + '\u001e');
