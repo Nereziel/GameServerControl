@@ -344,10 +344,11 @@ async function login(){
 }
 async function logout(){
   if(isLocalBrowserOrigin()){
-    const key=localStorage.getItem(LOCAL_REMEMBER_KEY);
+    let key=null;
+    try{key=localStorage.getItem(LOCAL_REMEMBER_KEY)}catch{}
     if(key)try{await fetch('/auth/browser-session/forget',{method:'POST',cache:'no-store',
       headers:{'Content-Type':'application/json'},body:JSON.stringify({rememberKey:key})})}catch{}
-    localStorage.removeItem(LOCAL_REMEMBER_KEY);
+    try{localStorage.removeItem(LOCAL_REMEMBER_KEY)}catch{}
   }
   sessionStorage.removeItem(CFG_KEY);
   location.reload();
