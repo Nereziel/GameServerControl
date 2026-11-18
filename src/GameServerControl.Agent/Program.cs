@@ -173,6 +173,7 @@ builder.Services.AddSingleton<LogTailService>();
 
 builder.Services.AddSingleton<AuditLogger>();
 builder.Services.AddSingleton<TokenRegistry>();
+builder.Services.AddSingleton<BrowserSessionStore>();
 
 builder.Services.AddAuthentication(TokenAuthHandler.SchemeName)
     .AddScheme<TokenAuthOptions, TokenAuthHandler>(TokenAuthHandler.SchemeName, opts =>
@@ -249,7 +250,44 @@ app.UseAuthorization();
 app.UseMiddleware<AuditMiddleware>();
 app.UseMiddleware<RoleEnforcementMiddleware>();
 
+// Explicitly opt-in browser sign-in. Neither endpoint accepts a persistent
+// Agent API token in a URL; browser credentials are host-only HttpOnly cookies.
+app.MapGet("/auth/browser-session", (HttpContext ctx, BrowserSessionStore sessions, TokenRegistry registry) =>
+{
+    ctx.Response.Headers.CacheControl = "no-store";
+    if (!BrowserSessionAccess.Allowed(ctx)) return Results.NotFound();
+    var bearer = sessions.Restore(ctx.Request.Cookies[BrowserSessionStore.CookieName], registry);
+    return bearer is null ? Results.NoContent() : Results.Ok(new { token = bearer });
+}).AllowAnonymous();
+
+app.MapPost("/auth/browser-session/forget", (HttpContext ctx, BrowserSessionStore sessions) =>
+{
+    ctx.Response.Headers.CacheControl = "no-store";
+    if (!BrowserSessionAccess.Allowed(ctx)) return Results.NotFound();
+    sessions.Forget(ctx.Request.Cookies[BrowserSessionStore.CookieName]);
+    ctx.Response.Cookies.Delete(BrowserSessionStore.CookieName, new CookieOptions
+    {
+        Path = "/auth", HttpOnly = true, SameSite = SameSiteMode.Strict, Secure = ctx.Request.IsHttps
+    });
+    return Results.NoContent();
+}).AllowAnonymous();
+
 var api = app.MapGroup("/api").RequireAuthorization();
+api.MapPost("/auth/browser-session", (HttpContext ctx, BrowserSessionStore sessions, TokenRegistry registry) =>
+{
+    ctx.Response.Headers.CacheControl = "no-store";
+    if (!BrowserSessionAccess.Allowed(ctx)) return Results.NotFound();
+    var tokenId = ctx.User.FindFirst(TokenAuthHandler.TokenIdClaim)?.Value;
+    if (string.IsNullOrWhiteSpace(tokenId)) return Results.Forbid();
+    var bearer = ctx.Request.Headers.Authorization.ToString();
+    if (!bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
+    var presented = bearer["Bearer ".Length..].Trim();
+    if (registry.Lookup(presented)?.Role != TokenRole.Admin) return Results.Forbid();
+    var cookie = sessions.Remember(tokenId, presented, registry);
+    ctx.Response.Cookies.Append(BrowserSessionStore.CookieName, cookie,
+        BrowserSessionAccess.CookieOptions(ctx.Request));
+    return Results.NoContent();
+}).RequireAuthorization("admin");
 api.MapServerConfigFiles();
 api.MapOperationalEndpoints();
 api.MapManagedHosts();

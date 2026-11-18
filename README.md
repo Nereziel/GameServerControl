@@ -91,6 +91,23 @@ http://localhost:5099/
 
 The tray icon can also open the dashboard. Its right-click menu provides Agent status, Start / Stop / Restart, one contextual update action (check for updates, or install a newer release after confirmation), and tray autostart control. Service-changing actions request administrator approval when needed. Exiting the tray icon does not stop the Agent or any game server.
 
+### Open from Tray without signing in again
+
+When signing into the **local Windows** WebUI (http://localhost:5099),
+optionally select **Remember this browser on this Windows PC for 30 days**.
+The Tray icon already opens this URL: subsequent clicks automatically restore
+the authorized browser session without asking for the API token again.
+The first Admin login is still required. **Sign out** forgets this browser.
+
+The remembered browser cookie is `HttpOnly`, `SameSite=Strict`, and limited
+to the local Agent origin. The Agent stores only hashed opaque cookie credentials
+in its protected data directory and checks that the original Admin API token is
+still active, including after Agent restarts. Revoking that token also revokes
+remembered access. Browser API credentials are short-lived; the persistent
+Admin token is **never placed in a Tray/browser URL**. This feature does not
+work on the remote Tailscale/Cloudflare UI or for ReadOnly accounts.
+On shared Windows accounts, leave the checkbox unchecked.
+
 The first successful start generates and persists an API token in:
 
 ```text

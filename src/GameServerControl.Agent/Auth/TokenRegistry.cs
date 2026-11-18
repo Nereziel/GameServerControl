@@ -154,6 +154,20 @@ public sealed class TokenRegistry
         return null;
     }
 
+    // Remembered browser sessions become invalid immediately if their
+    // originating managed token is revoked.
+    public bool IsAdminCredentialHashActive(string tokenId, string credentialHash)
+    {
+        if (credentialHash.Length != 64) return false;
+        if (tokenId == "legacy")
+            return !string.IsNullOrWhiteSpace(_legacyToken) &&
+                   HashMatches(credentialHash, HashToken(_legacyToken));
+        lock (_gate)
+            return _tokens.Any(t => string.Equals(t.Id, tokenId, StringComparison.Ordinal) &&
+                                    t.Role == TokenRole.Admin &&
+                                    HashMatches(credentialHash, t.TokenHash));
+    }
+
     public IReadOnlyList<TokenMetadata> ListMetadata()
     {
         lock (_gate)

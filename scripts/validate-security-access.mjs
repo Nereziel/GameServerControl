@@ -3,6 +3,9 @@ import fs from 'node:fs';
 const program = fs.readFileSync('src/GameServerControl.Agent/Program.cs', 'utf8');
 const audit = fs.readFileSync('src/GameServerControl.Agent/Auth/AuditLogger.cs', 'utf8');
 const roles = fs.readFileSync('src/GameServerControl.Agent/Auth/RoleEnforcementMiddleware.cs', 'utf8');
+const browserSession = fs.readFileSync('src/GameServerControl.Agent/Auth/BrowserSessionStore.cs', 'utf8');
+const localWebUi = fs.readFileSync('src/GameServerControl.Agent/WebUi/core.js', 'utf8');
+const traySource = fs.readFileSync('src/GameServerControl.Tray/Program.cs', 'utf8');
 const hub = fs.readFileSync('src/GameServerControl.Agent/Hubs/StatusHub.cs', 'utf8');
 const example = fs.readFileSync('src/GameServerControl.Agent/appsettings.json.example', 'utf8');
 const agentSurface = program + '\n' + audit;
@@ -50,3 +53,16 @@ requireToken(example, '"CloudGateway"', 'Example config must document trusted cl
 requireToken(example, '"TrustedTokenIds"', 'Example config must document trusted cloud gateway token ids');
 
 console.log('Security/access contract OK.');
+
+for (const [token, label] of [
+  ['HttpOnly = true', 'remember cookies must be HttpOnly'],
+  ['SameSite = SameSiteMode.Strict', 'remember cookies must be same-site'],
+  ['SecretFilePermissions.WriteAllTextAtomic', 'browser session hashes need restricted storage'],
+  ['IsAdminCredentialHashActive', 'browser sessions must follow origin token revocation'],
+  ['System.Net.IPAddress.IsLoopback', 'browser session endpoints must restrict to loopback'],
+  ['OperatingSystem.IsWindows()', 'browser session endpoints must be Windows-only']
+]) requireToken(browserSession, token, label);
+requireToken(localWebUi, "if(await restoreBrowserLogin())", 'Web UI must restore a previously authorized local browser session');
+requireToken(localWebUi, "/auth/browser-session/forget", 'Logout must revoke remembered local browser sessions');
+rejectToken(traySource, '?token=', 'Tray must never inject the full Agent API token into a browser URL');
+console.log('Local browser session security contract OK.');

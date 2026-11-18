@@ -324,6 +324,10 @@ async function login(){
   try{
     await api('/api/health',{signal:controller.signal});
     clearTimeout(timeout);
+    if(isLocalBrowserOrigin()&&$('#loginRememberBrowser')?.checked){
+      try{await api('/api/auth/browser-session',{method:'POST'})}
+      catch(e){toast('Could not remember this browser: '+e.message,'err')}
+    }
     sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
     await boot();
     if(new URLSearchParams(location.search).has("manageTokens"))openTokens();
@@ -335,7 +339,13 @@ async function login(){
     if(button){button.disabled=false;button.textContent='Connect'}
   }
 }
-function logout(){sessionStorage.removeItem(CFG_KEY);location.reload()}
+async function logout(){
+  if(isLocalBrowserOrigin()){
+    try{await fetch('/auth/browser-session/forget',{method:'POST',credentials:'same-origin',cache:'no-store'})}catch{}
+  }
+  sessionStorage.removeItem(CFG_KEY);
+  location.reload();
+}
 
 async function boot(){
   $('#login').classList.add('hidden');$('#app').classList.remove('hidden');$('#agentLabel').textContent='· '+CFG.url;
@@ -350,13 +360,36 @@ async function boot(){
   setInterval(()=>checkForUpdate(false),30*60*1000);
 }
 
+function isLocalBrowserOrigin(){
+  return ['localhost','127.0.0.1','[::1]','::1'].includes(location.hostname.toLowerCase());
+}
+
+async function restoreBrowserLogin(){
+  if(!isLocalBrowserOrigin()||window.GSC_CLOUD_MODE)return false;
+  try{
+    const response=await fetch('/auth/browser-session',{credentials:'same-origin',cache:'no-store'});
+    if(!response.ok)return false;
+    if(response.status===204)return false;
+    const result=await response.json();
+    if(typeof result.token!=='string'||!result.token)return false;
+    CFG={url:location.origin,token:result.token};
+    sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
+    await api('/api/health');
+    await boot();
+    return true;
+  }catch{return false}
+}
+
 async function init(){
   try{localStorage.removeItem(CFG_KEY)}catch{}
+  const rememberField=$('#rememberBrowserField');
+  if(rememberField)rememberField.classList.toggle('hidden',!isLocalBrowserOrigin()||!!window.GSC_CLOUD_MODE);
   const params=new URLSearchParams(location.search);
   const token=params.get('token'),url=params.get('url');
   if(token){CFG={url:(url||location.origin).replace(/\/+$/,''),token};sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));history.replaceState({},'',location.pathname+location.hash)}
   else{try{CFG=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')||{url:'',token:''}}catch{CFG={url:'',token:''}}}
   if(CFG.url&&CFG.token){try{await api('/api/health');await boot();if(params.has("manageTokens"))openTokens();return}catch{sessionStorage.removeItem(CFG_KEY)}}
+  if(await restoreBrowserLogin()){if(params.has("manageTokens"))openTokens();return}
   $('#login').classList.remove('hidden');
   $('#loginUrl').value=location.origin;
 }
