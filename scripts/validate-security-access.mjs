@@ -69,7 +69,7 @@ requireToken(localWebUi, "indexedDB.open('gsc-local-browser-v1'", 'Private signi
 requireToken(localWebUi, "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false", 'Persisted browser private key must be non-exportable');
 requireToken(localWebUi, "crypto.subtle.sign(", 'The browser must sign a one-time challenge');
 requireToken(localWebUi, "/auth/browser-key/redeem", 'Restoration must verify a signed challenge');
-requireToken(localWebUi, "/auth/browser-session/forget", 'Logout must revoke remembered local browser sessions');
+requireToken(localWebUi, "/auth/browser-key/forget", 'Logout must revoke remembered local browser sessions');
 rejectToken(traySource, '?token=', 'Tray must never inject the full Agent API token into a browser URL');
 rejectToken(localWebUi, 'localStorage.setItem', 'Persistent browser bearer credentials must remain forbidden');
 rejectToken(browserSession, 'Response.Cookies', 'No cookie-based localhost sessions shared between ports');
