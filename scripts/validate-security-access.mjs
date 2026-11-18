@@ -55,17 +55,22 @@ requireToken(example, '"TrustedTokenIds"', 'Example config must document trusted
 console.log('Security/access contract OK.');
 
 for (const [token, label] of [
-  ['LocalBrowserKey', 'remembered browser credentials must use a dedicated request body'],
-  ['Hash(rememberKey)', 'remembered browser keys must be hashed before persistence'],
+  ['ImportSubjectPublicKeyInfo', 'remembered browser keys must be checked as public ECDSA keys'],
+  ['DSASignatureFormat.IeeeP1363FixedFieldConcatenation', 'challenge signatures must use a strict ECDSA format'],
+  ['_challenges.Remove(id, out var expected)', 'one-time challenge must be consumed atomically'],
+  ['Hash(originalCredential)', 'originating Admin token must only be stored by hash'],
   ['SecretFilePermissions.WriteAllTextAtomic', 'browser session hashes need restricted storage'],
   ['IsAdminCredentialHashActive', 'browser sessions must follow origin token revocation'],
   ['System.Net.IPAddress.IsLoopback', 'browser session endpoints must restrict to loopback'],
   ['OperatingSystem.IsWindows()', 'browser session endpoints must be Windows-only']
 ]) requireToken(browserSession, token, label);
 requireToken(localWebUi, "if(await restoreBrowserLogin())", 'Web UI must restore a previously authorized local browser session');
-requireToken(localWebUi, "localStorage.setItem(LOCAL_REMEMBER_KEY", 'Remembered keys must be scoped to the WebUI origin and port');
-requireToken(localWebUi, "/auth/browser-session/restore", 'Restoration must require a POST body, never a URL credential');
+requireToken(localWebUi, "indexedDB.open('gsc-local-browser-v1'", 'Private signing key must be stored by browser origin and port');
+requireToken(localWebUi, "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false", 'Persisted browser private key must be non-exportable');
+requireToken(localWebUi, "crypto.subtle.sign(", 'The browser must sign a one-time challenge');
+requireToken(localWebUi, "/auth/browser-key/redeem", 'Restoration must verify a signed challenge');
 requireToken(localWebUi, "/auth/browser-session/forget", 'Logout must revoke remembered local browser sessions');
 rejectToken(traySource, '?token=', 'Tray must never inject the full Agent API token into a browser URL');
+rejectToken(localWebUi, 'localStorage.setItem', 'Persistent browser bearer credentials must remain forbidden');
 rejectToken(browserSession, 'Response.Cookies', 'No cookie-based localhost sessions shared between ports');
 console.log('Local browser session security contract OK.');

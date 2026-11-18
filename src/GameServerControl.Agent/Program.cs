@@ -250,28 +250,38 @@ app.UseAuthorization();
 app.UseMiddleware<AuditMiddleware>();
 app.UseMiddleware<RoleEnforcementMiddleware>();
 
-// Opt-in browser credentials are opaque, origin-and-port-scoped browser
-// storage keys; neither the persistent Agent API token nor the key enters URLs.
-app.MapPost("/auth/browser-session/restore", (HttpContext ctx, LocalBrowserKey input,
+// Origin-scoped browser WebCrypto keys, not persistent bearer credentials.
+// All challenges are in-memory, one-time, and expire after thirty seconds.
+app.MapPost("/auth/browser-key/challenge", (HttpContext ctx, LocalBrowserIdentity input,
     BrowserSessionStore sessions, TokenRegistry registry) =>
 {
     ctx.Response.Headers.CacheControl = "no-store";
     if (!BrowserSessionAccess.Allowed(ctx)) return Results.NotFound();
-    var bearer = sessions.Restore(input.RememberKey, registry);
-    return bearer is null ? Results.NoContent() : Results.Ok(new { token = bearer });
+    var challenge = sessions.CreateChallenge(input.Id, registry);
+    return challenge is null ? Results.NoContent() : Results.Ok(new { challenge });
 }).AllowAnonymous();
 
-app.MapPost("/auth/browser-session/forget", (HttpContext ctx, LocalBrowserKey input,
+app.MapPost("/auth/browser-key/redeem", (HttpContext ctx, LocalBrowserProof proof,
+    BrowserSessionStore sessions, TokenRegistry registry) =>
+{
+    ctx.Response.Headers.CacheControl = "no-store";
+    if (!BrowserSessionAccess.Allowed(ctx)) return Results.NotFound();
+    var bearer = sessions.Redeem(proof.Id, proof.Challenge, proof.Signature, registry);
+    return bearer is null ? Results.Unauthorized() : Results.Ok(new { token = bearer });
+}).AllowAnonymous();
+
+app.MapPost("/auth/browser-key/forget", (HttpContext ctx, LocalBrowserIdentity input,
     BrowserSessionStore sessions) =>
 {
     ctx.Response.Headers.CacheControl = "no-store";
     if (!BrowserSessionAccess.Allowed(ctx)) return Results.NotFound();
-    sessions.Forget(input.RememberKey);
+    sessions.Forget(input.Id);
     return Results.NoContent();
 }).AllowAnonymous();
 
 var api = app.MapGroup("/api").RequireAuthorization();
-api.MapPost("/auth/browser-session", (HttpContext ctx, BrowserSessionStore sessions, TokenRegistry registry) =>
+api.MapPost("/auth/browser-key", (HttpContext ctx, LocalBrowserRegistration input,
+    BrowserSessionStore sessions, TokenRegistry registry) =>
 {
     ctx.Response.Headers.CacheControl = "no-store";
     if (!BrowserSessionAccess.Allowed(ctx)) return Results.NotFound();
@@ -281,8 +291,16 @@ api.MapPost("/auth/browser-session", (HttpContext ctx, BrowserSessionStore sessi
     if (!bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return Results.Forbid();
     var presented = bearer["Bearer ".Length..].Trim();
     if (registry.Lookup(presented)?.Role != TokenRole.Admin) return Results.Forbid();
-    var rememberKey = sessions.Remember(tokenId, presented, registry);
-    return Results.Ok(new { rememberKey });
+    try
+    {
+        var id = sessions.Register(tokenId, presented, input.PublicKey ?? "", registry);
+        return Results.Ok(new { id });
+    }
+    catch (Exception ex) when (ex is ArgumentException or FormatException or
+                                System.Security.Cryptography.CryptographicException)
+    {
+        return Results.BadRequest(new { error = "Invalid browser signing key." });
+    }
 }).RequireAuthorization("admin");
 api.MapServerConfigFiles();
 api.MapOperationalEndpoints();

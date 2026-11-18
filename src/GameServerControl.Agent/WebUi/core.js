@@ -59,7 +59,7 @@ let SERVERS=[],STATUS={},CURRENT_VIEW='servers',JOB_CACHE={},MOD_CTX=null,MOD_RE
 let PROFILES=[],GAMES=[],UPDATE_STATUS=null;
 let HOST_CAPABILITIES={schemaVersion:0,features:[]};
 const CFG_KEY='gsc.connection.v2';
-const LOCAL_REMEMBER_KEY='gsc.remember.local.v1';
+
 const HOST_KEY='gsc.activeHost.v1';
 let ACTIVE_HOST_ID='local',HOST_DIRECTORY=[],HOST_OVERVIEW=[],HOST_SWITCH_EPOCH=0,LAST_HOST_OVERVIEW=0;
 
@@ -311,6 +311,55 @@ async function loadProfiles(){
   if(!GAMES.length)throw new Error('Agent returned no installable game profiles.');
 }
 
+
+// A non-exportable private key is persisted by the browser's origin-scoped
+// IndexedDB. No reusable API bearer or remember token is stored persistently.
+function openLocalBrowserKeyDb(){
+  return new Promise((resolve,reject)=>{
+    if(!window.indexedDB||!crypto?.subtle)return reject(new Error('Secure browser storage unavailable.'));
+    const req=indexedDB.open('gsc-local-browser-v1',1);
+    req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('keys'))req.result.createObjectStore('keys')};
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error||new Error('Could not access browser key storage.'));
+  });
+}
+async function localBrowserKeyRead(){
+  const db=await openLocalBrowserKeyDb();
+  try{return await new Promise((resolve,reject)=>{
+    const request=db.transaction('keys','readonly').objectStore('keys').get('admin');
+    request.onsuccess=()=>resolve(request.result||null);
+    request.onerror=()=>reject(request.error);
+  })}finally{db.close()}
+}
+async function localBrowserKeyWrite(value){
+  const db=await openLocalBrowserKeyDb();
+  try{await new Promise((resolve,reject)=>{
+    const tx=db.transaction('keys','readwrite');
+    tx.objectStore('keys').put(value,'admin');
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error||new Error('Browser key write failed.'));
+    tx.onabort=()=>reject(tx.error||new Error('Browser key write aborted.'));
+  })}finally{db.close()}
+}
+async function localBrowserKeyDelete(){
+  const db=await openLocalBrowserKeyDb();
+  try{await new Promise((resolve,reject)=>{
+    const tx=db.transaction('keys','readwrite');
+    tx.objectStore('keys').delete('admin');
+    tx.oncomplete=()=>resolve();
+    tx.onerror=()=>reject(tx.error);
+    tx.onabort=()=>reject(tx.error);
+  })}finally{db.close()}
+}
+const localBrowserBase64=buffer=>btoa(String.fromCharCode(...new Uint8Array(buffer)));
+async function rememberLocalBrowser(){
+  const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
+  const publicKey=localBrowserBase64(await crypto.subtle.exportKey('spki',pair.publicKey));
+  const registered=await api('/api/auth/browser-key',{method:'POST',body:JSON.stringify({publicKey})});
+  if(!registered?.id)throw new Error('Agent did not accept the browser signing key.');
+  await localBrowserKeyWrite({id:registered.id,privateKey:pair.privateKey});
+}
+
 let LOGIN_PENDING=false;
 async function login(){
   if(LOGIN_PENDING)return;
@@ -326,10 +375,8 @@ async function login(){
     await api('/api/health',{signal:controller.signal});
     clearTimeout(timeout);
     if(isLocalBrowserOrigin()&&$('#loginRememberBrowser')?.checked){
-      try{
-        const remember=await api('/api/auth/browser-session',{method:'POST'});
-        if(remember?.rememberKey)localStorage.setItem(LOCAL_REMEMBER_KEY,remember.rememberKey);
-      }catch(e){toast('Could not remember this browser: '+e.message,'err')}
+      try{await rememberLocalBrowser()}
+      catch(e){toast('Could not remember this browser: '+e.message,'err')}
     }
     sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
     await boot();
@@ -344,11 +391,12 @@ async function login(){
 }
 async function logout(){
   if(isLocalBrowserOrigin()){
-    let key=null;
-    try{key=localStorage.getItem(LOCAL_REMEMBER_KEY)}catch{}
-    if(key)try{await fetch('/auth/browser-session/forget',{method:'POST',cache:'no-store',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({rememberKey:key})})}catch{}
-    try{localStorage.removeItem(LOCAL_REMEMBER_KEY)}catch{}
+    try{
+      const saved=await localBrowserKeyRead();
+      if(saved?.id)await fetch('/auth/browser-key/forget',{method:'POST',cache:'no-store',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({id:saved.id})});
+    }catch{}
+    try{await localBrowserKeyDelete()}catch{}
   }
   sessionStorage.removeItem(CFG_KEY);
   location.reload();
@@ -374,13 +422,22 @@ function isLocalBrowserOrigin(){
 async function restoreBrowserLogin(){
   if(!isLocalBrowserOrigin()||window.GSC_CLOUD_MODE)return false;
   try{
-    const key=localStorage.getItem(LOCAL_REMEMBER_KEY);
-    if(!key)return false;
-    const response=await fetch('/auth/browser-session/restore',{method:'POST',cache:'no-store',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({rememberKey:key})});
-    if(!response.ok)return false;
-    if(response.status===204){localStorage.removeItem(LOCAL_REMEMBER_KEY);return false}
-    const result=await response.json();
+    const stored=await localBrowserKeyRead();
+    if(!stored?.id||!stored.privateKey)return false;
+    const headers={'Content-Type':'application/json'};
+    const challengeResponse=await fetch('/auth/browser-key/challenge',{method:'POST',
+      cache:'no-store',headers,body:JSON.stringify({id:stored.id})});
+    if(challengeResponse.status===204){await localBrowserKeyDelete();return false}
+    if(!challengeResponse.ok)return false;
+    const {challenge}=await challengeResponse.json();
+    if(typeof challenge!=='string')return false;
+    const payload=new TextEncoder().encode('gsc-browser-v1:'+stored.id+':'+challenge);
+    const signature=localBrowserBase64(await crypto.subtle.sign(
+      {name:'ECDSA',hash:'SHA-256'},stored.privateKey,payload));
+    const exchange=await fetch('/auth/browser-key/redeem',{method:'POST',cache:'no-store',
+      headers,body:JSON.stringify({id:stored.id,challenge,signature})});
+    if(!exchange.ok)return false;
+    const result=await exchange.json();
     if(typeof result.token!=='string'||!result.token)return false;
     CFG={url:location.origin,token:result.token};
     sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));

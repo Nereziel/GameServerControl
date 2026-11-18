@@ -99,15 +99,17 @@ The Tray icon already opens this URL: subsequent clicks automatically restore
 the authorized browser session without asking for the API token again.
 The first Admin login is still required. **Sign out** forgets this browser.
 
-Only an opaque, revocable 30-day remember key is saved in the browser's
-origin-and-port-scoped local storage; the persistent Admin API token is not
-stored there. The Agent stores **only its hash** under protected state storage,
-verifies that the exact original Admin credential is still active, and issues
-short-lived session credentials. Revoking the original token or signing out
-revokes remembered access. Neither the Agent API token nor the remember key
-is placed in any URL. This feature is only for direct localhost access,
-not remote Tailscale/Cloudflare UI or ReadOnly accounts. Use the same browser
-profile and leave the checkbox off on shared Windows accounts.
+The browser creates a **non-exportable ECDSA P-256 private key** and keeps it
+in its origin-and-port-scoped IndexedDB. The Agent stores **only the public
+key and a hash of the original Admin credential** in protected state storage.
+Each subsequent opening requires a signed, single-use 30-second challenge,
+then receives an eight-hour browser API credential. Remembered browser
+registration expires after 30 days. Revoking the original Admin token or
+signing out revokes remembered access. No permanent bearer token, refresh
+token or remember cookie is stored in localStorage or placed in any URL.
+The feature works only on direct localhost, not Tailscale/Cloudflare or
+ReadOnly access. Use the same browser profile and leave the checkbox off
+on shared Windows accounts.
 
 The first successful start generates and persists an API token in:
 
