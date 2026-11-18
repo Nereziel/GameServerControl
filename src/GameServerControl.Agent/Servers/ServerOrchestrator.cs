@@ -180,8 +180,17 @@ public sealed class ServerOrchestrator
         catch { return null; }
     }
 
+    private readonly ConcurrentDictionary<string, ServerStatus> _lastBroadcastStatus = new(StringComparer.OrdinalIgnoreCase);
+
     private async Task BroadcastAsync(ServerStatus s)
-        => await _hub.Clients.All.SendAsync("statusChanged", s);
+    {
+        // For an unchanged server (especially one stopped for hours), avoid
+        // broadcasting an identical status on every five-second poll.
+        if (_lastBroadcastStatus.TryGetValue(s.Id, out var previous) &&
+            !ServerStatusChangeDetector.HasChanged(previous, s)) return;
+        _lastBroadcastStatus[s.Id] = s;
+        await _hub.Clients.All.SendAsync("statusChanged", s);
+    }
 
     private async Task LogAsync(string id, string source, string text)
     {

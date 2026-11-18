@@ -778,6 +778,8 @@ _ = Task.Run(async () =>
     var discord = app.Services.GetRequiredService<DiscordNotifier>();
     var alertPolicy = app.Services.GetRequiredService<ServerAlertPolicy>();
     var statusCycle = 0;
+    var pollPolicy = new ServerStatusPollPolicy();
+    var tracker = app.Services.GetRequiredService<StatusTracker>();
     while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
     {
         // Sample live server CPU/RAM every five seconds; reconcile public Relay
@@ -795,7 +797,14 @@ _ = Task.Run(async () =>
         {
             try
             {
-                var status = await orch.RefreshStatusAsync(s.Id, app.Lifetime.ApplicationStopping);
+                // Running/unknown servers are always checked every five seconds.
+                // A known stopped server is rechecked every 15 seconds; explicit
+                // start/stop actions still refresh status immediately.
+                var previous = tracker.Get(s.Id);
+                var pollNow = pollPolicy.ShouldPoll(s.Id, previous.ProcessState, DateTimeOffset.UtcNow);
+                var status = pollNow
+                    ? await orch.RefreshStatusAsync(s.Id, app.Lifetime.ApplicationStopping)
+                    : previous;
                 if (syncRelay)
                 {
                     var relayActive = status.ProcessState == ProcessState.Running && relay.SettingsFor(s.Id).Enabled;
