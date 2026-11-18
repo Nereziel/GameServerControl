@@ -57,8 +57,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly ToolStripMenuItem _startItem;
     private readonly ToolStripMenuItem _stopItem;
     private readonly ToolStripMenuItem _restartItem;
-    private readonly ToolStripMenuItem _checkUpdateItem;
-    private readonly ToolStripMenuItem _updateItem;
+    private readonly ToolStripMenuItem _updateActionItem;
     private readonly ToolStripMenuItem _autostartItem;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly HttpClient _http;
@@ -67,6 +66,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private bool _initialUpdateChecked;
     private bool _checkingForUpdates;
     private bool _startingUpdate;
+    private bool _updateAvailable;
 
     public TrayApplicationContext(string adminUrl)
     {
@@ -92,8 +92,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _startItem = new ToolStripMenuItem("Start Agent", null, (_, _) => RunServiceAction("start"));
         _stopItem = new ToolStripMenuItem("Stop Agent", null, (_, _) => RunServiceAction("stop"));
         _restartItem = new ToolStripMenuItem("Restart Agent", null, (_, _) => RunServiceAction("restart"));
-        _checkUpdateItem = new ToolStripMenuItem("Check for updates", null, async (_, _) => await CheckForUpdatesAsync(showNoUpdate: true));
-        _updateItem = new ToolStripMenuItem("Update GameServerControl…", null, async (_, _) => await StartUpdateAsync()) { Enabled = false };
+        _updateActionItem = new ToolStripMenuItem("Check for updates", null, async (_, _) => await RunUpdateMenuActionAsync());
         _autostartItem = new ToolStripMenuItem("Start tray with Windows") { CheckOnClick = true };
         _autostartItem.Checked = IsAutostartEnabled();
         _autostartItem.CheckedChanged += (_, _) => SetAutostart(_autostartItem.Checked);
@@ -111,8 +110,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             _stopItem,
             _restartItem,
             new ToolStripSeparator(),
-            _checkUpdateItem,
-            _updateItem,
+            _updateActionItem,
             new ToolStripSeparator(),
             _autostartItem,
             exitItem
@@ -344,6 +342,16 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return (tag, parsed);
     }
 
+    // The single tray action checks when no update is known and installs only
+    // when an available release was already discovered. Installation still
+    // resolves the release again and asks for consent.
+    private async Task RunUpdateMenuActionAsync()
+    {
+        if (_checkingForUpdates || _startingUpdate) return;
+        if (_updateAvailable) await StartUpdateAsync();
+        else await CheckForUpdatesAsync(showNoUpdate: true);
+    }
+
     private async Task StartUpdateAsync()
     {
         if (_startingUpdate || _checkingForUpdates) return;
@@ -354,7 +362,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         _startingUpdate = true;
-        _updateItem.Enabled = false;
+        _updateActionItem.Enabled = false;
         var started = false;
         try
         {
@@ -364,7 +372,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
             var installed = ReadInstalledAgentVersion(_installRoot, out var currentText);
             if (latest <= installed)
             {
-                _updateItem.Text = "GameServerControl is up to date";
+                _updateAvailable = false;
+                _updateActionItem.Text = "Check for updates";
                 ShowBalloon("No update needed", $"Installed Agent {currentText}; latest release {tag}.", ToolTipIcon.Info);
                 return;
             }
@@ -410,7 +419,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         finally
         {
             _startingUpdate = false;
-            if (!started) _updateItem.Enabled = true;
+            if (!started) _updateActionItem.Enabled = true;
         }
     }
 
@@ -418,14 +427,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         if (_checkingForUpdates || _startingUpdate) return;
         _checkingForUpdates = true;
-        _checkUpdateItem.Enabled = false;
+        _updateActionItem.Enabled = false;
         try
         {
             var (tag, latest) = await FetchLatestReleaseAsync();
             var installed = ReadInstalledAgentVersion(_installRoot, out var currentText);
             var available = latest > installed;
-            _updateItem.Text = available ? $"Update Agent to {tag}…" : "GameServerControl is up to date";
-            _updateItem.Enabled = available;
+            _updateAvailable = available;
+            _updateActionItem.Text = available ? $"Update Agent to {tag}…" : "Check for updates";
             if (available)
                 ShowBalloon("GameServerControl update available", $"Agent {currentText} → {tag}", ToolTipIcon.Info);
             else if (showNoUpdate)
@@ -433,14 +442,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
         catch (Exception ex)
         {
-            _updateItem.Enabled = false;
+            _updateAvailable = false;
+            _updateActionItem.Text = "Check for updates";
             if (showNoUpdate)
                 ShowBalloon("Update check failed", ex.Message, ToolTipIcon.Warning);
         }
         finally
         {
             _checkingForUpdates = false;
-            _checkUpdateItem.Enabled = true;
+            _updateActionItem.Enabled = true;
         }
     }
 
