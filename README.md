@@ -89,7 +89,7 @@ After installation open:
 http://localhost:5099/
 ```
 
-The tray icon can also open the dashboard. Its right-click menu provides Agent status, Start / Stop / Restart, update check, GameServerControl update and tray autostart control. Service-changing actions request administrator approval when needed. Exiting the tray icon does not stop the Agent or any game server.
+The tray icon can also open the dashboard. Its right-click menu provides Agent status, Start / Stop / Restart, one contextual update action (check for updates, or install a newer release after confirmation), and tray autostart control. Service-changing actions request administrator approval when needed. Exiting the tray icon does not stop the Agent or any game server.
 
 The first successful start generates and persists an API token in:
 
