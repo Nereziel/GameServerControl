@@ -1,4 +1,5 @@
 using GameServerControl.Agent.Notifications;
+using GameServerControl.Agent.Networking;
 using GameServerControl.Agent.Rcon;
 using GameServerControl.Shared;
 
@@ -53,7 +54,30 @@ public static class OperationalEndpoints
             });
         });
 
-        // Diagnostics are read-only and hold only a bounded in-memory event history.
+        // This is a passive local socket snapshot and a health request to the configured
+        // Relay API. It never connects to game ports or probes public addresses.
+        api.MapGet("/servers/{id}/network/diagnostics", async (
+            string id, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, CancellationToken ct) =>
+        {
+            var def = reg.Get(id);
+            if (def is null) return Results.NotFound();
+            var sockets = ServerNetworkDiagnostics.Check(def);
+            var relayStatus = await relay.GetStatusAsync(id, ct);
+            return Results.Ok(new
+            {
+                processState = tracker.Get(id).ProcessState,
+                sockets,
+                relay = new
+                {
+                    relayStatus.Configured,
+                    relayStatus.Enabled,
+                    relayStatus.Reachable
+                },
+                note = "Socket checks are passive. Firewall, public forwarding and game handshake are not verified."
+            });
+        });
+
+        // Only bounded generic event summaries are persisted; operation state is session-only.
         api.MapGet("/servers/{id}/diagnostics", (string id, ServerRegistry reg,
             StatusTracker tracker, ServerDiagnostics diagnostics) =>
         {
@@ -61,7 +85,7 @@ public static class OperationalEndpoints
             return Results.Ok(new {
                 status = tracker.Get(id),
                 diagnostics = diagnostics.Snapshot(id),
-                note = "Event history is kept in memory and clears when the Agent restarts."
+                note = "Recent generic events survive an Agent restart. In-progress operation state and detailed logs are session-only."
             });
         });
 

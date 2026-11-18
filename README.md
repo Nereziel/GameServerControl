@@ -165,6 +165,30 @@ The Web UI is the primary control surface. It supports:
 
 The Web UI reads the current authenticated identity from `/api/auth/me`. A `ReadOnly` token can inspect status, configuration, backups and supported live output, but mutation controls and interactive commands are disabled. The Agent remains the authorization authority even if a browser control is missed.
 
+## Network diagnostics and operational alerts
+
+On a game's **Settings > Network** page, select **Run diagnostics** to inspect
+configured TCP/UDP listening sockets on the local Agent host and query the
+configured VPS Relay API health endpoint. This is a passive host-side check:
+it does **not** verify Windows Firewall acceptance, a public forwarding rule,
+game-protocol readiness or client connectivity. For Hyper-V servers, guest
+socket inspection is not available from the host Agent.
+
+Existing per-server Discord webhook notifications now also warn when an enabled
+public Relay fails two consecutive health/sync cycles (roughly one minute) or
+when a running game's host volume drops to **5 GiB** free. Alerts are
+deduplicated until recovery. Disk alerts reset only after free space reaches
+**8 GiB**. No automatic server restart is triggered. No additional webhook
+configuration is needed; the existing "only failures and unexpected stops"
+setting still applies.
+
+The most recent **60 generic operational events per server** survive Agent
+restarts under `Agent:DataDir/diagnostics` (or the Agent content directory
+when `Agent:DataDir` is not set). Diagnostic files use hashed server IDs and
+never contain webhook URLs, tokens, passwords, game logs or command output.
+In-progress operation state remains session-only. Historical CPU/RAM samples
+are unchanged and remain in memory.
+
 ## Optional off-machine backup copies
 
 GameServerControl supports an **opt-in, integrity-verified** backup mirror to an

@@ -96,7 +96,16 @@ builder.Services.AddSingleton<ManagedHostGateway>();
 builder.Services.AddSingleton<ServerStore>();
 builder.Services.AddSingleton<PublicRelayManager>();
 builder.Services.AddSingleton<StatusTracker>();
-builder.Services.AddSingleton<ServerDiagnostics>();
+builder.Services.AddSingleton<ServerDiagnostics>(sp =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var env = sp.GetRequiredService<IHostEnvironment>();
+    var dataRoot = cfg["Agent:DataDir"] ?? env.ContentRootPath;
+    if (!Path.IsPathRooted(dataRoot)) dataRoot = Path.Combine(env.ContentRootPath, dataRoot);
+    return new ServerDiagnostics(Path.Combine(dataRoot, "diagnostics"),
+        sp.GetRequiredService<ILogger<ServerDiagnostics>>());
+});
+builder.Services.AddSingleton<ServerAlertPolicy>();
 builder.Services.AddSingleton<ServerOrchestrator>();
 builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
@@ -765,21 +774,47 @@ _ = Task.Run(async () =>
     var reg = app.Services.GetRequiredService<ServerRegistry>();
     var relay = app.Services.GetRequiredService<PublicRelayManager>();
     var log = app.Services.GetRequiredService<ILogger<Program>>();
+    var diagnostics = app.Services.GetRequiredService<ServerDiagnostics>();
+    var discord = app.Services.GetRequiredService<DiscordNotifier>();
+    var alertPolicy = app.Services.GetRequiredService<ServerAlertPolicy>();
     var statusCycle = 0;
     while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
     {
         // Sample live server CPU/RAM every five seconds; reconcile public Relay
         // rules on the original ~30-second cadence to avoid unnecessary API calls.
         var syncRelay = statusCycle++ % 6 == 0;
-        foreach (var s in reg.All)
+        var checkDisk = statusCycle % 12 == 1;
+        var servers = reg.All;
+        bool? relayReachable = null;
+        if (syncRelay && servers.Any(s => relay.SettingsFor(s.Id).Enabled))
+        {
+            try { relayReachable = (await relay.GetGlobalStatusAsync(app.Lifetime.ApplicationStopping)).Reachable; }
+            catch (Exception ex) { relayReachable = false; log.LogDebug(ex, "Public relay health check failed"); }
+        }
+        foreach (var s in servers)
         {
             try
             {
                 var status = await orch.RefreshStatusAsync(s.Id, app.Lifetime.ApplicationStopping);
                 if (syncRelay)
                 {
+                    var relayActive = status.ProcessState == ProcessState.Running && relay.SettingsFor(s.Id).Enabled;
+                    var synced = true;
                     try { await relay.EnsureForServerAsync(s, status.ProcessState == ProcessState.Running, app.Lifetime.ApplicationStopping); }
-                    catch (Exception ex) { log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
+                    catch (Exception ex) { synced = false; log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
+                    if (alertPolicy.ReportRelay(s.Id, relayActive, synced && (!relayActive || relayReachable == true)))
+                    {
+                        diagnostics.Record(s.Id, "RelayUnavailable", "Error", "Public VPS Relay could not be reached or synchronized.");
+                        _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Public VPS Relay unavailable",
+                            "The Agent cannot reach or synchronize the public Relay. Check Server Network settings.");
+                    }
+                }
+                if (checkDisk && status.ProcessState == ProcessState.Running &&
+                    alertPolicy.ReportFreeDisk(s.Id, ServerAlertPolicy.AvailableDiskBytes(s.GuestWorkingDir)))
+                {
+                    diagnostics.Record(s.Id, "LowDisk", "Error", "Available space on the game server volume is below 5 GiB.");
+                    _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Low game server disk space",
+                        "Less than 5 GiB is available on the game server volume. Check storage before the next save or backup.");
                 }
             }
             catch (OperationCanceledException) { break; }
