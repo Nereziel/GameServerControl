@@ -1042,7 +1042,38 @@ renderServerNetwork = function (def, body) {
     : '<div class="sw-empty">This profile has no curated network ports yet.</div>';
 
   body.innerHTML = `<div class="sw-toolbar"><div><b>Network</b><div class="tiny muted">Game profile ports, collision reservations and firewall behavior.</div></div></div><div class="sw-metrics"><div class="sw-metric"><span>Profile</span><b>${esc(profile?.label || 'Custom')}</b></div><div class="sw-metric"><span>Reservations</span><b>${ports.length}</b></div><div class="sw-metric"><span>Game ports</span><b>${portCount}</b></div><div class="sw-metric"><span>Profile defaults</span><b>${profileCount}</b></div></div>${firewallInfo}${rconInfo}<div class="sw-section"><h3>Effective game ports</h3><div class="tiny muted" style="margin-bottom:10px">These reservations prevent conflicting BareMetal servers on the same Agent and tell you what to allow/forward. Hyper-V guests have independent network stacks.</div>${portRows}</div><details class="advanced"><summary>Advanced port override</summary><div class="advanced-body"><div class="field"><label>One port or range per line</label><textarea id="swNetworkPorts" class="mono" style="min-height:180px">${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: UDP 2456-2457 Game or TCP 7777 Game/API. Keep this aligned with the actual game configuration.</div></div><div class="sw-toolbar">${profilePorts.length ? `<button class="btn" ${uiAction('serverWorkspaceResetNetwork',[def.id])}>Reset to ${esc(profile.label)} defaults</button>` : ''}<div class="spacer"></div><button class="btn primary" ${uiAction('serverWorkspaceSaveNetwork',[def.id])}>Save override</button></div></div></details>`;
+  body.insertAdjacentHTML('beforeend', `<div class="sw-section"><div class="sw-toolbar"><div><h3>Network diagnostics</h3><div class="tiny muted">Passive local socket check and configured Relay API health. No public game-port scan.</div></div><div class="spacer"></div><button class="btn" type="button" ${uiAction('serverWorkspaceRunNetworkDiagnostics',[def.id])}>Run diagnostics</button></div><div id="swNetworkDiagnosticsResult" class="tiny muted">Run a check to inspect local listening ports and Relay connectivity.</div></div>`);
 };
+
+async function serverWorkspaceRunNetworkDiagnostics(id) {
+  const root = $('#swNetworkDiagnosticsResult');
+  if (!root) return;
+  root.textContent = 'Checking configured ports and Relay API…';
+  try {
+    const result = await api(`/api/servers/${encodeURIComponent(id)}/network/diagnostics`);
+    if (!root.isConnected) return;
+    const sockets = result.sockets || {};
+    const label = {
+      ListeningAny: 'Listening (all interfaces)',
+      InterfaceBound: 'Listening (specific interface)',
+      LoopbackOnly: 'Loopback only',
+      NotListening: 'No local listener',
+      RangeTooLarge: 'Range too large to inspect'
+    };
+    const rows = (sockets.ports || []).map(port =>
+      `<div class="sw-row"><div class="grow"><div class="sw-row-title">${esc(String(port.protocol || '').toUpperCase())} ${esc(port.port)} · ${esc(port.name || 'Game')}</div><div class="sw-row-meta">${esc(label[port.state] || port.state)}</div></div></div>`
+    ).join('') || '<div class="muted">No configured ports to inspect.</div>';
+    const relay = result.relay || {};
+    const relayText = !relay.enabled ? 'Not enabled for this server'
+      : !relay.configured ? 'Not configured'
+      : relay.reachable ? 'Relay API reachable' : 'Relay API unreachable';
+    root.innerHTML = `<div class="sw-info"><div>Server process</div><div>${esc(result.processState || 'Unknown')}</div><div>VPS Relay</div><div>${esc(relayText)}</div></div><div class="tiny muted" style="margin:10px 0">${esc(sockets.note || '')}</div>${rows}<div class="tiny muted" style="margin-top:9px">${esc(result.note || '')}</div>`;
+  } catch (error) {
+    if (root.isConnected) root.textContent = 'Network diagnostics failed: ' + error.message;
+  }
+}
+window.serverWorkspaceRunNetworkDiagnostics = serverWorkspaceRunNetworkDiagnostics;
+
 
 renderServerSchedule = async function (def, body) {
   const schedule = (await api(`/api/servers/${encodeURIComponent(def.id)}/schedule`).catch(() => null)) || {};
