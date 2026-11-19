@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\GameServerControl.Agent\GameServerControl.Agent.csproj" />
     <ProjectReference Include="..\..\src\GameServerControl.Shared\GameServerControl.Shared.csproj" />
+    <ProjectReference Include="..\..\src\GameServerControl.Relay\GameServerControl.Relay.csproj" />
     <Compile Remove="RunnerConsoleDeltaTests.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
