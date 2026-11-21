@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using GameServerControl.Agent.Security;
+using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Config;
 
