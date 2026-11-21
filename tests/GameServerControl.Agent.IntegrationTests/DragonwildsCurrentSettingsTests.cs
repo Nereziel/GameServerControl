@@ -21,7 +21,8 @@ public sealed class DragonwildsCurrentSettingsTests
         using var scope = factory.Services.CreateScope();
         var store = scope.ServiceProvider.GetRequiredService<ServerStore>();
         var config = scope.ServiceProvider.GetRequiredService<DragonwildsConfig>();
-        var schema = scope.ServiceProvider.GetRequiredService<DragonwildsDynamicSchema>();
+        var schema = scope.ServiceProvider.GetServices<IDynamicSchemaExtension>()
+            .OfType<DragonwildsDynamicSchema>().Single();
         var gameDir = Path.Combine(factory.TempRoot, "dragon-current");
         Directory.CreateDirectory(gameDir);
         var executable = Path.Combine(gameDir, OperatingSystem.IsWindows() ? "dragon-game.exe" : "dragon-game.bin");
