@@ -109,6 +109,7 @@ public sealed class SteamCmdBootstrapRetryTests
 
     private static void MakeExecutable(string path, string content)
     {
+        if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException();
         File.WriteAllText(path, content);
         File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
