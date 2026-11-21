@@ -48,7 +48,7 @@ public sealed class ManagedConfigPasswordTests
     }
 
     [Fact]
-    public async Task Dragonwilds_admin_password_survives_ini_reload_with_case_variant_key()
+    public async Task Dragonwilds_legacy_admin_password_is_not_exposed_to_managed_configuration()
     {
         var root = Path.Combine(Path.GetTempPath(), "gsc-dragon-config-" + Guid.NewGuid().ToString("N"));
         var platform = OperatingSystem.IsWindows() ? "WindowsServer" : "LinuxServer";
@@ -59,7 +59,7 @@ public sealed class ManagedConfigPasswordTests
             await File.WriteAllTextAsync(Path.Combine(configDir, "DedicatedServer.ini"),
                 "[/Script/Dominion.DedicatedServerSettings]\n" +
                 "ownerid=fixture-owner\nServerName=fixture-server\n" +
-                "DefaultWorldName=fixture-world\nadminpassword=fixture-admin-secret\n");
+                "DefaultWorldName=fixture-world\nadminpassword=legacy-admin-secret\n");
             var def = new ServerDef("dragon", "Dragon", "", GameType.SteamGeneric,
                 Path.Combine(root, "server.exe"), root, [], [], "4019830", null, null,
                 HostingMode: HostingMode.BareMetal);
@@ -68,14 +68,12 @@ public sealed class ManagedConfigPasswordTests
             var read = await config.ReadAsync(def, CancellationToken.None);
             var schema = new ConfigSchema("dragon", "Dragon", [
                 new ConfigSection("Server", [
-                    new ConfigField("OwnerId", "Owner ID", ConfigFieldType.Text),
-                    new ConfigField("AdminPassword", "Admin password", ConfigFieldType.Password)
+                    new ConfigField("OwnerId", "Owner ID", ConfigFieldType.Text)
                 ])
             ]);
             var normalized = ManagedConfigValues.Canonicalize(schema, read);
-            Assert.Equal("fixture-admin-secret", normalized["AdminPassword"]);
-            Assert.Contains("AdminPassword", normalized.Keys);
             Assert.Equal("fixture-owner", normalized["OwnerId"]);
+            Assert.False(normalized.ContainsKey("AdminPassword"));
         }
         finally { Directory.Delete(root, recursive: true); }
     }

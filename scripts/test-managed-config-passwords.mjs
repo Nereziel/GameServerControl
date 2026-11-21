@@ -13,7 +13,7 @@ const fields = [
   { dataset: { cfg: 'OwnerId' }, type: 'text', value: 'player-fixture' }
 ];
 const ctx = {
-  SERVERS: [{ id: 'dragon', name: 'Dragonwilds' }],
+  SERVERS: [{ id: 'pal', name: 'Palworld' }],
   esc: x => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'),
   api: async (_url, opts) => {
     if (!opts) return {
@@ -38,14 +38,14 @@ const ctx = {
   closeModal: () => {}
 };
 vm.runInNewContext(src.slice(0, end), ctx);
-await ctx.openConfig('dragon');
-assert.match(dialog, /data-cfg="AdminPassword"[^>]*value="fixture-admin-secret"/, 'case-variant INI key must restore Dragonwilds admin password');
+await ctx.openConfig('pal');
+assert.match(dialog, /data-cfg="AdminPassword"[^>]*value="fixture-admin-secret"/, 'case-variant config key must restore Palworld admin password');
 assert.doesNotMatch(dialog, /<form(?:\s|>)/i, 'game config must not masquerade as a login form');
 assert.match(dialog, /data-cfg="AdminPassword"[^>]*autocomplete="new-password"/, 'disable login autofill on managed password field');
 for (const ignored of ['data-1p-ignore', 'data-lpignore', 'data-bwignore']) {
   assert.ok(dialog.includes(ignored), 'missing password manager opt-out ' + ignored);
 }
-await ctx.saveConfig('dragon');
+await ctx.saveConfig('pal');
 assert.equal(captured.AdminPassword, 'fixture-admin-secret');
 assert.equal(captured.OwnerId, 'player-fixture');
 assert.equal(Object.keys(captured).length, 2);
