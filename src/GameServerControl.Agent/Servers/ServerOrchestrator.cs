@@ -14,6 +14,8 @@ public sealed class ServerOrchestrator
 {
     private readonly ProcessMetricsSampler _metrics = new();
     private readonly ConcurrentDictionary<string, bool> _stopRequested = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _lifecycleLocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ServerUpdateConsole _updateConsole;
     private readonly HypervService _hv;
     private readonly GuestProcessService _guest;
     private readonly LocalProcessService _local;
@@ -37,6 +39,7 @@ public sealed class ServerOrchestrator
         IHubContext<StatusHub> hub,
         DiscordNotifier discord,
         ServerDiagnostics diagnostics,
+        ServerUpdateConsole updateConsole,
         SteamCmdManager steamCmd,
         DragonwildsConfig dragonwildsConfig,
         BackupService backups,
@@ -51,6 +54,7 @@ public sealed class ServerOrchestrator
         _hub = hub;
         _discord = discord;
         _diagnostics = diagnostics;
+        _updateConsole = updateConsole;
         _steamCmd = steamCmd;
         _dragonwildsConfig = dragonwildsConfig;
         _backups = backups;
@@ -199,7 +203,27 @@ public sealed class ServerOrchestrator
         _logger.LogInformation("[{Id}] {Src}: {Text}", id, source, text);
     }
 
-    public async Task<ActionResult> StartAsync(string id, CancellationToken ct = default)
+    private async Task<ActionResult> WithLifecycleLockAsync(
+        string id, Func<Task<ActionResult>> operation, CancellationToken ct)
+    {
+        var gate = _lifecycleLocks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
+        if (!await gate.WaitAsync(0, ct))
+            return new ActionResult(false,
+                "Another Start, Stop, Restart or Update operation is already running for this server.",
+                Guid.NewGuid().ToString("n"));
+        try { return await operation(); }
+        finally { gate.Release(); }
+    }
+
+    // Auto-update settings are independent: a Restart does not implicitly
+    // inherit AutoUpdateOnStart. This also prevents a duplicate SteamCMD run.
+    public static bool ShouldAutoUpdate(ServerDef def, bool restart)
+        => restart ? def.AutoUpdateOnRestart : def.AutoUpdateOnStart;
+
+    public Task<ActionResult> StartAsync(string id, CancellationToken ct = default)
+        => WithLifecycleLockAsync(id, () => StartCoreAsync(id, fromRestart: false, ct), ct);
+
+    private async Task<ActionResult> StartCoreAsync(string id, bool fromRestart, CancellationToken ct)
     {
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);
@@ -217,6 +241,24 @@ public sealed class ServerOrchestrator
         }
 
         await LogAsync(id, "orch", $"Start requested ({def.HostingMode})");
+        if (ShouldAutoUpdate(def, fromRestart))
+        {
+            // Only when the process is definitely stopped. Never modify files
+            // underneath a running dedicated server.
+            if (def.HostingMode != HostingMode.BareMetal)
+                return StartFailure(id, corr, "Auto-update is supported only on BareMetal servers.");
+            var (checkedOk, existingPid) = await _local.FindProcessAsync(def, ct);
+            if (!checkedOk)
+                return StartFailure(id, corr, "Auto-update cancelled: could not confirm game process state.");
+            if (existingPid is null)
+            {
+                var updated = await UpdateCoreAsync(id, ct);
+                if (!updated.Success)
+                    return StartFailure(id, corr, "Auto-update failed; server not started: " + updated.Message);
+            }
+            // If Start was requested while a game was already running,
+            // StartBareMetalAsync will report Already running without updating.
+        }
         return def.HostingMode == HostingMode.BareMetal
             ? await StartBareMetalAsync(def, corr, ct)
             : await StartVmAsync(def, corr, ct);
@@ -320,7 +362,10 @@ public sealed class ServerOrchestrator
         return new ActionResult(true, $"Started (pid={pid})", corr);
     }
 
-    public async Task<ActionResult> StopAsync(string id, bool stopVm, bool force, CancellationToken ct = default)
+    public Task<ActionResult> StopAsync(string id, bool stopVm, bool force, CancellationToken ct = default)
+        => WithLifecycleLockAsync(id, () => StopCoreAsync(id, stopVm, force, ct), ct);
+
+    private async Task<ActionResult> StopCoreAsync(string id, bool stopVm, bool force, CancellationToken ct)
     {
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);
@@ -387,13 +432,16 @@ public sealed class ServerOrchestrator
         return new ActionResult(true, "Stopped", corr);
     }
 
-    public async Task<ActionResult> RestartAsync(string id, CancellationToken ct = default)
+    public Task<ActionResult> RestartAsync(string id, CancellationToken ct = default)
+        => WithLifecycleLockAsync(id, () => RestartCoreAsync(id, ct), ct);
+
+    private async Task<ActionResult> RestartCoreAsync(string id, CancellationToken ct)
     {
         _diagnostics.Record(id, "ManualRestart", "Info", "Dashboard/API restart requested.");
-        var stop = await StopAsync(id, stopVm: false, force: false, ct);
+        var stop = await StopCoreAsync(id, stopVm: false, force: false, ct);
         if (!stop.Success) return stop;
         await Task.Delay(2000, ct);
-        return await StartAsync(id, ct);
+        return await StartCoreAsync(id, fromRestart: true, ct);
     }
 
     public async Task<ActionResult> BackupAsync(string id, CancellationToken ct = default)
@@ -569,43 +617,95 @@ public sealed class ServerOrchestrator
         catch (Exception ex) { _logger.LogWarning(ex, "Delete backup failed"); return Task.FromResult(false); }
     }
 
-    public async Task<ActionResult> UpdateAsync(string id, CancellationToken ct = default)
+    public Task<ActionResult> UpdateAsync(string id, CancellationToken ct = default)
+        => WithLifecycleLockAsync(id, () => UpdateCoreAsync(id, ct), ct);
+
+    private async Task<ActionResult> UpdateCoreAsync(string id, CancellationToken ct)
     {
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);
         if (def is null) return new ActionResult(false, "Unknown server", corr);
-        if (string.IsNullOrWhiteSpace(def.SteamAppId))
-            return new ActionResult(false, "No SteamAppId set; cannot update via SteamCMD", corr);
 
-        // Never modify installed game files without first preserving all configured
-        // save data. Operator can restore this named snapshot if SteamCMD fails.
-        var preUpdate = await _backups.CreatePreUpdateAsync(id, ct);
-        if (!preUpdate.Success)
-            return new ActionResult(false,
-                "Update cancelled: pre-update backup failed: " + preUpdate.Message, corr);
-        await LogAsync(id, "backup", preUpdate.Message);
-
-        if (def.HostingMode == HostingMode.BareMetal)
+        _updateConsole.Begin(id, "Checking server state before SteamCMD update…");
+        ActionResult Fail(string reason)
         {
-            await LogAsync(id, "orch", $"SteamCMD update app {def.SteamAppId} in {def.GuestWorkingDir}");
-            var (ok, exitCode) = await _steamCmd.RunAppUpdateAsync(
-                def.GuestWorkingDir,
-                def.SteamAppId,
-                (line, percent) => _ = LogAsync(id, "steamcmd", line),
-                ct);
-            return new ActionResult(ok, ok ? "Update finished" : $"Update failed (SteamCMD exit {exitCode})", corr);
+            _updateConsole.End(id, false, reason);
+            return new ActionResult(false, reason, corr);
         }
 
-        var cred = GetCred(def.GuestCredentialId);
-        var state = await _hv.GetStateAsync(def.VmName, ct);
-        if (state != VmState.Running)
-            return new ActionResult(false, "VM not running", corr);
+        try
+        {
+            if (string.IsNullOrWhiteSpace(def.SteamAppId))
+                return Fail("No SteamAppId set; cannot update via SteamCMD.");
 
-        var inGuestCmd = $"steamcmd +login anonymous +force_install_dir \"{def.GuestWorkingDir}\" +app_update {def.SteamAppId} validate +quit";
-        await LogAsync(id, "orch", "In-guest SteamCMD: " + inGuestCmd);
-        var (okGuest, outputGuest) = await _guest.RunCommandInGuestAsync(def.VmName, cred, inGuestCmd, def.GuestWorkingDir, TimeSpan.FromMinutes(30), ct);
-        await LogAsync(id, "steamcmd", outputGuest);
-        return new ActionResult(okGuest, okGuest ? "Update finished" : "Update failed", corr);
+            if (def.HostingMode == HostingMode.BareMetal)
+            {
+                var (ok, pid) = await _local.FindProcessAsync(def, ct);
+                if (!ok) return Fail("Cannot verify process state. Update was cancelled.");
+                if (pid is not null)
+                    return Fail("Stop the game server before updating it. No files were modified.");
+            }
+            else
+            {
+                if (!OperatingSystem.IsWindows())
+                    return Fail("Hyper-V guest updates require Windows.");
+                if (await _hv.GetStateAsync(def.VmName, ct) != VmState.Running)
+                    return Fail("VM not running.");
+                var cred = GetCred(def.GuestCredentialId);
+                var (ok, pid) = await _guest.FindProcessAsync(def.VmName, cred, def.GuestExePath, ct);
+                if (!ok || pid is not null)
+                    return Fail("The guest game process must be confirmed stopped before updating.");
+            }
+
+            _updateConsole.Write(id, "Creating required pre-update safety backup…");
+            var preUpdate = await _backups.CreatePreUpdateAsync(id, ct);
+            if (!preUpdate.Success)
+                return Fail("Update cancelled: pre-update backup failed: " + preUpdate.Message);
+            _updateConsole.Write(id, "Pre-update backup completed.");
+            await LogAsync(id, "backup", preUpdate.Message);
+
+            if (def.HostingMode == HostingMode.BareMetal)
+            {
+                await LogAsync(id, "orch", $"SteamCMD update app {def.SteamAppId} in {def.GuestWorkingDir}");
+                _updateConsole.Write(id, "SteamCMD updating and validating game files…");
+                var (ok, exitCode) = await _steamCmd.RunAppUpdateAsync(
+                    def.GuestWorkingDir,
+                    def.SteamAppId,
+                    (line, percent) =>
+                    {
+                        _updateConsole.Write(id, line, percent);
+                        _ = LogAsync(id, "steamcmd", line);
+                    },
+                    ct);
+                var result = ok ? "Update finished" : $"Update failed (SteamCMD exit {exitCode})";
+                _updateConsole.End(id, ok, result);
+                _diagnostics.Record(id, "Update", ok ? "Success" : "Error",
+                    ok ? "SteamCMD update completed." : "SteamCMD update failed.");
+                return new ActionResult(ok, result, corr);
+            }
+
+            var guestCred = GetCred(def.GuestCredentialId);
+            var inGuestCmd = $"steamcmd +login anonymous +force_install_dir \"{def.GuestWorkingDir}\" +app_update {def.SteamAppId} validate +quit";
+            _updateConsole.Write(id, "SteamCMD running inside Hyper-V guest (output appears when complete)…");
+            var (okGuest, outputGuest) = await _guest.RunCommandInGuestAsync(def.VmName,
+                guestCred, inGuestCmd, def.GuestWorkingDir, TimeSpan.FromMinutes(30), ct);
+            // Guest command output is returned in one batch rather than streamed.
+            foreach (var line in outputGuest.Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(240))
+                _updateConsole.Write(id, line);
+            await LogAsync(id, "steamcmd", outputGuest);
+            _updateConsole.End(id, okGuest, okGuest ? "Update finished" : "Update failed");
+            return new ActionResult(okGuest, okGuest ? "Update finished" : "Update failed", corr);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _updateConsole.End(id, false, "Game update cancelled.");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Game update failed for {ServerId}", id);
+            return Fail("Update failed. Review the update console and Agent log.");
+        }
     }
 
     public async Task<ActionResult> ApplyConfigAsync(string id, CancellationToken ct = default)

@@ -188,7 +188,7 @@ function serverWorkspaceHasUnsavedChanges() {
   if (SERVER_WORKSPACE.tab === 'files' && window.GSC_FILES?.dirty) return true;
   const body = document.getElementById('swTabBody');
   if (!body) return false;
-  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly, #swBackupLabel, #swBackupRetention')).some(input => {
+  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly, #swBackupLabel, #swBackupRetention, #swAutoUpdateOnStart, #swAutoUpdateOnRestart')).some(input => {
     if (input.disabled) return false;
     if (input.type === 'checkbox') return input.checked !== input.defaultChecked;
     if (input.tagName === 'SELECT') {
@@ -349,10 +349,11 @@ function updateServerWorkspaceHeader(def) {
     stateEl.textContent = state;
     stateEl.className = 'sw-state ' + serverWorkspaceStateClass(state);
   }
-  const start = $('#swStart'), stop = $('#swStop'), restart = $('#swRestart');
+  const start = $('#swStart'), stop = $('#swStop'), restart = $('#swRestart'), update = $('#swUpdateButton');
   if (start) start.disabled = running || busy;
   if (stop) stop.disabled = !running || busy;
   if (restart) restart.disabled = !running || busy;
+  if (update) update.disabled = running || busy || !def.steamAppId;
 
   const operation = $('#swOperation');
   if (operation) {
@@ -397,6 +398,7 @@ function renderServerWorkspace(def) {
         <button id="swStart" type="button" class="btn primary sw-power" ${uiAction('action',[def.id,'start'])}>Start</button>
         <button id="swRestart" type="button" class="btn sw-power" ${uiAction('action',[def.id,'restart'])}>Restart</button>
         <button id="swStop" type="button" class="btn danger sw-power" ${uiAction('action',[def.id,'stop'])}>Stop</button>
+        <button id="swUpdateButton" type="button" class="btn sw-power" title="Stop the server before updating game files" ${uiAction('action',[def.id,'update'])}>Update</button>
       </div>
     </div>
     <nav class="sw-tabs" aria-label="Server sections">${sections.map(group => `<button type="button" class="sw-tab ${section.key === group.key ? 'active' : ''}" ${section.key === group.key ? 'aria-current="page"' : ''} ${uiAction('serverWorkspaceSetTab',[group.key])}>${esc(group.label)}</button>`).join('')}</nav>
@@ -733,7 +735,30 @@ function renderServerSettings(def, body) {
   body.innerHTML = `<div class="sw-toolbar"><div><b>Advanced server settings</b><div class="tiny muted">Use game settings, RCON and Network above for routine changes.</div></div><div class="spacer"></div><button class="btn" ${uiAction('openEdit',[def.id])}>Edit server definition</button></div><div class="sw-info"><div>Profile</div><div>${esc(profile?.label || 'Custom')}</div><div>Run on</div><div>${def.hostingMode === 'Vm' ? 'Hyper-V virtual machine' : 'This machine'}</div><div>Server folder</div><div class="mono">${esc(def.guestWorkingDir || '')}</div><div>Executable</div><div class="mono">${esc(def.guestExePath || '')}</div><div>Steam App ID</div><div>${esc(def.steamAppId || '—')}</div><div>Log file</div><div class="mono">${esc(def.logPathInGuest || '—')}</div></div><details class="advanced"><summary>Danger zone</summary><div class="advanced-body"><p class="tiny muted">Removing a server affects its registration and may remove associated files, depending on the selected action. Back up your data first.</p><button class="btn danger" ${uiAction('deleteServer',[def.id])}>Remove server…</button></div></details>
   <div class="sw-section"><h3>Discord notifications</h3><div id="swDiscordStatus" class="tiny muted">Loading notification settings…</div><div class="field"><label>Discord webhook (HTTPS)</label><input id="swDiscordUrl" type="password" class="mono" autocomplete="new-password" placeholder="Paste a new URL to set or replace; blank keeps current"><div class="help">The webhook is optional. Its URL is never shown in this settings panel.</div></div><div class="checkrow"><input id="swDiscordAlertsOnly" type="checkbox"><label for="swDiscordAlertsOnly">Only failures and unexpected stops (no routine start/stop/success messages)</label></div><div class="sw-toolbar"><button class="btn primary" ${uiAction('serverWorkspaceSaveNotifications',[def.id])}>Save notifications</button><button class="btn" ${uiAction('serverWorkspaceSendTestNotification',[def.id])}>Send test</button><button class="btn danger" ${uiAction('serverWorkspaceClearNotifications',[def.id])}>Disable</button></div><div class="tiny muted">Discord webhooks only send alerts. Remote commands require a separate secured Discord bot.</div></div>`;
   serverWorkspaceLoadNotifications(def.id);
+  const supported = def.hostingMode !== 'Vm' && !!def.steamAppId;
+  body.insertAdjacentHTML('beforeend', `<div class="sw-section">
+    <h3>Automatic game updates</h3>
+    <div class="tiny muted">Runs SteamCMD before starting or restarting this game. A complete pre-update backup is required; a failed update prevents startup.</div>
+    <div class="checkrow"><input id="swAutoUpdateOnStart" type="checkbox" ${def.autoUpdateOnStart ? 'checked' : ''} ${supported ? '' : 'disabled'}><label for="swAutoUpdateOnStart">Auto-update on Start</label></div>
+    <div class="checkrow"><input id="swAutoUpdateOnRestart" type="checkbox" ${def.autoUpdateOnRestart ? 'checked' : ''} ${supported ? '' : 'disabled'}><label for="swAutoUpdateOnRestart">Auto-update on Restart</label></div>
+    <div class="sw-toolbar"><button class="btn primary" ${supported ? '' : 'disabled'} ${uiAction('serverWorkspaceSaveAutoUpdate',[def.id])}>Save auto-update settings</button></div>
+    ${supported ? '' : '<div class="tiny muted">Only BareMetal game servers with a Steam App ID support automatic updates.</div>'}
+    <div class="tiny muted">Both options are disabled by default. Open Backups & automation to view the live SteamCMD update console.</div>
+  </div>`);
 }
+
+async function serverWorkspaceSaveAutoUpdate(id) {
+  try {
+    const autoUpdateOnStart = !!$('#swAutoUpdateOnStart')?.checked;
+    const autoUpdateOnRestart = !!$('#swAutoUpdateOnRestart')?.checked;
+    await api(`/api/servers/${encodeURIComponent(id)}/auto-update`, {
+      method: 'PUT', body: JSON.stringify({ autoUpdateOnStart, autoUpdateOnRestart })
+    });
+    toast('Automatic update preferences saved.', 'ok');
+    await loadServers(true);
+  } catch(e) { toast('Could not save automatic updates: ' + e.message, 'err'); }
+}
+window.serverWorkspaceSaveAutoUpdate = serverWorkspaceSaveAutoUpdate;
 
 async function serverWorkspaceLoadNotifications(id) {
   const status = $('#swDiscordStatus');
@@ -1100,6 +1125,17 @@ renderServerSchedule = async function (def, body) {
   const autostart = !linux && def.hostingMode !== 'Vm' && serverWorkspaceLooksWindows(def)
     ? `<button class="btn" ${uiAction('openAutostart',[def.id])}>Windows autostart</button>` : '';
   body.innerHTML = `${platformInfo}<div class="sw-toolbar"><div><b>Automation & updates</b><div class="tiny muted">Plan restarts, updates and backups. Update runs on the game server.</div></div><div class="spacer"></div><button class="btn" ${uiAction('action',[def.id,'update'])}>Update game</button>${profileFor(def)?.caps?.config ? `<button class="btn" ${uiAction('action',[def.id,'apply'])}>Apply game configuration</button>` : ''}${autostart}</div><div class="sw-toolbar"><b>Schedule</b><div class="spacer"></div><button class="btn danger" ${uiAction('serverWorkspaceClearSchedule',[def.id])}>Clear</button><button class="btn primary" ${linux ? 'disabled' : ''} ${uiAction('serverWorkspaceSaveSchedule',[def.id])}>Save</button></div><div class="sw-section"><div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''}><label for="swRestart">Daily restart</label></div><div class="field"><label>Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}"></div></div><div class="sw-section"><div class="checkrow"><input id="swUpdate" type="checkbox" ${schedule.weeklyUpdateEnabled ? 'checked' : ''}><label for="swUpdate">Weekly update</label></div><div class="formgrid"><div class="field"><label>Day</label><select id="swDay">${days.map(day => `<option ${day === (schedule.weeklyUpdateDay || 'Wednesday') ? 'selected' : ''}>${day}</option>`).join('')}</select></div><div class="field"><label>Hour (0–23)</label><input id="swUpdateHour" type="number" min="0" max="23" value="${schedule.weeklyUpdateHour ?? 4}"></div></div></div><div class="sw-section"><div class="checkrow"><input id="swBackup" type="checkbox" ${schedule.hourlyBackupEnabled ? 'checked' : ''}><label for="swBackup">Hourly backup</label></div><div class="field"><label>Minute (0–59)</label><input id="swBackupMinute" type="number" min="0" max="59" value="${schedule.hourlyBackupMinute ?? 0}"></div></div>`;
+  const autoText = 'Automatic updates · Start: ' + (def.autoUpdateOnStart ? 'On' : 'Off') +
+    ' · Restart: ' + (def.autoUpdateOnRestart ? 'On' : 'Off');
+  body.insertAdjacentHTML('beforeend', `<section class="sw-section">
+    <div class="sw-toolbar"><div><h3>SteamCMD update console</h3>
+    <div class="tiny muted">Shows the last update in this Agent session. Stop the game server before updating.</div></div>
+    <div class="spacer"></div><button class="btn" ${uiAction('serverWorkspaceSetTab',['settings'])}>Configure auto-update</button></div>
+    <div class="tiny muted">${esc(autoText)}</div>
+    <div id="swUpdateState" class="tiny muted">Loading update status…</div>
+    <pre id="swUpdateTerminal" class="sw-terminal" role="log" aria-live="off">Loading…</pre>
+  </section>`);
+  void serverWorkspacePollUpdateConsole(def.id, true);
 };
 
 const SERVER_WORKSPACE_BASE_OPEN_CREATE_SETTINGS = openCreateSettings;
@@ -1390,8 +1426,63 @@ new MutationObserver(()=>enhancePasswordFields(document)).observe(document.body,
 
 /* Reconnect attached stdin consoles after lifecycle changes performed from the workspace. */
 const baseServerAction=action;
+const SERVER_UPDATE_UI={ id:null, sequence:0, generation:null, polling:false };
+
+async function serverWorkspacePollUpdateConsole(id, reset=false) {
+  if(SERVER_WORKSPACE.serverId!==id || SERVER_WORKSPACE.tab!=='schedule')return;
+  const terminal=$('#swUpdateTerminal'), state=$('#swUpdateState');
+  if(!terminal)return;
+  if(reset || SERVER_UPDATE_UI.id!==id){
+    SERVER_UPDATE_UI.id=id; SERVER_UPDATE_UI.sequence=0; SERVER_UPDATE_UI.generation=null;
+    terminal.textContent='';
+  }
+  if(SERVER_UPDATE_UI.polling)return;
+  SERVER_UPDATE_UI.polling=true;
+  try{
+    const result=await api(`/api/servers/${encodeURIComponent(id)}/update/console?since=${SERVER_UPDATE_UI.sequence}`);
+    if(!terminal.isConnected || SERVER_WORKSPACE.serverId!==id)return;
+    if(SERVER_UPDATE_UI.generation!==result.generation){
+      SERVER_UPDATE_UI.generation=result.generation;
+      terminal.textContent='';
+    }
+    const messages=result.lines||[];
+    if(messages.length && terminal.textContent==='No SteamCMD output available yet.')
+      terminal.textContent='';
+    for(const line of messages){
+      const timestamp=line.at?new Date(line.at).toLocaleTimeString():'';
+      terminal.textContent+=(terminal.textContent?'\n':'')+(timestamp?'['+timestamp+'] ':'')+line.text;
+    }
+    if(terminal.textContent.length>175000)terminal.textContent=terminal.textContent.slice(-150000);
+    if(messages.length)terminal.scrollTop=terminal.scrollHeight;
+    SERVER_UPDATE_UI.sequence=Math.max(SERVER_UPDATE_UI.sequence,Number(result.latestSequence)||0);
+    if(state)state.textContent=(result.status||'Idle')+
+      (result.percent!=null?' · '+result.percent+'%':'')+' · '+(result.message||'');
+    if(!terminal.textContent)terminal.textContent='No SteamCMD output available yet.';
+  }catch(e){if(state?.isConnected)state.textContent='Console unavailable: '+e.message}
+  finally{SERVER_UPDATE_UI.polling=false}
+}
+
+function serverWorkspaceFocusUpdate(id) {
+  const target='#server/'+encodeURIComponent(id)+'/schedule';
+  if(location.hash!==target){
+    if(SERVER_WORKSPACE.serverId===id)serverWorkspaceSetTab('schedule');
+    else openServerPage(id,'schedule');
+  }
+  return location.hash===target;
+}
+
 action=async function(id,a){
-  await baseServerAction(id,a);
+  const def=SERVERS.find(x=>x.id===id);
+  const expectsUpdate=a==='update' ||
+    (a==='start'&&!!def?.autoUpdateOnStart) ||
+    (a==='restart'&&!!def?.autoUpdateOnRestart);
+  if(expectsUpdate && !serverWorkspaceFocusUpdate(id))return;
+  const monitor=expectsUpdate?setInterval(()=>void serverWorkspacePollUpdateConsole(id),1000):null;
+  try{await baseServerAction(id,a)}
+  finally{
+    if(monitor)clearInterval(monitor);
+    if(expectsUpdate)await serverWorkspacePollUpdateConsole(id);
+  }
   if(!['start','restart','stop'].includes(a))return;
   if(SERVER_WORKSPACE.serverId!==id||SERVER_WORKSPACE.tab!=='console')return;
   const d=SERVERS.find(x=>x.id===id);if(!d||profileFor(d)?.caps?.console!=='stdin')return;

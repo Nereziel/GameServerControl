@@ -24,7 +24,9 @@ public sealed record ServerViewDto(
     bool HasDiscordWebhookUrl,
     NetworkPort[]? NetworkPorts,
     int? BackupRetention,
-    string? GameProfileKey)
+    string? GameProfileKey,
+    bool AutoUpdateOnStart,
+    bool AutoUpdateOnRestart)
 {
     public static ServerViewDto From(ServerDef def) => new(
         def.Id,
@@ -49,5 +51,7 @@ public sealed record ServerViewDto(
         !string.IsNullOrEmpty(def.DiscordWebhookUrl),
         def.NetworkPorts,
         def.BackupRetention,
-        def.GameProfileKey);
+        def.GameProfileKey,
+        def.AutoUpdateOnStart,
+        def.AutoUpdateOnRestart);
 }

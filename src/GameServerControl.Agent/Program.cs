@@ -96,6 +96,7 @@ builder.Services.AddSingleton<ManagedHostGateway>();
 builder.Services.AddSingleton<ServerStore>();
 builder.Services.AddSingleton<PublicRelayManager>();
 builder.Services.AddSingleton<StatusTracker>();
+builder.Services.AddSingleton<ServerUpdateConsole>();
 builder.Services.AddSingleton<ServerDiagnostics>(sp =>
 {
     var cfg = sp.GetRequiredService<IConfiguration>();
@@ -431,6 +432,32 @@ api.MapGet("/servers/install/{jobId}", (string jobId, ServerInstaller installer)
     var p = installer.Get(jobId);
     return p is null ? Results.NotFound() : Results.Ok(p);
 });
+
+// Update preferences use a narrow endpoint so secrets never need round-tripping.
+api.MapGet("/servers/{id}/auto-update", (string id, ServerRegistry registry) =>
+{
+    var def = registry.Get(id);
+    return def is null ? Results.NotFound() :
+        Results.Ok(new { def.AutoUpdateOnStart, def.AutoUpdateOnRestart,
+            Available = def.HostingMode == HostingMode.BareMetal &&
+                        !string.IsNullOrWhiteSpace(def.SteamAppId) });
+});
+api.MapPut("/servers/{id}/auto-update", (string id, AutoUpdatePreferences req, ServerStore store,
+    ServerRegistry registry) =>
+{
+    var def = registry.Get(id);
+    if (def is null) return Results.NotFound();
+    try
+    {
+        var updated = store.SetAutoUpdatePreferences(id, req.AutoUpdateOnStart, req.AutoUpdateOnRestart);
+        return Results.Ok(new { updated.AutoUpdateOnStart, updated.AutoUpdateOnRestart });
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+}).RequireAuthorization("admin");
+api.MapGet("/servers/{id}/update/console", (string id, long? since, ServerRegistry registry,
+    ServerUpdateConsole updates) =>
+    registry.Get(id) is null ? Results.NotFound() : Results.Ok(updates.Snapshot(id, since)))
+    .RequireAuthorization("admin");
 
 api.MapPut("/servers/{id}", (string id, ServerDef def, ServerStore store) =>
 {
@@ -893,3 +920,4 @@ public partial class Program { }
 public record RconCommandRequest(RconStandardCommand Command, string? Payload);
 public record AutostartRequest(bool Enabled);
 public record LogTailRequest(string Action);
+internal sealed record AutoUpdatePreferences(bool AutoUpdateOnStart, bool AutoUpdateOnRestart);
