@@ -78,12 +78,14 @@ public sealed class DragonwildsConfig : IGameConfig
         values["Port"] = ReadLaunchPort(def, "Port", 7777).ToString();
         var gamePort = int.Parse(values["Port"]);
         values["BeaconPort"] = ReadLaunchPort(def, "BeaconPort", Math.Min(65535, gamePort + 1111)).ToString();
-        // AdministratorList is a game-maintained legacy admin history, not a
-        // supported permanent-administrator editing API. Preserve it on disk.
-        // Likewise, AdminPassword is a legacy/host-dependent setting: do not
-        // display or silently reintroduce it after the game deletes the key.
-        values.Remove("AdminPassword");
+        // The game also maintains a list of IDs in AdministratorList. Expose it
+        // as an optional advanced field, without treating its contents as a
+        // guaranteed source of admin permissions on current game versions.
+        values["Administrators"] = ParseAdministratorList(
+            values.TryGetValue("AdministratorList", out var rawAdmins) ? rawAdmins : "");
         values.Remove("AdministratorList");
+        // AdminPassword belongs to older game versions. Never resurrect it.
+        values.Remove("AdminPassword");
         return values;
     }
 
@@ -133,6 +135,22 @@ public sealed class DragonwildsConfig : IGameConfig
             merged[key] = value ?? "";
         }
 
+        // Browser config forms submit all visible fields on Save. Do not add an
+        // empty AdministratorList key, or rewrite a game-maintained list when
+        // the user has not changed it. A changed or explicitly cleared list is
+        // applied only with the game confirmed stopped.
+        var administratorsChanged = false;
+        if (values.TryGetValue("Administrators", out var requestedAdmins))
+        {
+            var existing = merged.TryGetValue("AdministratorList", out var existingAdmins)
+                ? existingAdmins : "";
+            var currentList = ParseAdministratorList(existing);
+            var requestedList = ParseAdministratorList(requestedAdmins ?? "");
+            administratorsChanged = !string.Equals(currentList, requestedList, StringComparison.Ordinal);
+            if (administratorsChanged)
+                merged["AdministratorList"] = FormatAdministratorList(requestedList);
+        }
+
         Require(merged, "OwnerId", "Owner Player ID is required by the current Jagex dedicated-server guide.");
         Require(merged, "ServerName", "Server name is required.");
         Require(merged, "DefaultWorldName", "Default world name is required.");
@@ -165,6 +183,8 @@ public sealed class DragonwildsConfig : IGameConfig
             if (!merged.TryGetValue(key, out var value)) continue;
             SetKey(lines, key, value ?? "");
         }
+        if (administratorsChanged)
+            SetKey(lines, "AdministratorList", merged["AdministratorList"]);
 
         var output = string.Join("\r\n", lines).TrimEnd('\r', '\n') + "\r\n";
         var updatedDef = def with
@@ -269,6 +289,32 @@ public sealed class DragonwildsConfig : IGameConfig
         result.Add($"-Port={port}");
         result.Add($"-BeaconPort={beaconPort}");
         return result.ToArray();
+    }
+
+    private static string ParseAdministratorList(string value)
+    {
+        var raw = (value ?? "").Trim();
+        if (raw.StartsWith('(') && raw.EndsWith(')') && raw.Length >= 2)
+            raw = raw[1..^1];
+        return string.Join("\n", raw.Split([',', '\n', '\r'],
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(id => id.Trim('"'))
+            .Where(id => id.Length > 0));
+    }
+
+    private static string FormatAdministratorList(string value)
+    {
+        // Each line is a player ID. Refuse syntactically ambiguous / injection
+        // characters rather than writing a potentially corrupted INI entry.
+        var ids = ParseAdministratorList(value).Split('\n',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        foreach (var id in ids)
+            if (id.Length > 256 || id.Any(c => !(char.IsLetterOrDigit(c) ||
+                  c is '-' or '_' or '.' or ':')))
+                throw new ArgumentException("AdministratorList requires one player ID per line (letters, digits, '-', '_', '.' or ':').");
+        return "(" + string.Join(',', ids) + ")";
     }
 
     private static Dictionary<string, string> Parse(string content)
