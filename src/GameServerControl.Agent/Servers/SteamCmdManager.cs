@@ -226,6 +226,8 @@ public sealed class SteamCmdManager
             var sawSuccess = false;
             var sawAppUpdateActivity = false;
             var sawHardError = false;
+            var sawBootstrapRestart = false;
+            var sawNonRetryableError = false;
             string? lastRecord = null;
             var lastRecordAt = DateTime.MinValue;
 
@@ -246,6 +248,12 @@ public sealed class SteamCmdManager
                         line.Contains("No subscription", StringComparison.OrdinalIgnoreCase) ||
                         line.Contains("Disk write failure", StringComparison.OrdinalIgnoreCase) ||
                         line.Contains("Missing file permissions", StringComparison.OrdinalIgnoreCase)) sawHardError = true;
+                    if (line.Contains("Update complete, launching", StringComparison.OrdinalIgnoreCase))
+                        sawBootstrapRestart = true;
+                    if (line.Contains("No subscription", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("Disk write failure", StringComparison.OrdinalIgnoreCase) ||
+                        line.Contains("Missing file permissions", StringComparison.OrdinalIgnoreCase))
+                        sawNonRetryableError = true;
 
                     var m = progressRegex.Match(line);
                     if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture, out var v))
@@ -278,11 +286,15 @@ public sealed class SteamCmdManager
             bool success;
             bool hardError;
             bool activity;
+            bool bootstrapRestart;
+            bool nonRetryableError;
             lock (stateGate)
             {
                 success = sawSuccess;
                 hardError = sawHardError;
                 activity = sawAppUpdateActivity;
+                bootstrapRestart = sawBootstrapRestart;
+                nonRetryableError = sawNonRetryableError;
             }
 
             if (success)
@@ -290,6 +302,19 @@ public sealed class SteamCmdManager
                 if (lastExitCode != 0)
                     onLine($"SteamCMD reported success despite exit code {lastExitCode}; verifying files on disk…", null);
                 return (true, lastExitCode);
+            }
+
+            // SteamCMD's own updater can restart itself with exit 7 after an
+            // app_update attempt emitted "Error! App ... state is 0x6".
+            // That transient app error must not suppress the single bootstrap
+            // retry. Never retry known permission or subscription failures.
+            if (attempt < maxAttempts && lastExitCode == 7 &&
+                bootstrapRestart && !nonRetryableError)
+            {
+                onLine("SteamCMD updated itself and exited with code 7; retrying the game update once…", null);
+                try { await Task.Delay(TimeSpan.FromSeconds(1), ct); }
+                catch (OperationCanceledException) { return (false, -2); }
+                continue;
             }
 
             if (hardError) return (false, lastExitCode);
@@ -305,7 +330,11 @@ public sealed class SteamCmdManager
                 continue;
             }
 
-            return (lastExitCode == 0, lastExitCode);
+            // Exit code 0 by itself is not proof the game files were updated.
+            // Require SteamCMD's explicit success marker for this App ID.
+            if (lastExitCode == 0)
+                onLine($"SteamCMD exited without confirming App '{appId}' installation.", null);
+            return (false, lastExitCode);
         }
 
         return (false, lastExitCode);
