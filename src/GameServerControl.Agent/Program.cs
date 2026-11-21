@@ -449,11 +449,7 @@ api.MapPut("/servers/{id}/auto-update", (string id, AutoUpdatePreferences req, S
     if (def is null) return Results.NotFound();
     try
     {
-        var updated = store.Update(id, def with
-        {
-            AutoUpdateOnStart = req.AutoUpdateOnStart,
-            AutoUpdateOnRestart = req.AutoUpdateOnRestart
-        });
+        var updated = store.SetAutoUpdatePreferences(id, req.AutoUpdateOnStart, req.AutoUpdateOnRestart);
         return Results.Ok(new { updated.AutoUpdateOnStart, updated.AutoUpdateOnRestart });
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }

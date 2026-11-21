@@ -17,6 +17,7 @@ public sealed class ServerUpdateConsole
         public string Message = "No update has been run in this Agent session.";
         public int? Percent;
         public long Sequence;
+        public long Generation;
     }
 
     private readonly ConcurrentDictionary<string, State> _states = new(StringComparer.OrdinalIgnoreCase);
@@ -27,6 +28,7 @@ public sealed class ServerUpdateConsole
         lock (state.Gate)
         {
             state.Lines.Clear();
+            state.Generation++;
             state.Status = "Running";
             state.Percent = null;
             state.Message = reason;
@@ -70,10 +72,10 @@ public sealed class ServerUpdateConsole
     {
         var state = _states.GetOrAdd(id, _ => new State());
         lock (state.Gate)
-            return new ServerUpdateSnapshot(state.Status, state.Message, state.Percent, state.Sequence,
+            return new ServerUpdateSnapshot(state.Status, state.Message, state.Percent, state.Sequence, state.Generation,
                 state.Lines.Where(l => l.Sequence > (since ?? 0)).ToArray());
     }
 }
 
 public sealed record ServerUpdateLine(DateTimeOffset At, long Sequence, string Text);
-public sealed record ServerUpdateSnapshot(string Status, string Message, int? Percent, long LatestSequence, IReadOnlyList<ServerUpdateLine> Lines);
+public sealed record ServerUpdateSnapshot(string Status, string Message, int? Percent, long LatestSequence, long Generation, IReadOnlyList<ServerUpdateLine> Lines);

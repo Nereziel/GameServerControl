@@ -1426,14 +1426,14 @@ new MutationObserver(()=>enhancePasswordFields(document)).observe(document.body,
 
 /* Reconnect attached stdin consoles after lifecycle changes performed from the workspace. */
 const baseServerAction=action;
-const SERVER_UPDATE_UI={ id:null, sequence:0, polling:false };
+const SERVER_UPDATE_UI={ id:null, sequence:0, generation:null, polling:false };
 
 async function serverWorkspacePollUpdateConsole(id, reset=false) {
   if(SERVER_WORKSPACE.serverId!==id || SERVER_WORKSPACE.tab!=='schedule')return;
   const terminal=$('#swUpdateTerminal'), state=$('#swUpdateState');
   if(!terminal)return;
   if(reset || SERVER_UPDATE_UI.id!==id){
-    SERVER_UPDATE_UI.id=id; SERVER_UPDATE_UI.sequence=0;
+    SERVER_UPDATE_UI.id=id; SERVER_UPDATE_UI.sequence=0; SERVER_UPDATE_UI.generation=null;
     terminal.textContent='';
   }
   if(SERVER_UPDATE_UI.polling)return;
@@ -1441,7 +1441,13 @@ async function serverWorkspacePollUpdateConsole(id, reset=false) {
   try{
     const result=await api(`/api/servers/${encodeURIComponent(id)}/update/console?since=${SERVER_UPDATE_UI.sequence}`);
     if(!terminal.isConnected || SERVER_WORKSPACE.serverId!==id)return;
+    if(SERVER_UPDATE_UI.generation!==result.generation){
+      SERVER_UPDATE_UI.generation=result.generation;
+      terminal.textContent='';
+    }
     const messages=result.lines||[];
+    if(messages.length && terminal.textContent==='No SteamCMD output available yet.')
+      terminal.textContent='';
     for(const line of messages){
       const timestamp=line.at?new Date(line.at).toLocaleTimeString():'';
       terminal.textContent+=(terminal.textContent?'\n':'')+(timestamp?'['+timestamp+'] ':'')+line.text;

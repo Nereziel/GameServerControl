@@ -71,6 +71,27 @@ public sealed class ServerStore
         return normalized;
     }
 
+    // Narrow update: does not round-trip credentials or reject unrelated legacy
+    // fields such as an older webhook URL while changing two harmless flags.
+    public ServerDef SetAutoUpdatePreferences(string id, bool onStart, bool onRestart)
+    {
+        lock (_lock)
+        {
+            var list = LoadAll();
+            var index = list.FindIndex(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (index < 0) throw new KeyNotFoundException(id);
+            var def = list[index];
+            if ((onStart || onRestart) &&
+                (def.HostingMode != HostingMode.BareMetal || string.IsNullOrWhiteSpace(def.SteamAppId)))
+                throw new ArgumentException("Automatic updates require a BareMetal server with a Steam App ID.");
+            var updated = def with { AutoUpdateOnStart = onStart, AutoUpdateOnRestart = onRestart };
+            list[index] = updated;
+            SaveAll(list);
+            _registry.Reload();
+            return updated;
+        }
+    }
+
     public bool Delete(string id)
     {
         ServerDef? removedDef = null;
