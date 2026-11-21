@@ -19,22 +19,19 @@ public sealed class DragonwildsConfig : IGameConfig
     private readonly ServerStore _store;
     private readonly IConfiguration _cfg;
     private readonly ILogger<DragonwildsConfig> _logger;
-    private readonly DragonwildsPasswordStore? _passwordStore;
 
     public DragonwildsConfig(
         GuestProcessService guest,
         LocalProcessService local,
         ServerStore store,
         IConfiguration cfg,
-        ILogger<DragonwildsConfig> logger,
-        DragonwildsPasswordStore? passwordStore = null)
+        ILogger<DragonwildsConfig> logger)
     {
         _guest = guest;
         _local = local;
         _store = store;
         _cfg = cfg;
         _logger = logger;
-        _passwordStore = passwordStore;
     }
 
     private GuestCredential GetCred(string? id)
@@ -78,19 +75,15 @@ public sealed class DragonwildsConfig : IGameConfig
         }
 
         var values = Parse(content);
-        // The game can remove AdminPassword while rewriting DedicatedServer.ini.
-        // Prefer the actual INI value; recover the last explicitly saved value
-        // from Agent-encrypted storage only when the key is missing/empty.
-        if (!HasValue(values, "AdminPassword"))
-        {
-            var recovered = _passwordStore?.Load(def.Id);
-            if (!string.IsNullOrWhiteSpace(recovered))
-                values["AdminPassword"] = recovered;
-        }
         values["Port"] = ReadLaunchPort(def, "Port", 7777).ToString();
         var gamePort = int.Parse(values["Port"]);
         values["BeaconPort"] = ReadLaunchPort(def, "BeaconPort", Math.Min(65535, gamePort + 1111)).ToString();
-        values["Administrators"] = ParseAdministratorList(values.TryGetValue("AdministratorList", out var admins) ? admins : "");
+        // AdministratorList is a game-maintained legacy admin history, not a
+        // supported permanent-administrator editing API. Preserve it on disk.
+        // Likewise, AdminPassword is a legacy/host-dependent setting: do not
+        // display or silently reintroduce it after the game deletes the key.
+        values.Remove("AdminPassword");
+        values.Remove("AdministratorList");
         return values;
     }
 
@@ -101,42 +94,13 @@ public sealed class DragonwildsConfig : IGameConfig
 
         var path = LocalIniPath(def);
         if (!File.Exists(path))
-            return "Dragonwilds is not configured yet. Open Configuration and set Owner Player ID, Server name, Default world name and Admin password before the first start.";
+            return "Dragonwilds is not configured yet. Set Owner Player ID, Server name and Default world name in Configuration before starting.";
 
-        var content = await File.ReadAllTextAsync(path, ct);
-        var values = Parse(content);
-        var originalPassword = values.TryGetValue("AdminPassword", out var raw) ? raw : null;
-        if (string.IsNullOrWhiteSpace(originalPassword))
-        {
-            var saved = _passwordStore?.Load(def.Id);
-            if (!string.IsNullOrWhiteSpace(saved))
-            {
-                // Restore only before a launch, never while the game is running.
-                var (ok, pid) = await _local.FindProcessAsync(def.GuestExePath, ct);
-                if (!ok || pid is not null)
-                    return "Cannot restore Dragonwilds Admin password while game process state is uncertain or running.";
-                var lines = content.Replace("\r\n", "\n").Split('\n').ToList();
-                if (!lines.Any(line => line.Trim().Equals(Section, StringComparison.OrdinalIgnoreCase)))
-                    lines.Add(Section);
-                SetKey(lines, "AdminPassword", saved);
-                var output = string.Join("\r\n", lines).TrimEnd('\r', '\n') + "\r\n";
-                if (!await WriteLocalAsync(path, output, ct))
-                    return "Could not restore the saved Dragonwilds Admin password.";
-                values["AdminPassword"] = saved;
-                _logger.LogInformation("Recovered protected Dragonwilds Admin password for server {ServerId}", def.Id);
-            }
-        }
-        else
-        {
-            // Capture existing installations without requiring a new explicit save.
-            // Passwords never appear in log output or in an unencrypted Agent file.
-            _passwordStore?.Save(def.Id, originalPassword);
-        }
+        var values = Parse(await File.ReadAllTextAsync(path, ct));
         var missing = new List<string>();
         if (!HasValue(values, "OwnerId")) missing.Add("Owner Player ID");
         if (!HasValue(values, "ServerName")) missing.Add("Server name");
         if (!HasValue(values, "DefaultWorldName")) missing.Add("Default world name");
-        if (!HasValue(values, "AdminPassword")) missing.Add("Admin password");
         if (missing.Count > 0)
             return "Dragonwilds configuration is incomplete: " + string.Join(", ", missing) + ". Open Configuration and save the required values before starting the server.";
 
@@ -158,29 +122,20 @@ public sealed class DragonwildsConfig : IGameConfig
             : await ReadViaPsDirectAsync(def, path, ct) ?? "";
 
         var merged = Parse(current);
-        if (!HasValue(merged, "AdminPassword"))
-        {
-            var recovered = _passwordStore?.Load(def.Id);
-            if (!string.IsNullOrWhiteSpace(recovered))
-                merged["AdminPassword"] = recovered;
-        }
         foreach (var (key, value) in values)
         {
-            if (key is "Port" or "BeaconPort" or "Administrators") continue;
-            // A blank password field means "keep the previous password", not
-            // "erase the only working administrator credential".
-            if (key.Equals("AdminPassword", StringComparison.OrdinalIgnoreCase) &&
-                string.IsNullOrWhiteSpace(value))
+            if (key.Equals("Port", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("BeaconPort", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("Administrators", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("AdminPassword", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("AdministratorList", StringComparison.OrdinalIgnoreCase))
                 continue;
             merged[key] = value ?? "";
         }
-        if (values.TryGetValue("Administrators", out var administrators))
-            merged["AdministratorList"] = FormatAdministratorList(administrators);
 
         Require(merged, "OwnerId", "Owner Player ID is required by the current Jagex dedicated-server guide.");
         Require(merged, "ServerName", "Server name is required.");
         Require(merged, "DefaultWorldName", "Default world name is required.");
-        Require(merged, "AdminPassword", "Admin password is required.");
 
         var portRaw = values.TryGetValue("Port", out var configuredPort)
             ? configuredPort : ReadLaunchPort(def, "Port", 7777).ToString();
@@ -204,7 +159,7 @@ public sealed class DragonwildsConfig : IGameConfig
 
         foreach (var key in new[]
         {
-            "OwnerId", "ServerName", "DefaultWorldName", "AdminPassword", "WorldPassword", "AdministratorList"
+            "OwnerId", "ServerName", "DefaultWorldName", "WorldPassword"
         })
         {
             if (!merged.TryGetValue(key, out var value)) continue;
@@ -233,12 +188,6 @@ public sealed class DragonwildsConfig : IGameConfig
         {
             try { _store.Update(def.Id, def); }
             catch (Exception rollbackEx) { _logger.LogWarning(rollbackEx, "Dragonwilds ServerDef rollback failed for {Id}", def.Id); }
-        }
-        else if (_passwordStore is not null)
-        {
-            // Commit the encrypted recovery copy only after the game's INI write
-            // succeeded. No plaintext password enters servers.json or Agent logs.
-            _passwordStore.Save(def.Id, merged["AdminPassword"]);
         }
         return writeOk;
     }
@@ -320,23 +269,6 @@ public sealed class DragonwildsConfig : IGameConfig
         result.Add($"-Port={port}");
         result.Add($"-BeaconPort={beaconPort}");
         return result.ToArray();
-    }
-
-    private static string ParseAdministratorList(string value)
-    {
-        var raw = (value ?? "").Trim();
-        if (raw.StartsWith('(') && raw.EndsWith(')') && raw.Length >= 2) raw = raw[1..^1];
-        return string.Join("\n", raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-    }
-
-    private static string FormatAdministratorList(string value)
-    {
-        var ids = (value ?? "").Replace("\r\n", "\n").Split('\n')
-            .Select(x => x.Trim())
-            .Where(x => x.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        return "(" + string.Join(',', ids) + ")";
     }
 
     private static Dictionary<string, string> Parse(string content)
