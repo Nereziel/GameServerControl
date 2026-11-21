@@ -113,6 +113,10 @@ public sealed class ServerStore
             throw new ArgumentException("VmName is required when HostingMode is Vm.");
         if (string.IsNullOrWhiteSpace(def.GuestExePath))
             throw new ArgumentException("GuestExePath is required.");
+        if ((def.AutoUpdateOnStart || def.AutoUpdateOnRestart) &&
+            (def.HostingMode != HostingMode.BareMetal || string.IsNullOrWhiteSpace(def.SteamAppId)))
+            throw new ArgumentException(
+                "Automatic updates require a BareMetal server with a Steam App ID.");
 
         var ports = EffectivePorts(def);
         for (var i = 0; i < ports.Length; i++)

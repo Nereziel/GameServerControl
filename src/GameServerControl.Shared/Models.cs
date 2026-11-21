@@ -84,7 +84,9 @@ public record ServerDef(
     NetworkPort[]? NetworkPorts = null,                 // reserved/listening ports for collision detection and future port-based firewall rules
     int? BackupRetention = null,                        // per-server normal-backup retention override; null uses Agent default
     bool DiscordAlertsOnly = false,                    // when true, send only failure/crash warnings
-    string? GameProfileKey = null                      // Minecraft variant / stable profile identity
+    string? GameProfileKey = null,                     // Minecraft variant / stable profile identity
+    bool AutoUpdateOnStart = false,                   // check SteamCMD before manual Start, default off
+    bool AutoUpdateOnRestart = false                  // check SteamCMD after Stop, before Restart, default off
 );
 
 public record ServerStatus(

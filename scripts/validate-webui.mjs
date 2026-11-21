@@ -292,6 +292,7 @@ try {
   runNode(path.resolve('scripts/test-managed-config-passwords.mjs'), 'Managed game password reload and autofill regression');
   runNode(path.resolve('scripts/test-unified-admin-workspace.mjs'), 'Unified server and system navigation regression');
   runNode(path.resolve('scripts/test-status-stream-ui.mjs'), 'SignalR-first status UI with HTTP fallback');
+  runNode(path.resolve('scripts/test-auto-game-update-ui.mjs'), 'Server auto-update and SteamCMD console regression');
   runNode(path.resolve('scripts/validate-update-ux.mjs'), 'update/install UX contract');
   runNode(path.resolve('scripts/validate-server-admin.mjs'), 'server admin capability contract');
   runNode(path.resolve('scripts/validate-monitoring.mjs'), 'monitoring history contract');
