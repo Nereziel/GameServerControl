@@ -192,6 +192,8 @@ The Web UI is the primary control surface. It supports:
 - live log console where the game exposes a usable log
 - RCON/player management where GameServerControl has a supported handler
 - mods, marketplace search and mod updates where supported
+- **Overview public connection address**: when a game's VPS Relay is enabled, Overview displays the configured VPS public IP/hostname and mapped public game ports with Copy controls. The API's localhost/Tailscale address is never guessed to be a public game address. Relay health is not proof of game-port reachability.
+- **Dragonwilds Admin password recovery**: GSC stores an Agent-encrypted recovery copy of an explicitly saved password and restores the missing `AdminPassword` key before the next game launch if Dragonwilds rewrites `DedicatedServer.ini`. Blank password inputs retain the previous credential. Settings should still be edited with the game stopped.
 - Public VPS relay configuration where configured
 - API token management
 - Agent update checks and Windows self-update

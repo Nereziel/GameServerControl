@@ -227,6 +227,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .sw-metric{min-width:0;padding:12px 14px;background:#101a29;border:1px solid #293b52;border-radius:10px}
 .sw-metric span{display:block;color:#91a4bc;font-size:10px;letter-spacing:.45px;text-transform:uppercase}
 .sw-metric b{display:block;color:#edf4fb;font-size:17px;font-weight:750;letter-spacing:-.2px;line-height:1.55;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.sw-public-endpoint{border-color:#385778;background:#142137}
+.sw-public-host{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.sw-public-address{font-size:17px;font-weight:780;color:#edf4fb;overflow-wrap:anywhere}
+.sw-public-port{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-top:1px solid #304158}
+.sw-public-port .sw-public-address{font-size:14px}
+.sw-public-port .btn{flex-shrink:0}
 .sw-overview-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(250px,1fr);gap:13px;align-items:start}
 .sw-overview-side{display:flex;flex-direction:column;gap:13px;min-width:0}
 .sw-section{min-width:0;margin:0 0 13px;padding:15px;border:1px solid #2c3d53;background:#101a29;border-radius:11px}

@@ -39,7 +39,7 @@ public sealed class DragonwildsDynamicSchema : IDynamicSchemaExtension
             new ConfigField("DefaultWorldName", "Default world name", ConfigFieldType.Text,
                 Description: "Required. Used when the server creates a new world and shown in the Worlds browser."),
             new ConfigField("AdminPassword", "Admin password", ConfigFieldType.Password,
-                Description: "Required. Grants access to the in-game Server Management screen."),
+                Description: "Required for in-game Server Management. GSC retains an encrypted recovery copy and restores it before Start if Dragonwilds removed the INI entry. A blank field on Save keeps the current password."),
             new ConfigField("WorldPassword", "World password", ConfigFieldType.Password,
                 Description: "Optional. Overrides the password stored in the selected world; empty means no join password."),
             new ConfigField("Administrators", "Permanent administrators", ConfigFieldType.Multiline,

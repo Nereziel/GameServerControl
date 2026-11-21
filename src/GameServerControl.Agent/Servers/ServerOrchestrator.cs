@@ -233,13 +233,6 @@ public sealed class ServerOrchestrator
         if (def.HostingMode == HostingMode.Vm && profile is not null && !profile.Capabilities.HyperV)
             return new ActionResult(false, $"{profile.Label} is supported only in BareMetal hosting mode.", corr);
 
-        if (def.SteamAppId == "4019830")
-        {
-            var readinessError = await _dragonwildsConfig.ValidateForStartAsync(def, ct);
-            if (!string.IsNullOrWhiteSpace(readinessError))
-                return new ActionResult(false, readinessError, corr);
-        }
-
         await LogAsync(id, "orch", $"Start requested ({def.HostingMode})");
         if (ShouldAutoUpdate(def, fromRestart))
         {
@@ -258,6 +251,14 @@ public sealed class ServerOrchestrator
             }
             // If Start was requested while a game was already running,
             // StartBareMetalAsync will report Already running without updating.
+        }
+        // SteamCMD may rewrite DedicatedServer.ini during auto-update.
+        // Validate/recover protected Dragonwilds settings after all file updates.
+        if (def.SteamAppId == "4019830")
+        {
+            var readinessError = await _dragonwildsConfig.ValidateForStartAsync(def, ct);
+            if (!string.IsNullOrWhiteSpace(readinessError))
+                return StartFailure(id, corr, readinessError);
         }
         return def.HostingMode == HostingMode.BareMetal
             ? await StartBareMetalAsync(def, corr, ct)
