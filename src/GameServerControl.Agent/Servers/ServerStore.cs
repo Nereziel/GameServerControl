@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using GameServerControl.Agent.Config;
 using GameServerControl.Agent.Networking;
 using GameServerControl.Agent.Notifications;
 using GameServerControl.Agent.Security;
@@ -23,12 +24,15 @@ public sealed class ServerStore
     private readonly ServerRegistry _registry;
     private readonly ILogger<ServerStore> _logger;
     private readonly SecretProtector _protector;
+    private readonly DragonwildsPasswordStore? _dragonwildsPasswords;
     private readonly object _lock = new();
 
-    public ServerStore(IConfiguration cfg, IHostEnvironment env, ServerRegistry registry, ILogger<ServerStore> logger)
+    public ServerStore(IConfiguration cfg, IHostEnvironment env, ServerRegistry registry, ILogger<ServerStore> logger,
+        DragonwildsPasswordStore? dragonwildsPasswords = null)
     {
         _registry = registry;
         _logger = logger;
+        _dragonwildsPasswords = dragonwildsPasswords;
         var configured = cfg["Agent:ServersJsonPath"] ?? "servers.json";
         _path = Path.IsPathRooted(configured) ? configured : Path.Combine(env.ContentRootPath, configured);
         var dataDir = cfg["Agent:DataDir"] ?? env.ContentRootPath;
@@ -105,6 +109,11 @@ public sealed class ServerStore
             _registry.Reload();
         }
 
+        if (removedDef.SteamAppId == "4019830")
+        {
+            try { _dragonwildsPasswords?.Remove(id); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Could not clear protected Dragonwilds password for removed server {Id}", id); }
+        }
         if (!WindowsFirewall.RemoveProgramRules(id, out var firewallError))
             _logger.LogWarning("Could not remove Windows Firewall rules for {Id}: {Error}", id, firewallError);
         return true;

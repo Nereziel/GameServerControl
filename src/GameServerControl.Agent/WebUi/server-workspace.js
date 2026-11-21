@@ -432,6 +432,69 @@ async function renderServerWorkspaceTab(def, tab) {
   }
 }
 
+// The public join address comes exclusively from the configured VPS Relay.
+// The Agent API URL is often localhost/Tailscale and is NOT a public game IP.
+function serverWorkspaceConnectionDetails(relay) {
+  const enabled=relay?.enabled===true;
+  const configured=relay?.configured===true;
+  const publicHost=enabled&&configured?String(relay.publicAddress||'').trim():'';
+  const targetHost=enabled&&configured?String(relay.targetAddress||'').trim():'';
+  const ports=enabled&&configured&&publicHost&&Array.isArray(relay.ports)
+    ?relay.ports.filter(port=>{
+      const start=Number(port.publicPort),end=port.publicEndPort==null?start:Number(port.publicEndPort);
+      return Number.isInteger(start)&&Number.isInteger(end)&&start>=1&&end<=65535&&end>=start;
+    }).map(port=>({
+      name:String(port.name||'Game port'),
+      protocol:String(port.protocol||'').toUpperCase(),
+      start:Number(port.publicPort),
+      end:port.publicEndPort==null?Number(port.publicPort):Number(port.publicEndPort)
+    })):[];
+  // Put the main gameplay port ahead of beacon/query/RCON entries.
+  ports.sort((a,b)=>Number(!/^game$/i.test(a.name))-Number(!/^game$/i.test(b.name)));
+  return {enabled,configured,publicHost,targetHost,ports,reachable:relay?.reachable===true};
+}
+function serverWorkspaceConnectionHost(host) {
+  return host.includes(':')&&!host.startsWith('[')?'['+host+']':host;
+}
+function serverWorkspaceRenderConnectionDetails(relay) {
+  const info=serverWorkspaceConnectionDetails(relay);
+  if(!info.enabled)
+    return '<div class="tiny muted">No public VPS Relay route enabled for this server. A public game IP cannot be inferred from the Agent URL.</div>';
+  if(!info.configured)
+    return '<div class="tiny muted">VPS Relay is enabled, but not configured. Configure the Relay under Settings.</div>';
+  if(!info.publicHost)
+    return '<div class="tiny muted">Public IP / hostname is not configured. Set the VPS Public address under Settings → Public Relay.</div>';
+  const addresses=info.ports.map(port=>{
+    const hostPort=serverWorkspaceConnectionHost(info.publicHost)+':'+port.start;
+    const range=port.end===port.start?'':'–'+port.end;
+    return `<div class="sw-public-port"><div><div class="tiny muted">${esc(port.name)} · ${esc(port.protocol)} ${esc(port.start+range)}</div><div class="sw-public-address mono">${esc(hostPort)}</div></div><button type="button" class="btn btn-small" ${uiAction('serverWorkspaceCopyPublicAddress',[hostPort])}>Copy</button></div>`;
+  }).join('');
+  const note=info.reachable?'Relay API reachable; game port reachability is not verified.':
+    'Relay API not reachable; public game connection is not verified.';
+  return `<div class="sw-public-host"><span class="sw-public-address mono">${esc(info.publicHost)}</span><button type="button" class="btn btn-small" ${uiAction('serverWorkspaceCopyPublicAddress',[info.publicHost])}>Copy IP</button></div>${addresses||'<div class="tiny muted">No public game ports configured for this Relay route.</div>'}<div class="tiny muted">${esc(note)}</div>${info.targetHost?`<div class="tiny muted">Private/Tailscale target: ${esc(info.targetHost)} (not public)</div>`:''}`;
+}
+async function serverWorkspaceRefreshPublicAddress(id) {
+  const target=$('#swPublicConnection');
+  if(!target||SERVER_WORKSPACE.serverId!==id)return;
+  target.textContent='Loading configured public address…';
+  try{
+    const relay=await api(`/api/servers/${encodeURIComponent(id)}/relay`);
+    if(!target.isConnected||SERVER_WORKSPACE.serverId!==id)return;
+    target.innerHTML=serverWorkspaceRenderConnectionDetails(relay);
+  }catch(e){
+    if(target.isConnected&&SERVER_WORKSPACE.serverId===id)
+      target.textContent='Public address unavailable: '+e.message;
+  }
+}
+async function serverWorkspaceCopyPublicAddress(address) {
+  try{
+    await navigator.clipboard.writeText(address);
+    toast('Address copied.', 'ok');
+  }catch(e){toast('Copy failed: '+e.message, 'err')}
+}
+window.serverWorkspaceRefreshPublicAddress=serverWorkspaceRefreshPublicAddress;
+window.serverWorkspaceCopyPublicAddress=serverWorkspaceCopyPublicAddress;
+
 function renderServerOverview(def, body) {
   const status = serverWorkspaceStatus(def.id);
   const ports = effectiveNetworkPorts(def);
@@ -444,7 +507,7 @@ function renderServerOverview(def, body) {
     ['Backups & automation', 'Snapshots and scheduled jobs', 'maintenance'],
     ['Diagnostics', 'Errors and operation history', 'diagnostics']
   ];
-  body.innerHTML = `<div class="sw-metrics">
+  body.innerHTML = `<section class="sw-section sw-public-endpoint"><div class="sw-section-heading"><h3>Public server address</h3><button type="button" class="btn btn-small" ${uiAction('serverWorkspaceRefreshPublicAddress',[def.id])}>Refresh</button></div><div id="swPublicConnection">Loading configured public address…</div></section><div class="sw-metrics">
       <div class="sw-metric"><span>Processor</span><b id="swCpu">${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></div>
       <div class="sw-metric"><span>Memory</span><b id="swRam">${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></div>
       <div class="sw-metric"><span>Process ID</span><b id="swPid">${status.pidInGuest ?? '—'}</b></div>
@@ -471,6 +534,7 @@ function renderServerOverview(def, body) {
         </section>
       </div>
     </div>`;
+  void serverWorkspaceRefreshPublicAddress(def.id);
 }
 
 function serverDiagnosticTime(at) {

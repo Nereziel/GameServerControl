@@ -130,6 +130,7 @@ builder.Services.AddSingleton<ValheimConfig>();
 builder.Services.AddSingleton<PalworldConfig>();
 builder.Services.AddSingleton<WindroseConfig>();
 builder.Services.AddSingleton<SatisfactoryConfig>();
+builder.Services.AddSingleton<DragonwildsPasswordStore>();
 builder.Services.AddSingleton<DragonwildsConfig>();
 builder.Services.AddSingleton<GameServerControl.Agent.Admin.SatisfactoryAdminClient>();
 builder.Services.AddSingleton<IDynamicSchemaExtension, PalworldDynamicSchema>();
@@ -520,6 +521,7 @@ api.MapDelete("/servers/{id}/relay", async (string id, ServerRegistry reg, Publi
 
 api.MapGet("/servers/{id}/config", async (
     string id,
+    HttpContext ctx,
     ServerRegistry reg,
     GameConfigFactory factory,
     IEnumerable<IDynamicSchemaExtension> dynamicExtensions,
@@ -551,6 +553,14 @@ api.MapGet("/servers/{id}/config", async (
     // Vendor config keys may differ in casing from schema fields. The browser
     // compares JSON property names case-sensitively, including password fields.
     var displayValues = composedSchema is null ? values : ManagedConfigValues.Canonicalize(composedSchema, values);
+    // The protected Dragonwilds password recovery copy must not be disclosed to
+    // ReadOnly API tokens. The existing config form remains available to Admins.
+    if (def.SteamAppId == "4019830" &&
+        !ctx.User.HasClaim(TokenAuthHandler.RoleClaim, "Admin"))
+    {
+        displayValues.Remove("AdminPassword");
+        displayValues.Remove("WorldPassword");
+    }
     return Results.Ok(new { schema = composedSchema, values = displayValues });
 });
 
