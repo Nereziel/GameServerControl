@@ -8,8 +8,8 @@ namespace GameServerControl.Agent.IntegrationTests;
 
 /// <summary>
 /// Current Dragonwilds owner access uses the in-game My Player ID. Older
-/// AdminPassword/AdministratorList fields may exist in an existing INI, but
-/// the Agent must neither require them nor resurrect deleted credentials.
+/// AdminPassword may exist in an older INI but is never required or restored.
+/// AdministratorList is optional and editable as an advanced legacy field.
 /// </summary>
 public sealed class DragonwildsCurrentSettingsTests
 {
@@ -58,15 +58,21 @@ public sealed class DragonwildsCurrentSettingsTests
         Assert.Contains("Port", fields);
         Assert.Contains("BeaconPort", fields);
         Assert.DoesNotContain("AdminPassword", fields);
-        Assert.DoesNotContain("Administrators", fields);
+        Assert.Contains("Administrators", fields);
+        Assert.DoesNotContain("AdministratorList", fields);
+        Assert.False(displayed.Values.ContainsKey("AdminPassword"));
 
         // Legacy keys and game-generated metadata are preserved by a regular
         // config edit; they are not converted into live UI settings.
         File.AppendAllText(configPath,
             "AdminPassword=legacy-value\r\nAdministratorList=(legacy-admin)\r\nServerGuid=fixture-guid\r\n");
+        var observed = await config.ReadAsync(def, CancellationToken.None);
+        Assert.Equal("legacy-admin", observed["Administrators"]);
+        Assert.False(observed.ContainsKey("AdministratorList"));
         Assert.True(await config.WriteAsync(def, new Dictionary<string,string>
         {
             ["ServerName"] = "Renamed server",
+            ["Administrators"] = "legacy-admin", // unchanged: don't rewrite game-owned history
             ["AdminPassword"] = "should-not-override",
             ["AdministratorList"] = "(should-not-override)"
         }, CancellationToken.None));
@@ -78,12 +84,33 @@ public sealed class DragonwildsCurrentSettingsTests
         Assert.Contains("ServerGuid=fixture-guid", text, StringComparison.Ordinal);
         Assert.DoesNotContain("should-not-override", text, StringComparison.Ordinal);
 
+        // Advanced administrator field may be explicitly changed without the
+        // deprecated AdminPassword feature.
+        Assert.True(await config.WriteAsync(def, new Dictionary<string,string>
+        {
+            ["Administrators"] = "player-one\nplayer-two",
+        }, CancellationToken.None));
+        text = File.ReadAllText(configPath);
+        Assert.Contains("AdministratorList=(player-one,player-two)", text, StringComparison.Ordinal);
+        Assert.Equal("player-one\nplayer-two",
+            (await config.ReadAsync(def, CancellationToken.None))["Administrators"]);
+
+        // Invalid entries must not allow INI section/line injection.
+        await Assert.ThrowsAsync<ArgumentException>(() => config.WriteAsync(def,
+            new Dictionary<string,string> { ["Administrators"] = "player-one\n[BadSection]" },
+            CancellationToken.None));
+
         // Simulate current game removing the old admin-password line.
         File.WriteAllText(configPath,
             File.ReadAllText(configPath).Replace("AdminPassword=legacy-value\r\n", "", StringComparison.Ordinal));
         Assert.Null(await config.ValidateForStartAsync(def, CancellationToken.None));
         Assert.DoesNotContain("AdminPassword=", File.ReadAllText(configPath), StringComparison.Ordinal);
         Assert.False((await config.ReadAsync(def, CancellationToken.None)).ContainsKey("AdminPassword"));
+        Assert.True(await config.WriteAsync(def, new Dictionary<string,string>
+        {
+            ["Administrators"] = ""
+        }, CancellationToken.None));
+        Assert.Contains("AdministratorList=()", File.ReadAllText(configPath), StringComparison.Ordinal);
     }
 
     [Fact]

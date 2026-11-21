@@ -128,7 +128,7 @@ public static class GameProfiles
             new[]{ "-log", "-NewConsole", "-Port=7777", "-BeaconPort=8888" },
             new[]{ @"{root}\RSDragonwilds\Saved\Savegames" }, @"{root}\RSDragonwilds\Saved\Logs\RSDragonwilds.log",
             new GameCapabilities(ManagedConfig: true, LiveLog: true, HyperV: false, ConsoleMode: GameConsoleMode.LogOnly),
-            Notes: "BareMetal profile. UDP game and beacon ports default to 7777/8888. Configure Owner Player ID (in-game My Player ID, not SteamID64), server name and default world name. Join password is optional. Legacy AdminPassword and AdministratorList entries are preserved but are not required or restored by GSC.",
+            Notes: "BareMetal profile. UDP game and beacon ports default to 7777/8888. Configure Owner Player ID (in-game My Player ID, not SteamID64), server name and default world name. Join password is optional. Legacy AdminPassword is preserved but never required or restored. AdministratorList remains available as an optional advanced field; the game's in-game Player List is recommended for assigning permissions.",
             Installable: true, EstimatedSize: "~20 GB disk recommended",
             DefaultPorts: new[]{ new NetworkPort("Game", NetworkProtocol.Udp, 7777), new NetworkPort("Beacon", NetworkProtocol.Udp, 8888) },
             LinuxExecutableRelative: "RSDragonwildsServer.sh",

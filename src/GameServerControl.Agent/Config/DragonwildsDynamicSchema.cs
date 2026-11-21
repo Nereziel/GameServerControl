@@ -40,6 +40,8 @@ public sealed class DragonwildsDynamicSchema : IDynamicSchemaExtension
                 Description: "Required. Used when the server creates a new world and shown in the Worlds browser."),
             new ConfigField("WorldPassword", "Server (join) password", ConfigFieldType.Password,
                 Description: "Optional. Required for players joining only when set. Leave empty to allow joining without a password."),
+            new ConfigField("Administrators", "AdministratorList (advanced)", ConfigFieldType.Multiline,
+                Description: "Optional legacy list from DedicatedServer.ini. One Dragonwilds Player ID per line. The game may manage or overwrite this list, and editing it is not verified to grant admin in current builds. For reliable admin assignment, use the in-game Player List as owner."),
             new ConfigField("Port", "Game port", ConfigFieldType.Integer,
                 Description: "Main UDP game port. Jagex default: 7777. GameServerControl uses ports 1024+ so the unprivileged Linux Agent can bind them without extra capabilities.",
                 Default: "7777", Min: 1024, Max: 65535),
