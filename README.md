@@ -185,6 +185,7 @@ The Web UI is the primary control surface. It supports:
 - SteamCMD server updates
 - Optional **Auto-update on Start** and **Auto-update on Restart** per BareMetal Steam game (both off by default). The game must be stopped, and the existing mandatory pre-update safety backup must complete before SteamCMD runs. Failure blocks startup. Restart uses its own preference, not the Start preference.
 - A prominently visible **Update** action beside Start / Stop / Restart. Clicking it opens **Backups & automation**, where the **SteamCMD update console** streams incremental progress and the final error (including SteamCMD exit codes). The log is held only in bounded Agent memory and available only to an Admin; game updates are serialized with Start, Stop and Restart.
+- The **Servers** dashboard (including **All computers**) uses full-width, stacked server rows instead of tile cards. Each row shows game, process state and resource usage with **Start**, **Stop**, **Restart**, **Update** and **Manage** controls. Quick actions are disabled when inappropriate or ReadOnly; All computers actions first select the target Agent. A missing Steam App ID disables Update.
 - backups and restore
 - schedules
 - game-aware configuration

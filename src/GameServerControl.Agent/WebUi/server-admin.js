@@ -69,7 +69,7 @@ async function runConsole(id){const input=$('#consoleIn'),out=$('#consoleOut'),c
 
 /* Authenticated identity and ReadOnly UX. Backend authorization remains authoritative. */
 let AUTH={id:null,name:null,role:null};
-const ADMIN_MUTATION_CALLS=/^(?:action|manageAction|rconPlayer|runConsole|testDiscordEdit|serverWorkspace(?:Save|Create|Restore|Delete|Send|Reset|Clear|PlayerAction|Admin)\w*|gscFiles(?:Save|Restore))$/i;
+const ADMIN_MUTATION_CALLS=/^(?:action|manageAction|rconPlayer|runConsole|testDiscordEdit|serverWorkspace(?:HostAction|Save|Create|Restore|Delete|Send|Reset|Clear|PlayerAction|Admin)\w*|gscFiles(?:Save|Restore))$/i;
 const ADMIN_MUTATION_PREFIXES=['save','delete','remove','install','update','start','stop','restart','apply','backup','restore','ban','kick','send','clear','create','add','cancel','recover'];
 const ADMIN_NAV_CALLS=/^(?:openCreate|openAddExisting|openTokens|openUpdate)$/i;
 const ADMIN_STATIC_IDS=['updateBtn','createServerBtn','addExistingBtn','tokensBtn','manageHostsBtn'];

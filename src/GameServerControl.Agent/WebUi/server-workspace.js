@@ -217,6 +217,78 @@ function serverWorkspaceConfirmLeave() {
 
 
 
+function serverWorkspaceRenderListActions(id, name, state, steamAppId, hostId = null) {
+  const up = state === 'Running';
+  const busy = ['Starting', 'Stopping', 'Restarting', 'Working'].includes(state) ||
+    (hostId === null && !!GSCUX.actions[id]);
+  const readOnly = isReadOnly();
+  const route = op => hostId === null
+    ? uiAction('action', [id, op])
+    : uiAction('serverWorkspaceHostAction', [hostId, id, op]);
+  const button = (op, text, disabled, extraClass = '', reason = '') =>
+    `<button type="button" class="btn sw-list-action ${extraClass}" ${disabled ? 'disabled' : ''}
+       aria-label="${esc(text + ' ' + name)}" ${reason ? 'title="' + esc(reason) + '"' : ''}
+       ${route(op)}>${text}</button>`;
+  const updateReason = !steamAppId ? 'No Steam App ID configured'
+    : up ? 'Stop the server before updating game files' : 'Update and validate game files';
+  return button('start', 'Start', up || busy || readOnly, 'primary') +
+    button('stop', 'Stop', !up || busy || readOnly, 'danger') +
+    button('restart', 'Restart', !up || busy || readOnly) +
+    button('update', 'Update', up || busy || readOnly || !steamAppId, '', updateReason);
+}
+
+function serverWorkspaceRenderListRow(def, status, options = {}) {
+  const remoteHostId = options.hostId ?? null;
+  const isHostOverview = remoteHostId !== null;
+  const meta = isHostOverview
+    ? {icon: '▣', label: def.gameType || 'Game server'}
+    : serverMeta(def);
+  const actual = status.processState || 'Unknown';
+  const pending = isHostOverview ? null : GSCUX.actions[def.id];
+  const display = pending?.state || actual;
+  const subtitle = esc(meta.label) + ' · ' +
+    esc(isHostOverview ? (options.hostName || '') :
+      def.hostingMode === 'Vm' ? 'Hyper-V' : 'This computer');
+  const open = isHostOverview
+    ? uiAction('selectHostAndOpen', [remoteHostId, def.id])
+    : uiAction('openServerPage', [def.id, 'overview']);
+  const num = value => value == null ? '—' : esc(value);
+  const cpu = status.cpuPercent == null ? '—' : Number(status.cpuPercent).toFixed(1) + '%';
+  const ram = status.memoryMB == null ? '—' : status.memoryMB + ' MB';
+  const hasError = isHostOverview ? status.hasError : !!status.lastError;
+  return `<div class="sw-server-list-row" role="listitem">
+    <div class="sw-list-identity">
+      <span class="sw-list-icon" aria-hidden="true">${esc(meta.icon)}</span>
+      <div class="sw-list-name-wrap">
+        <button class="sw-list-name" type="button" ${open}>${esc(def.name)}</button>
+        <div class="sw-list-sub">${subtitle}${hasError
+          ? ' · <span class="sw-list-error">Needs attention</span>' : ''}</div>
+      </div>
+    </div>
+    <span class="sw-card-state ${serverWorkspaceStateClass(display)}" aria-label="Server status: ${esc(display)}"><i aria-hidden="true"></i>${esc(display)}</span>
+    <div class="sw-list-metrics">
+      <span><small>CPU</small><b>${esc(cpu)}</b></span>
+      <span><small>RAM</small><b>${esc(ram)}</b></span>
+      <span><small>PID</small><b>${num(status.pidInGuest)}</b></span>
+    </div>
+    <div class="sw-list-actions" role="group" aria-label="Actions for ${esc(def.name)}">
+      ${serverWorkspaceRenderListActions(def.id, def.name, actual, def.steamAppId, remoteHostId)}
+      <button type="button" class="btn sw-list-action sw-list-manage" ${open}
+        aria-label="Manage ${esc(def.name)}">Manage</button>
+    </div>
+  </div>`;
+}
+
+async function serverWorkspaceHostAction(hostId, serverId, operation) {
+  if (isReadOnly() || !['start', 'stop', 'restart', 'update'].includes(operation)) return;
+  if (ACTIVE_HOST_ID !== hostId) await selectHost(hostId);
+  if (ACTIVE_HOST_ID !== hostId) return;
+  if (!SERVERS.some(def => def.id === serverId))
+    return toast('The selected server is no longer available on this computer.', 'err');
+  await action(serverId, operation);
+}
+window.serverWorkspaceHostAction = serverWorkspaceHostAction;
+
 function renderAllHostDashboard(root){
   const groups=Array.isArray(HOST_OVERVIEW)?HOST_OVERVIEW:[];
   const entries=groups.flatMap(host=>(host.servers||[]).map(server=>({host,server})));
@@ -236,29 +308,15 @@ function renderAllHostDashboard(root){
         .some(value=>String(value||'').toLocaleLowerCase().includes(query));
     });
     if(host.online&&!filtered.length&&(query||filter!=='all'))return '';
-    const cards=filtered.map(server=>{
-      const state=server.processState||'Unknown';
-      const cpu=server.cpuPercent==null?'—':Number(server.cpuPercent).toFixed(1)+'%';
-      const ram=server.memoryMB==null?'—':server.memoryMB+' MB';
-      const backup=server.lastBackupAt?new Date(server.lastBackupAt).toLocaleDateString():'Not yet';
-      return '<button type="button" class="sw-server-card" '+
-        uiAction('selectHostAndOpen',[host.id,server.id])+
-        ' aria-label="Manage '+esc(server.name)+' on '+esc(host.name)+'">'+
-        '<span class="sw-card-head"><span class="sw-card-icon">▣</span><span class="grow">'+
-        '<span class="sw-card-title">'+esc(server.name)+'</span><span class="sw-card-sub">'+
-        esc(server.gameType)+' · '+esc(host.name)+'</span></span>'+
-        '<span class="sw-card-state '+serverWorkspaceStateClass(state)+'">'+esc(state)+'</span></span>'+
-        '<span class="sw-card-metrics"><span>CPU<b>'+esc(cpu)+'</b></span><span>RAM<b>'+esc(ram)+
-        '</b></span><span>PID<b>'+esc(server.pidInGuest??'—')+'</b></span></span>'+
-        '<span class="sw-card-foot"><span>'+(server.hasError?'Attention needed':'Backup: '+esc(backup))+
-        '</span><span class="sw-card-open">Manage →</span></span></button>';
-    }).join('');
+    const rows = filtered.map(server =>
+      serverWorkspaceRenderListRow(server, server, {hostId: host.id, hostName: host.name})
+    ).join('');
     return '<section class="host-group"><div class="host-group-head"><div>'+
       '<div class="host-group-name">'+esc(host.name)+(host.isLocal?' <span class="tiny muted">(this computer)</span>':'')+
       '</div><div class="host-group-caption">'+esc(host.id)+'</div></div>'+
       '<span class="host-group-state '+(host.online?'':'offline')+'">'+(host.online?'Online':'Offline')+'</span>'+
       '<span class="host-group-count">'+esc((host.servers||[]).length)+' servers</span></div>'+
-      (host.online?(cards?'<div class="sw-server-grid">'+cards+'</div>':
+      (host.online?(rows?'<div class="sw-server-list" role="list">'+rows+'</div>':
       '<div class="sw-empty">No servers registered on this computer.</div>'):
       '<div class="host-group-offline">Computer unreachable. Check the Agent, network and managed tokens.</div>')+
       '</section>';
@@ -321,19 +379,11 @@ renderServers = function () {
     const bOnline = serverWorkspaceStatus(b.id).processState === 'Running' ? 0 : 1;
     return aOnline - bOnline || a.name.localeCompare(b.name);
   });
-  const cards = filtered.map(def => {
-    const status = serverWorkspaceStatus(def.id);
-    const meta = serverMeta(def);
-    const state = actionVisual(def.id, status.processState || 'Unknown');
-    const lastBackup = status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleDateString() : 'Not yet';
-    return `<button type="button" class="sw-server-card" ${uiAction('openServerPage',[def.id,'overview'])} aria-label="Manage ${esc(def.name)}">
-      <span class="sw-card-head"><span class="sw-card-icon" aria-hidden="true">${esc(meta.icon)}</span><span class="grow"><span class="sw-card-title">${esc(def.name)}</span><span class="sw-card-sub">${esc(meta.label)} · ${def.hostingMode === 'Vm' ? 'Hyper-V' : 'Local host'}</span></span><span class="sw-card-state ${serverWorkspaceStateClass(state)}"><i aria-hidden="true"></i>${esc(state)}</span></span>
-      <span class="sw-card-metrics"><span>CPU<b>${status.cpuPercent != null ? Number(status.cpuPercent).toFixed(1) + '%' : '—'}</b></span><span>RAM<b>${status.memoryMB != null ? status.memoryMB + ' MB' : '—'}</b></span><span>PID<b>${status.pidInGuest ?? '—'}</b></span></span>
-      <span class="sw-card-foot"><span>${status.lastError ? '<span class="card-error-dot" aria-hidden="true">!</span> Needs attention' : 'Backup: ' + esc(lastBackup)}</span><span class="sw-card-open">Manage <span aria-hidden="true">→</span></span></span>
-    </button>`;
-  }).join('');
+  const rows = filtered.map(def =>
+    serverWorkspaceRenderListRow(def, serverWorkspaceStatus(def.id))
+  ).join('');
   root.innerHTML = stats + `<div class="dashboard-section-head"><div><h2>Your servers</h2><p>Monitor and manage your game instances.</p></div><span class="dashboard-count">${filtered.length} of ${SERVERS.length}</span></div>` +
-    (filtered.length ? `<div class="sw-server-grid">${cards}</div>` :
+    (filtered.length ? `<div class="sw-server-list" role="list">${rows}</div>` :
       '<div class="empty filtered-empty"><h2>No matching servers</h2><p>Try another search term or status filter.</p></div>');
 };
 
