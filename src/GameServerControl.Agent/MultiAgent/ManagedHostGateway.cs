@@ -12,7 +12,8 @@ namespace GameServerControl.Agent.MultiAgent;
 public sealed record HostServerSummary(
     string Id, string Name, string GameType, string HostingMode,
     string ProcessState, double? CpuPercent, long? MemoryMB,
-    int? PidInGuest, DateTimeOffset? LastBackupAt, bool HasError);
+    int? PidInGuest, DateTimeOffset? LastBackupAt, bool HasError,
+    string? SteamAppId = null);
 
 public sealed record ManagedHostSummary(
     string Id, string Name, bool IsLocal, bool Online,
@@ -72,7 +73,7 @@ public sealed class ManagedHostGateway
             return new HostServerSummary(def.Id, def.Name, def.GameType.ToString(),
                 def.HostingMode.ToString(), status.ProcessState.ToString(),
                 status.CpuPercent, status.MemoryMB, status.PidInGuest, status.LastBackupAt,
-                !string.IsNullOrEmpty(status.LastError));
+                !string.IsNullOrEmpty(status.LastError), def.SteamAppId);
         }).ToArray();
 
         var response = new List<ManagedHostSummary>
@@ -127,7 +128,8 @@ public sealed class ManagedHostGateway
                     ReadString(status, "processState", "Unknown"),
                     ReadDouble(status, "cpuPercent"), ReadLong(status, "memoryMB"),
                     ReadInt(status, "pidInGuest"), ReadDate(status, "lastBackupAt"),
-                    !string.IsNullOrEmpty(ReadString(status, "lastError"))));
+                    !string.IsNullOrEmpty(ReadString(status, "lastError")),
+                    ReadString(def, "steamAppId")));
             }
             return new ManagedHostSummary(host.Id, host.Name, false, true, null, servers);
         }
