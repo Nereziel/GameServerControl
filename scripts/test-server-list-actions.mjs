@@ -7,7 +7,7 @@ const styles=fs.readFileSync('src/GameServerControl.Agent/WebUi/styles.css','utf
 const gateway=fs.readFileSync('src/GameServerControl.Agent/MultiAgent/ManagedHostGateway.cs','utf8');
 const admin=fs.readFileSync('src/GameServerControl.Agent/WebUi/server-admin.js','utf8');
 const start=work.indexOf('function serverWorkspaceRenderListActions(');
-const end=work.indexOf('function renderAllHostDashboard(',start);
+const end=work.indexOf('renderServers = function ()',start);
 assert.ok(start>=0&&end>start, 'The new shared horizontal list renderer exists');
 const esc=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;')
   .replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');

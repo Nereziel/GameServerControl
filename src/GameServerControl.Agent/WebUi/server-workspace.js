@@ -217,6 +217,43 @@ function serverWorkspaceConfirmLeave() {
 
 
 
+function renderAllHostDashboard(root){
+  const groups=Array.isArray(HOST_OVERVIEW)?HOST_OVERVIEW:[];
+  const entries=groups.flatMap(host=>(host.servers||[]).map(server=>({host,server})));
+  const running=entries.filter(x=>x.server.processState==='Running').length;
+  const issues=entries.filter(x=>x.server.hasError).length+groups.filter(x=>!x.online).length;
+  const metrics=[['Game servers',entries.length],['Running',running],
+    ['Online computers',groups.filter(x=>x.online).length+'/'+groups.length],['Attention needed',issues]];
+  const stats='<div class="dashboard-stats">'+metrics.map(([label,value])=>
+    '<div class="dashboard-stat"><div><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong></div></div>'
+  ).join('')+'</div>';
+  const query=SERVER_FILTER.query, filter=SERVER_FILTER.state;
+  const sections=groups.map(host=>{
+    const filtered=(host.servers||[]).filter(server=>{
+      if(filter==='running'&&server.processState!=='Running')return false;
+      if(filter==='stopped'&&server.processState==='Running')return false;
+      return !query||[host.name,server.id,server.name,server.gameType]
+        .some(value=>String(value||'').toLocaleLowerCase().includes(query));
+    });
+    if(host.online&&!filtered.length&&(query||filter!=='all'))return '';
+    const rows = filtered.map(server =>
+      serverWorkspaceRenderListRow(server, server, {hostId: host.id, hostName: host.name})
+    ).join('');
+    return '<section class="host-group"><div class="host-group-head"><div>'+
+      '<div class="host-group-name">'+esc(host.name)+(host.isLocal?' <span class="tiny muted">(this computer)</span>':'')+
+      '</div><div class="host-group-caption">'+esc(host.id)+'</div></div>'+
+      '<span class="host-group-state '+(host.online?'':'offline')+'">'+(host.online?'Online':'Offline')+'</span>'+
+      '<span class="host-group-count">'+esc((host.servers||[]).length)+' servers</span></div>'+
+      (host.online?(rows?'<div class="sw-server-list" role="list">'+rows+'</div>':
+      '<div class="sw-empty">No servers registered on this computer.</div>'):
+      '<div class="host-group-offline">Computer unreachable. Check the Agent, network and managed tokens.</div>')+
+      '</section>';
+  }).filter(Boolean).join('');
+  root.innerHTML=stats+'<div class="dashboard-section-head"><div><h2>All computers</h2>'+
+    '<p>Central overview of your registered Agent hosts.</p></div></div>'+
+    (sections||'<div class="empty">No computers matched the current filter.</div>');
+}
+
 function serverWorkspaceRenderListActions(id, name, state, steamAppId, hostId = null) {
   const up = state === 'Running';
   const busy = ['Starting', 'Stopping', 'Restarting', 'Working'].includes(state) ||
@@ -288,43 +325,6 @@ async function serverWorkspaceHostAction(hostId, serverId, operation) {
   await action(serverId, operation);
 }
 window.serverWorkspaceHostAction = serverWorkspaceHostAction;
-
-function renderAllHostDashboard(root){
-  const groups=Array.isArray(HOST_OVERVIEW)?HOST_OVERVIEW:[];
-  const entries=groups.flatMap(host=>(host.servers||[]).map(server=>({host,server})));
-  const running=entries.filter(x=>x.server.processState==='Running').length;
-  const issues=entries.filter(x=>x.server.hasError).length+groups.filter(x=>!x.online).length;
-  const metrics=[['Game servers',entries.length],['Running',running],
-    ['Online computers',groups.filter(x=>x.online).length+'/'+groups.length],['Attention needed',issues]];
-  const stats='<div class="dashboard-stats">'+metrics.map(([label,value])=>
-    '<div class="dashboard-stat"><div><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong></div></div>'
-  ).join('')+'</div>';
-  const query=SERVER_FILTER.query, filter=SERVER_FILTER.state;
-  const sections=groups.map(host=>{
-    const filtered=(host.servers||[]).filter(server=>{
-      if(filter==='running'&&server.processState!=='Running')return false;
-      if(filter==='stopped'&&server.processState==='Running')return false;
-      return !query||[host.name,server.id,server.name,server.gameType]
-        .some(value=>String(value||'').toLocaleLowerCase().includes(query));
-    });
-    if(host.online&&!filtered.length&&(query||filter!=='all'))return '';
-    const rows = filtered.map(server =>
-      serverWorkspaceRenderListRow(server, server, {hostId: host.id, hostName: host.name})
-    ).join('');
-    return '<section class="host-group"><div class="host-group-head"><div>'+
-      '<div class="host-group-name">'+esc(host.name)+(host.isLocal?' <span class="tiny muted">(this computer)</span>':'')+
-      '</div><div class="host-group-caption">'+esc(host.id)+'</div></div>'+
-      '<span class="host-group-state '+(host.online?'':'offline')+'">'+(host.online?'Online':'Offline')+'</span>'+
-      '<span class="host-group-count">'+esc((host.servers||[]).length)+' servers</span></div>'+
-      (host.online?(rows?'<div class="sw-server-list" role="list">'+rows+'</div>':
-      '<div class="sw-empty">No servers registered on this computer.</div>'):
-      '<div class="host-group-offline">Computer unreachable. Check the Agent, network and managed tokens.</div>')+
-      '</section>';
-  }).filter(Boolean).join('');
-  root.innerHTML=stats+'<div class="dashboard-section-head"><div><h2>All computers</h2>'+
-    '<p>Central overview of your registered Agent hosts.</p></div></div>'+
-    (sections||'<div class="empty">No computers matched the current filter.</div>');
-}
 
 renderServers = function () {
   const root = $('#servers');
