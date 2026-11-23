@@ -122,6 +122,14 @@ public sealed class BackupArchivePublicationTests
         Assert.False(backups.Single(x => x.CheckpointName == Path.GetFileName(missing)).Restorable);
         Assert.False(backups.Single(x => x.CheckpointName == Path.GetFileName(invalid)).Restorable);
         Assert.False(backups.Single(x => x.CheckpointName == Path.GetFileName(partial)).Restorable);
+
+        var service = factory.Services.GetRequiredService<BackupService>();
+        foreach (var archiveName in new[] { Path.GetFileName(missing), Path.GetFileName(invalid), Path.GetFileName(partial) })
+        {
+            var restore = await service.RestoreAsync("alpha", archiveName);
+            Assert.False(restore.Success);
+            Assert.Contains("incomplete or unverified", restore.Message, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private static string NewRoot()
