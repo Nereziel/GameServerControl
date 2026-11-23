@@ -56,13 +56,13 @@ internal static class WindowsProcessParentSnapshot
         public uint Flags;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-        public string ExeFile;
+        public string? ExeFile;
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool Process32FirstW(IntPtr snapshot, ref ProcessEntry entry);
 
