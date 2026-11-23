@@ -197,6 +197,10 @@ export async function hostOverview(env, host) {
         name: String(def.name || ''),
         gameType: String(def.gameType || ''),
         hostingMode: String(def.hostingMode || ''),
+        // ServerViewDto already exposes this non-secret identifier to ReadOnly
+        // clients. The All computers list uses it to enable SteamCMD Update.
+        steamAppId: typeof def.steamAppId === 'string' && def.steamAppId.trim()
+          ? def.steamAppId.trim() : null,
         processState: String(status.processState || 'Unknown'),
         cpuPercent: typeof status.cpuPercent === 'number' ? status.cpuPercent : null,
         memoryMB: typeof status.memoryMB === 'number' ? status.memoryMB : null,
