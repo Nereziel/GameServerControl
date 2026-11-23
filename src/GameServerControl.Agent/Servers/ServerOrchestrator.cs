@@ -13,7 +13,7 @@ public sealed class ServerOrchestrator
 {
     private readonly ProcessMetricsSampler _metrics = new();
     private readonly ConcurrentDictionary<string, bool> _stopRequested = new();
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _lifecycleLocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ServerLifecycleGate _lifecycleGate;
     private readonly ServerUpdateConsole _updateConsole;
     private readonly HypervService _hv;
     private readonly GuestProcessService _guest;
@@ -42,6 +42,7 @@ public sealed class ServerOrchestrator
         SteamCmdManager steamCmd,
         DragonwildsConfig dragonwildsConfig,
         BackupService backups,
+        ServerLifecycleGate lifecycleGate,
         IConfiguration cfg,
         ILogger<ServerOrchestrator> logger)
     {
@@ -57,6 +58,7 @@ public sealed class ServerOrchestrator
         _steamCmd = steamCmd;
         _dragonwildsConfig = dragonwildsConfig;
         _backups = backups;
+        _lifecycleGate = lifecycleGate;
         _cfg = cfg;
         _logger = logger;
     }
@@ -199,17 +201,11 @@ public sealed class ServerOrchestrator
         _logger.LogInformation("[{Id}] {Src}: {Text}", id, source, text);
     }
 
-    private async Task<ActionResult> WithLifecycleLockAsync(
+    // Restart and auto-update call private *CoreAsync methods under this one
+    // outer lock. Never acquire the gate from those nested methods.
+    private Task<ActionResult> WithLifecycleLockAsync(
         string id, Func<Task<ActionResult>> operation, CancellationToken ct)
-    {
-        var gate = _lifecycleLocks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
-        if (!await gate.WaitAsync(0, ct))
-            return new ActionResult(false,
-                "Another Start, Stop, Restart or Update operation is already running for this server.",
-                Guid.NewGuid().ToString("n"));
-        try { return await operation(); }
-        finally { gate.Release(); }
-    }
+        => _lifecycleGate.RunExclusiveAsync(id, operation, ct);
 
     // Auto-update settings are independent: a Restart does not implicitly
     // inherit AutoUpdateOnStart. This also prevents a duplicate SteamCMD run.
@@ -390,12 +386,21 @@ public sealed class ServerOrchestrator
                     }
                 }
             }
-            if (!stoppedGracefully)
-                await _local.StopProcessAsync(def, pid, force, ct);
+            // A failed or unverified main-process stop is not permission to
+            // terminate other processes; do not claim the server is stopped.
+            var stopped = stoppedGracefully || await _local.StopProcessAsync(def, pid, force, ct);
+            if (!stopped)
+            {
+                _stopRequested.TryRemove(id, out _);
+                _diagnostics.Record(id, "Stop", "Error",
+                    "Main process stop failed or its identity could not be verified. Extra cleanup was skipped.");
+                return new ActionResult(false,
+                    "Server process could not be safely stopped; additional process cleanup was skipped.", corr);
+            }
 
             if (def.StopProcessNames is { Length: > 0 } extras)
             {
-                await LogAsync(id, "orch", "Killing additional process names: " + string.Join(", ", extras));
+                await LogAsync(id, "orch", "Cleaning up verified server child processes: " + string.Join(", ", extras));
                 await _local.KillByNamesAsync(def, extras, ct);
             }
 
