@@ -7,6 +7,7 @@ const host = read('src/GameServerControl.Runner/RunnerProcessHost.cs');
 const manager = read('src/GameServerControl.Agent/Hyperv/WindowsRunnerServiceManager.cs');
 const backup = read('src/GameServerControl.Agent/Servers/BackupService.cs');
 const orch = read('src/GameServerControl.Agent/Servers/ServerOrchestrator.cs');
+const local = read('src/GameServerControl.Agent/Hyperv/LocalProcessService.cs');
 const installer = read('src/GameServerControl.Agent/Servers/ServerInstaller.cs');
 
 assert.match(worker, /if \(_manifest\.AutoStart\)/, 'Runner boot autostart must remain enabled by manifest');
@@ -32,4 +33,16 @@ for (const code of ['GSC-INSTALL-STEAM', 'GSC-INSTALL-EXE', 'GSC-INSTALL-REGISTE
 for (const code of ['GSC-START-PROCESS', 'GSC-START-VM', 'GSC-START-GUEST']) {
   assert.ok(orch.includes(code), `Missing actionable launch error code: ${code}`);
 }
+
+// Compatibility checks: extra-process termination must never be name-only.
+const extraRunner = host.split('public async Task<RunnerResponse> KillExtrasAsync(')[1]?.split('private void AttachConsole(')[0] || '';
+const extraLinux = local.split('public async Task KillByNamesAsync(')[1]?.split('public async Task<(bool Ok, string Output)> RunCommandAsync(')[0] || '';
+assert.ok(extraRunner.length > 0 && extraLinux.length > 0, 'Both platforms must retain scoped cleanup entry points');
+assert.doesNotMatch(extraRunner, /GetProcessesByName\(/, 'Windows Runner must not enumerate and kill all matching names');
+assert.match(extraRunner, /Interlocked\.Exchange\(ref _pendingExtras/, 'Windows cleanup must use pre-stop ownership snapshot');
+assert.match(host, /WindowsProcessParentSnapshot\.DescendantsOf/, 'Runner must validate process ancestry');
+assert.match(extraLinux, /ProcessCleanupScope\.IsOwnedLinuxExtra/, 'Linux cleanup must validate executable path and cwd');
+assert.match(extraLinux, /shared with another server/, 'Linux cleanup must refuse shared working directories');
+assert.match(orch, /if \(!stopped\)/, 'Failed primary stop must not proceed to extra process cleanup');
+
 console.log('Recovery, boot autostart, pre-update backup and diagnostics contracts OK.');

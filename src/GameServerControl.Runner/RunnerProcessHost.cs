@@ -20,6 +20,8 @@ public sealed class RunnerProcessHost
     private int _consoleChars;
     private long _nextSequence;
     private Process? _attachedProcess;
+    private sealed record OwnedExtraProcess(int Pid, long StartTimeUtcTicks);
+    private OwnedExtraProcess[] _pendingExtras = Array.Empty<OwnedExtraProcess>();
     private volatile bool _restartDesired;
     private volatile bool _cleanExitObserved;
 
@@ -125,6 +127,7 @@ public sealed class RunnerProcessHost
     {
         // Operator-initiated stops must never trigger the crash-recovery monitor.
         _restartDesired = false;
+        Interlocked.Exchange(ref _pendingExtras, Array.Empty<OwnedExtraProcess>());
         var process = ResolveAttachedProcess();
         if (process is null)
         {
@@ -137,6 +140,9 @@ public sealed class RunnerProcessHost
 
         try
         {
+            // Capture verified child identities while the root is still alive.
+            // The later KillExtras command must never scan/kill by name globally.
+            Interlocked.Exchange(ref _pendingExtras, CaptureOwnedExtras(process));
             if (!force)
             {
                 if (_manifest.SteamAppId == "896660" && await TrySendValheimInterruptAsync(process, ct))
@@ -207,22 +213,81 @@ public sealed class RunnerProcessHost
         finally { _inputGate.Release(); }
     }
 
+    private OwnedExtraProcess[] CaptureOwnedExtras(Process root)
+    {
+        var names = _manifest.StopProcessNames;
+        if (names is not { Length: > 0 }) return Array.Empty<OwnedExtraProcess>();
+
+        IReadOnlySet<int> descendants;
+        long rootStart;
+        try
+        {
+            rootStart = root.StartTime.ToUniversalTime().Ticks;
+            descendants = WindowsProcessParentSnapshot.DescendantsOf(root.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Cannot establish descendant ownership for Runner {ServerId}; skipping extra cleanup.", _manifest.ServerId);
+            return Array.Empty<OwnedExtraProcess>();
+        }
+
+        var captured = new List<OwnedExtraProcess>();
+        foreach (var pid in descendants)
+        {
+            try
+            {
+                using var candidate = Process.GetProcessById(pid);
+                var started = candidate.StartTime.ToUniversalTime().Ticks;
+                if (candidate.HasExited || started < rootStart) continue;
+                var image = candidate.MainModule?.FileName;
+                if (!ProcessCleanupScope.IsAllowedExtra(image, _manifest.WorkingDirectory, names))
+                    continue;
+                captured.Add(new OwnedExtraProcess(pid, started));
+            }
+            catch (ArgumentException) { /* Child exited during the snapshot. */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Unable to verify process {Pid} for Runner {ServerId}; will not terminate it.", pid, _manifest.ServerId);
+            }
+        }
+        return captured.ToArray();
+    }
+
     public async Task<RunnerResponse> KillExtrasAsync(CancellationToken ct)
     {
-        foreach (var raw in (_manifest.StopProcessNames ?? Array.Empty<string>()).Distinct(StringComparer.OrdinalIgnoreCase))
+        // Only descendants identified before Stop, with the original creation
+        // time, allowed executable name and a path inside this server's root.
+        // An orphan or unrelated process with the same name is never enough.
+        var extras = Interlocked.Exchange(ref _pendingExtras, Array.Empty<OwnedExtraProcess>());
+        if (extras.Length == 0 && _manifest.StopProcessNames is { Length: > 0 })
+            _logger.LogInformation("Runner {ServerId}: no verified child processes to clean up; skipping name-only termination.", _manifest.ServerId);
+
+        foreach (var extra in extras)
         {
             ct.ThrowIfCancellationRequested();
-            var name = Path.GetFileNameWithoutExtension(raw);
-            if (string.IsNullOrWhiteSpace(name)) continue;
-            foreach (var process in Process.GetProcessesByName(name))
+            try
             {
-                try
+                using var process = Process.GetProcessById(extra.Pid);
+                if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != extra.StartTimeUtcTicks)
                 {
-                    process.Kill(entireProcessTree: true);
-                    await process.WaitForExitAsync(ct);
+                    _logger.LogWarning("Skipping extra PID {Pid}: process identity changed.", extra.Pid);
+                    continue;
                 }
-                catch (Exception ex) { _logger.LogDebug(ex, "Runner could not kill extra process {Name}", name); }
-                finally { process.Dispose(); }
+                if (!ProcessCleanupScope.IsAllowedExtra(
+                        process.MainModule?.FileName, _manifest.WorkingDirectory,
+                        _manifest.StopProcessNames ?? Array.Empty<string>()))
+                {
+                    _logger.LogWarning("Skipping extra PID {Pid}: executable ownership could not be verified.", extra.Pid);
+                    continue;
+                }
+
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(ct);
+            }
+            catch (ArgumentException) { /* Process already exited. */ }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Runner could not safely terminate owned extra PID {Pid}", extra.Pid);
             }
         }
         return new RunnerResponse(true);
