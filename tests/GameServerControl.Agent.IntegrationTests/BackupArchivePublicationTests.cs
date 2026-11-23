@@ -109,11 +109,14 @@ public sealed class BackupArchivePublicationTests
         var complete = Path.Combine(backupDir, "alpha-complete.zip");
         var missing = Path.Combine(backupDir, "alpha-legacy.zip");
         var invalid = Path.Combine(backupDir, "alpha-bad-meta.zip");
+        var truncated = Path.Combine(backupDir, "alpha-truncated-meta.zip");
         var partial = Path.Combine(backupDir, "alpha-skipped.zip");
-        foreach (var file in new[] { complete, missing, invalid, partial })
+        foreach (var file in new[] { complete, missing, invalid, truncated, partial })
             WriteArchive(file);
         File.WriteAllText(complete + ".meta.json", CompleteMetadata);
         File.WriteAllText(invalid + ".meta.json", "not json");
+        File.WriteAllText(truncated + ".meta.json",
+            """{"Kind":"Archive","CreatedAt":"2026-11-23T10:00:00Z","FileCount":1}""");
         File.WriteAllText(partial + ".meta.json",
             """{"Kind":"Archive","CreatedAt":"2026-11-23T10:00:00Z","FileCount":1,"SkippedFiles":1}""");
 
@@ -121,10 +124,11 @@ public sealed class BackupArchivePublicationTests
         Assert.True(backups.Single(x => x.CheckpointName == Path.GetFileName(complete)).Restorable);
         Assert.False(backups.Single(x => x.CheckpointName == Path.GetFileName(missing)).Restorable);
         Assert.False(backups.Single(x => x.CheckpointName == Path.GetFileName(invalid)).Restorable);
+        Assert.False(backups.Single(x => x.CheckpointName == Path.GetFileName(truncated)).Restorable);
         Assert.False(backups.Single(x => x.CheckpointName == Path.GetFileName(partial)).Restorable);
 
         var service = factory.Services.GetRequiredService<BackupService>();
-        foreach (var archiveName in new[] { Path.GetFileName(missing), Path.GetFileName(invalid), Path.GetFileName(partial) })
+        foreach (var archiveName in new[] { Path.GetFileName(missing), Path.GetFileName(invalid), Path.GetFileName(truncated), Path.GetFileName(partial) })
         {
             var restore = await service.RestoreAsync("alpha", archiveName);
             Assert.False(restore.Success);
