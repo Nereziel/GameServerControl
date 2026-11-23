@@ -104,9 +104,10 @@ public sealed class BackupService
     {
         if (retention is < 1 or > 200)
             throw new ArgumentException("Backup retention must be between 1 and 200.", nameof(retention));
-        var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
-        _store.Update(id, def with { BackupRetention = retention });
-        return new BackupSettings(retention, true, DefaultBackupRetention);
+        // Apply only the requested field against the latest ServerStore state.
+        // A previous Registry.Get() snapshot may already be stale.
+        var updated = _store.SetBackupRetention(id, retention);
+        return new BackupSettings(updated.BackupRetention!.Value, true, DefaultBackupRetention);
     }
 
     public Task<ActionResult> CreateAsync(string id, CancellationToken ct = default)
