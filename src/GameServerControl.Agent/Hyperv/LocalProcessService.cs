@@ -460,43 +460,62 @@ public sealed class LocalProcessService
 
     private Task<(bool Ok, int? Pid)> FindLocalProcessAsync(string exePath, CancellationToken ct = default)
     {
-        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Direct game process discovery is disabled on Windows.");
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Direct game process discovery is disabled on Windows.");
+
         var def = FindServerForExe(exePath);
         var processImage = ResolveProcessImagePath(exePath);
         try
         {
             var name = Path.GetFileNameWithoutExtension(processImage);
-            var candidates = Process.GetProcessesByName(name);
-            if (candidates.Length == 0)
+            var matches = new List<int>();
+            var unknownOwnership = false;
+            foreach (var candidate in Process.GetProcessesByName(name))
             {
-                SetFirewallState(def, open: false, out _);
-                return Task.FromResult<(bool, int?)>((true, null));
-            }
-
-            var unreadable = new List<Process>();
-            foreach (var p in candidates)
-            {
-                try
+                using (candidate)
                 {
-                    if (PathsEqual(p.MainModule?.FileName, processImage))
+                    ct.ThrowIfCancellationRequested();
+                    try
                     {
-                        SetFirewallState(def, open: true, out _);
-                        return Task.FromResult<(bool, int?)>((true, p.Id));
+                        if (!PathsEqual(candidate.MainModule?.FileName, processImage))
+                            continue;
+
+                        if (def is not null)
+                        {
+                            var cwd = new DirectoryInfo($"/proc/{candidate.Id}/cwd")
+                                .ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+                            if (!ProcessCleanupScope.IsSameDirectory(cwd, def.GuestWorkingDir))
+                                continue;
+                        }
+
+                        matches.Add(candidate.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        unknownOwnership = true;
+                        _logger.LogWarning(ex,
+                            "Could not verify process {Pid} for {Exe}; refusing ambiguous process lookup.",
+                            candidate.Id, processImage);
                     }
                 }
-                catch { unreadable.Add(p); }
             }
 
-            if (candidates.Length == 1 && unreadable.Count == 1)
+            if (matches.Count == 1 && !unknownOwnership)
             {
                 SetFirewallState(def, open: true, out _);
-                return Task.FromResult<(bool, int?)>((true, unreadable[0].Id));
+                return Task.FromResult<(bool, int?)>((true, matches[0]));
+            }
+            if (matches.Count > 1 || unknownOwnership)
+            {
+                _logger.LogWarning("Ambiguous or unverifiable process lookup for {Exe}: {Count} owned candidates.",
+                    processImage, matches.Count);
+                return Task.FromResult<(bool, int?)>((false, null));
             }
 
-            if (candidates.Length > 1)
-                _logger.LogWarning("Ambiguous process lookup for {Exe}: found {Count} processes named {Name} and no exact path match.", processImage, candidates.Length, name);
-            return Task.FromResult<(bool, int?)>((candidates.Length == 1, null));
+            SetFirewallState(def, open: false, out _);
+            return Task.FromResult<(bool, int?)>((true, null));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "FindProcess failed for {Exe}", processImage);
@@ -533,10 +552,23 @@ public sealed class LocalProcessService
                     try
                     {
                         var actual = candidate.MainModule?.FileName;
-                        if (actual is null || PathsEqual(actual, processImage)) p = candidate;
-                        else _logger.LogWarning("Refusing to stop pid {Pid}: executable is {Actual}, expected {Expected}.", id, actual, processImage);
+                        var cwd = def is null ? null : new DirectoryInfo($"/proc/{id}/cwd")
+                            .ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+                        var matches = PathsEqual(actual, processImage)
+                            && (def is null || ProcessCleanupScope.IsSameDirectory(cwd, def.GuestWorkingDir));
+                        if (matches) p = candidate;
+                        else
+                        {
+                            _logger.LogWarning("Refusing to stop pid {Pid}: executable or working directory does not match server {ServerId}.",
+                                id, def?.Id ?? "(unknown)");
+                            candidate.Dispose();
+                        }
                     }
-                    catch { p = candidate; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Refusing to stop pid {Pid}: process ownership cannot be verified.", id);
+                        candidate.Dispose();
+                    }
                 }
                 catch { }
             }
