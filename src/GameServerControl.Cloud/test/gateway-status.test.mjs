@@ -121,14 +121,17 @@ test('the Worker routes each host separately; a stopped PC never blocks another'
     if (url.pathname.endsWith('/api/auth/me')) return Response.json({ role });
     if (url.pathname.endsWith('/api/servers')) return Response.json([
       { id: pc + '-game', name: pc + ' server', gameType: 'Valheim',
-        hostingMode: 'BareMetal', rconPassword: 'should-not-be-leaked' }
+        hostingMode: 'BareMetal',
+        steamAppId: pc === 'pc2' ? '4019830' : null,
+        rconPassword: 'should-not-be-leaked' }
     ]);
     if (url.pathname.endsWith('/api/status')) return Response.json([
-      { id: pc + '-game', processState: 'Running', cpuPercent: 5,
+      { id: pc + '-game', processState: pc === 'pc2' ? 'NotRunning' : 'Running', cpuPercent: 5,
         memoryMB: 128, pidInGuest: 111 }
     ]);
     if (url.pathname.endsWith('/api/health')) return Response.json({ ok: true, ts: 'now' });
-    if (url.pathname.endsWith('/api/servers/pc2-game/start'))
+    if (url.pathname.endsWith('/api/servers/pc2-game/start') ||
+        url.pathname.endsWith('/api/servers/pc2-game/update'))
       return Response.json({ success: role === 'Admin' }, { status: role === 'Admin' ? 200 : 403 });
     return new Response('Not Found', { status: 404 });
   };
@@ -159,7 +162,16 @@ test('the Worker routes each host separately; a stopped PC never blocks another'
     const before = await (await request('/api/hosts/overview', readonlyJWT)).json();
     assert.equal(before.length, 2);
     assert.ok(before.every(item => item.online));
+    const nonSteam = before.find(item => item.id === 'pc1').servers[0];
+    const steam = before.find(item => item.id === 'pc2').servers[0];
+    assert.equal(nonSteam.steamAppId, null, 'non-Steam server must not advertise Update eligibility');
+    assert.equal(steam.steamAppId, '4019830', 'ReadOnly overview must preserve the public Steam App ID');
+    assert.equal(steam.processState, 'NotRunning');
     assert.doesNotMatch(JSON.stringify(before), /rconPassword|should-not-be-leaked|token-/);
+    const asAdmin = await (await request('/api/hosts/overview', adminJWT)).json();
+    assert.equal(asAdmin.find(item => item.id === 'pc2').servers[0].steamAppId, '4019830');
+    assert.equal(asAdmin.find(item => item.id === 'pc1').servers[0].steamAppId, null);
+    assert.doesNotMatch(JSON.stringify(asAdmin), /rconPassword|should-not-be-leaked|token-/);
 
     pc1Online = false;
     const after = await (await request('/api/hosts/overview', readonlyJWT)).json();
@@ -169,6 +181,11 @@ test('the Worker routes each host separately; a stopped PC never blocks another'
     assert.equal(remoteRead.status, 200);
     const deniedWrite = await request('/api/hosts/pc2/api/servers/pc2-game/start', readonlyJWT, 'POST');
     assert.equal(deniedWrite.status, 403);
+    const deniedUpdate = await request('/api/hosts/pc2/api/servers/pc2-game/update', readonlyJWT, 'POST');
+    assert.equal(deniedUpdate.status, 403, 'ReadOnly must not be able to update even with a Steam App ID');
+    const allowedUpdate = await request('/api/hosts/pc2/api/servers/pc2-game/update', adminJWT, 'POST');
+    assert.equal(allowedUpdate.status, 200, 'Admin is allowed to update a Steam server');
+    assert.equal(calls.at(-1).bearer, 'Bearer ' + tokenAdmin);
     const allowedWrite = await request('/api/hosts/pc2/api/servers/pc2-game/start', adminJWT, 'POST');
     assert.equal(allowedWrite.status, 200);
     assert.equal(calls.at(-1).pc, 'pc2');
