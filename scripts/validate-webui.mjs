@@ -293,6 +293,7 @@ try {
   runNode(path.resolve('scripts/test-unified-admin-workspace.mjs'), 'Unified server and system navigation regression');
   runNode(path.resolve('scripts/test-status-stream-ui.mjs'), 'SignalR-first status UI with HTTP fallback');
   runNode(path.resolve('scripts/test-auto-game-update-ui.mjs'), 'Server auto-update and SteamCMD console regression');
+  runNode(path.resolve('scripts/test-admin-navigation-refactor.mjs'), 'Task-based server administration and dedicated Updates page');
   runNode(path.resolve('scripts/test-server-list-actions.mjs'), 'Full-width server list with quick action buttons and multi-host dispatch');
   runNode(path.resolve('scripts/test-overview-public-address.mjs'), 'Overview public Relay address and port regression');
   runNode(path.resolve('scripts/validate-update-ux.mjs'), 'update/install UX contract');

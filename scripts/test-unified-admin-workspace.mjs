@@ -21,7 +21,7 @@ vm.runInNewContext(workspace.slice(start,end),ctx);
 const complete={tabs:[
   ['console','Console'],['overview','Overview'],['diagnostics','Diagnostics'],
   ['config','Configuration'],['players','Players'],['admin','Admin'],
-  ['mods','Mods'],['files','Files'],['backups','Backups'],
+  ['mods','Mods'],['files','Files'],['updates','Updates'],['backups','Backups'],
   ['network','Network'],['schedule','Schedule'],['settings','Settings']
 ],caps:{rcon:true}};
 const sections=ctx.serverWorkspaceSections(complete);
@@ -32,14 +32,18 @@ const inner=Object.fromEntries(sections.map(s=>[s.key,Array.from(s.tabs,x=>x[0])
 assert.deepEqual(inner.configuration,['config','access','network','settings'],
   'game-specific settings, RCON, network and advanced configuration stay together');
 assert.deepEqual(inner.content,['files','mods'],'file and mod tools must be grouped');
-assert.deepEqual(inner.maintenance,['backups','schedule'],'backup and automation stay together');
+assert.deepEqual(inner.maintenance,['updates','backups','schedule'],
+  'manual updates, backups and recurring schedules are separate Maintenance pages');
 assert.deepEqual(inner.console,['console','players','admin'],'player/admin actions stay with console');
 for(const tab of complete.tabs.map(x=>x[0])){
   assert.equal(ctx.serverWorkspaceResolveTab(complete,tab),tab,'old deep link must work: '+tab);
 }
 assert.equal(ctx.serverWorkspaceResolveTab(complete,'configuration'),'config');
 assert.equal(ctx.serverWorkspaceResolveTab(complete,'content'),'files');
-assert.equal(ctx.serverWorkspaceResolveTab(complete,'maintenance'),'backups');
+assert.equal(ctx.serverWorkspaceResolveTab(complete,'maintenance'),'updates');
+assert.equal(ctx.serverWorkspaceResolveTab(complete,'updates'),'updates');
+assert.equal(ctx.serverWorkspaceSectionFor(complete,'schedule').key,'maintenance');
+assert.equal(ctx.serverWorkspaceSectionFor(complete,'updates').key,'maintenance');
 assert.equal(ctx.serverWorkspaceSectionFor(complete,'network').key,'configuration');
 assert.equal(ctx.serverWorkspaceSectionFor(complete,'mods').key,'content');
 const bare={tabs:[['overview','Overview'],['diagnostics','Diagnostics'],['files','Files'],['backups','Backups'],['network','Network'],['schedule','Schedule'],['settings','Settings']],caps:{}};
@@ -47,6 +51,8 @@ assert.deepEqual(Array.from(ctx.serverWorkspaceSections(bare),x=>x.key),
   ['overview','configuration','content','maintenance','diagnostics'],
   'unsupported features must not create empty sections');
 assert.equal(ctx.serverWorkspaceResolveTab(bare,'configuration'),'network');
+assert.deepEqual(Array.from(ctx.serverWorkspaceSections(bare).find(s=>s.key==='maintenance').tabs, t=>t[0]),
+  ['backups','schedule'],'non-Steam games have no SteamCMD Updates page');
 assert.equal(ctx.serverWorkspaceResolveTab(bare,'invalid'),'overview');
 
 // Verify that a form with untouched defaults navigates freely, while an edited

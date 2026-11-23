@@ -13,10 +13,13 @@ assert.ok(workspace.includes('id="swAutoUpdateOnStart"'), 'Auto-update on Start 
 assert.ok(workspace.includes('id="swAutoUpdateOnRestart"'), 'Auto-update on Restart toggle missing');
 assert.ok(workspace.includes("uiAction('serverWorkspaceSaveAutoUpdate'"), 'Per-server auto-update preferences must be saved');
 assert.ok(workspace.includes('/auto-update`'), 'Preferences must use a dedicated, narrow endpoint');
-assert.ok(workspace.includes('id="swUpdateTerminal"'), 'Update console must be visible in Backups & automation');
+assert.ok(workspace.includes('id="swUpdateTerminal"'), 'Update console must be visible on the dedicated Updates page');
 assert.ok(workspace.includes('/update/console?since='), 'Update console should stream incremental, bounded output');
+assert.ok(workspace.includes("serverWorkspaceSetTab('updates')"), 'Manual Update should open Updates, not Schedule');
+assert.ok(workspace.includes("SERVER_WORKSPACE.tab!=='updates'"), 'Update output should poll only on the Updates page');
 assert.ok(workspace.includes("a==='start'&&!!def?.autoUpdateOnStart"), 'Auto-start must also show update progress');
-assert.ok(workspace.includes("a==='restart'&&!!def?.autoUpdateOnRestart"), 'Auto-restart must also show update progress');
+assert.ok(workspace.includes("((a==='restart'||a==='apply')&&!!def?.autoUpdateOnRestart)"),
+  'Auto-update on Restart or Apply must show update progress');
 assert.ok(program.includes('ServerUpdateConsole updates'), 'Update console must be served by Agent');
 assert.ok(program.includes('.RequireAuthorization("admin")'), 'Update console output must require an Admin');
 assert.ok(server.includes('WithLifecycleLockAsync'), 'Server lifecycle must serialize update/start/stop');
