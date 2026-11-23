@@ -63,7 +63,21 @@ public sealed class ServerStatusPoller
             deadline.CancelAfter(_timeout);
             try
             {
-                updated[id] = await refresh(id, deadline.Token);
+                var status = await refresh(id, deadline.Token);
+                ct.ThrowIfCancellationRequested();
+                if (deadline.IsCancellationRequested)
+                {
+                    // An external provider may ignore cancellation. Wait for it
+                    // (never overlap another cycle), but reject its stale result.
+                    outcome = "timeout";
+                    _logger.LogWarning(
+                        "Status poll for {ServerId} returned after its {TimeoutMs} ms deadline; stale result ignored.",
+                        id, _timeout.TotalMilliseconds);
+                }
+                else
+                {
+                    updated[id] = status;
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
