@@ -118,9 +118,10 @@ public sealed class ServerSettingsConcurrencyTests
         Assert.Equal(HttpStatusCode.OK, settingsResult.StatusCode);
         Assert.Equal(HttpStatusCode.OK, editorResult.StatusCode);
 
-        var editorResponse = await editorResult.Content.ReadFromJsonAsync<ServerDef>();
-        Assert.NotNull(editorResponse);
-        Assert.Equal("HTTP-edited server", editorResponse.Name);
+        // The Agent serializes enum fields as strings. Inspect the response
+        // JSON directly instead of using the default numeric-enum client.
+        using var editorResponse = JsonDocument.Parse(await editorResult.Content.ReadAsStringAsync());
+        Assert.Equal("HTTP-edited server", editorResponse.RootElement.GetProperty("name").GetString());
         Assert.Equal("HTTP-edited server", fixture.Registry.Get("alpha")!.Name);
         Assert.Equal(9, fixture.Registry.Get("alpha")!.BackupRetention);
         AssertPersisted(fixture, "HTTP-edited server", 9);
