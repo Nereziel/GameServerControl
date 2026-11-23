@@ -6,9 +6,9 @@ const work=fs.readFileSync('src/GameServerControl.Agent/WebUi/server-workspace.j
 const styles=fs.readFileSync('src/GameServerControl.Agent/WebUi/styles.css','utf8');
 const gateway=fs.readFileSync('src/GameServerControl.Agent/MultiAgent/ManagedHostGateway.cs','utf8');
 const admin=fs.readFileSync('src/GameServerControl.Agent/WebUi/server-admin.js','utf8');
-const start=work.indexOf('function serverWorkspaceRenderListActions(');
+const start=work.indexOf('function renderAllHostDashboard(root){');
 const end=work.indexOf('renderServers = function ()',start);
-assert.ok(start>=0&&end>start, 'The new shared horizontal list renderer exists');
+assert.ok(start>=0&&end>start, 'All computers dashboard and shared list renderer exist');
 const esc=x=>String(x??'').replaceAll('&','&amp;').replaceAll('<','&lt;')
   .replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 let readOnly=false;
