@@ -37,8 +37,13 @@ public static class ProcessCleanupScope
         try
         {
             var file = Path.GetFullPath(executable);
-            var root = Path.GetFullPath(workingDirectory)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fullRoot = Path.GetFullPath(workingDirectory);
+            // A filesystem/drive root is not a dedicated server installation.
+            if (string.Equals(fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    Path.GetPathRoot(fullRoot)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                return false;
+            var root = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var comparison = OperatingSystem.IsWindows()
                 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             return file.StartsWith(root + Path.DirectorySeparatorChar, comparison);
