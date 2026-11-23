@@ -538,3 +538,15 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 @media(max-width:460px){
   .sw-server-list-row .sw-list-actions{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
+
+/* Task-based per-server administration: each page explains its own scope. */
+.sw-page-intro{margin:0 0 15px;padding:15px 17px;border:1px solid #344967;border-radius:11px;background:#192940}
+.sw-page-intro h2{margin:0 0 4px;font-size:16px;font-weight:780;letter-spacing:-.2px}
+.sw-page-intro p{margin:0;max-width:85ch;color:#aebfd5;font-size:12px;line-height:1.6}
+.sw-update-state{margin:12px 0 9px;padding:9px 11px;border:1px solid #34506e;border-radius:8px;background:#1b2b41;color:#cfdef1;font-size:12px;overflow-wrap:anywhere}
+.sw-update-terminal{min-height:230px;max-height:48vh;border:1px solid #2e455f;border-radius:8px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){
+  .sw-page-intro{padding:12px}
+  .sw-page-intro h2{font-size:15px}
+  .sw-update-terminal{min-height:180px;max-height:42vh}
+}
