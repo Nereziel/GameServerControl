@@ -726,21 +726,68 @@ public sealed class LocalProcessService
         if (OperatingSystem.IsWindows())
         {
             var result = await _windowsRunner.KillExtrasAsync(def, ct);
-            if (!result.Ok) _logger.LogWarning("Runner extra-process cleanup failed for {ServerId}: {Error}", def.Id, result.Error);
+            if (!result.Ok)
+                _logger.LogWarning("Runner extra-process cleanup failed for {ServerId}: {Error}", def.Id, result.Error);
             return;
         }
 
-        foreach (var raw in exeNames.Distinct(StringComparer.OrdinalIgnoreCase))
+        // A process name is not an ownership identity. /proc/<pid>/cwd and the
+        // executable image must both belong to this server's dedicated root.
+        var names = exeNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (def.HostingMode != HostingMode.BareMetal
+            || string.IsNullOrWhiteSpace(def.GuestWorkingDir)
+            || !Directory.Exists(def.GuestWorkingDir))
         {
+            _logger.LogWarning("Skipping extra process cleanup for {ServerId}: working directory is unavailable.", def.Id);
+            return;
+        }
+
+        // Multiple registered servers in one working directory cannot be
+        // distinguished by cwd. Refuse cleanup rather than killing a sibling.
+        if (_registry.All.Any(other => other.HostingMode == HostingMode.BareMetal
+                && !string.Equals(other.Id, def.Id, StringComparison.OrdinalIgnoreCase)
+                && ProcessCleanupScope.IsSameDirectory(other.GuestWorkingDir, def.GuestWorkingDir)))
+        {
+            _logger.LogWarning("Skipping extra process cleanup for {ServerId}: working directory is shared with another server.", def.Id);
+            return;
+        }
+
+        foreach (var raw in names)
+        {
+            ct.ThrowIfCancellationRequested();
             var bare = Path.GetFileNameWithoutExtension(raw);
-            if (string.IsNullOrEmpty(bare)) continue;
-            try
+            if (string.IsNullOrWhiteSpace(bare)) continue;
+            foreach (var process in Process.GetProcessesByName(bare))
             {
-                foreach (var p in Process.GetProcessesByName(bare))
-                    try { p.Kill(entireProcessTree: true); }
-                    catch (Exception ex) { _logger.LogDebug(ex, "Kill pid {Pid} ({Name}) failed", p.Id, bare); }
+                using (process)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var startTime = process.StartTime.ToUniversalTime().Ticks;
+                        var executable = process.MainModule?.FileName;
+                        var processCwd = new DirectoryInfo($"/proc/{process.Id}/cwd")
+                            .ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+                        if (!ProcessCleanupScope.IsOwnedLinuxExtra(executable, processCwd, def.GuestWorkingDir, names))
+                        {
+                            _logger.LogDebug("Skipping unowned extra PID {Pid} ({Name}) for server {ServerId}.",
+                                process.Id, bare, def.Id);
+                            continue;
+                        }
+                        // Refuse PID reuse or a process that exited during inspection.
+                        if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != startTime)
+                            continue;
+                        process.Kill(entireProcessTree: true);
+                        await process.WaitForExitAsync(ct);
+                    }
+                    catch (InvalidOperationException) { /* Process exited during inspection. */ }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Could not verify or stop extra PID {Pid} for server {ServerId}; leaving it running.",
+                            process.Id, def.Id);
+                    }
+                }
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "Kill by name {Name} failed", bare); }
         }
     }
 
