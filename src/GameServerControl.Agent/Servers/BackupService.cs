@@ -293,7 +293,7 @@ public sealed class BackupService
         if (owned is null)
             return new ActionResult(false, "Backup not found or not owned by GameServerControl: " + safeName, corr);
         if (!owned.Restorable || owned.SkippedFiles is > 0)
-            return new ActionResult(false, "Backup is incomplete because files were skipped during creation; restore is disabled to prevent data loss.", corr);
+            return new ActionResult(false, "Backup is incomplete or unverified (missing/invalid metadata or skipped files); restore is disabled to prevent data loss.", corr);
 
         var zipPath = BackupSafety.ResolveUnderRoot(ServerBackupDir(def), safeName);
         var targets = GetSaveTargets(def, requireAnyExisting: false);
@@ -401,54 +401,63 @@ public sealed class BackupService
         var serverDir = ServerBackupDir(def);
         Directory.CreateDirectory(serverDir);
         var safety = kind == BackupKind.SafetyArchive;
+        // Distinct paths prevent concurrent creations from sharing a metadata sidecar.
+        var nonce = Guid.NewGuid().ToString("N")[..12];
         var baseName = safety
-            ? $"{def.Id}-{(label == "Pre-update backup" ? "preupdate" : "prerestore")}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip"
-            : $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip";
+            ? $"{def.Id}-{(label == "Pre-update backup" ? "preupdate" : "prerestore")}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{nonce}.zip"
+            : $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{nonce}.zip";
         var zipPath = UniqueArchivePath(serverDir, baseName);
         var createdAt = DateTimeOffset.UtcNow;
         var fileCount = 0;
         var skipped = 0;
+        BackupMetadata? metadata = null;
 
         try
         {
-            await Task.Run(() =>
-            {
-                using var fs = new FileStream(zipPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                using var archive = new ZipArchive(fs, ZipArchiveMode.Create);
-                foreach (var target in targets)
+            await BackupArchivePublication.PublishAsync(zipPath,
+                async (stagingPath, cancellation) =>
                 {
-                    if (!Directory.Exists(target.Path)) continue;
-                    foreach (var file in Directory.EnumerateFiles(target.Path, "*", SearchOption.AllDirectories))
+                    await Task.Run(async () =>
                     {
-                        ct.ThrowIfCancellationRequested();
-                        var rel = Path.GetRelativePath(target.Path, file);
-                        var entryName = BackupSafety.NormalizeArchiveEntry(target.Prefix + "/" + rel.Replace('\\', '/'));
-                        try
+                        await using var fs = new FileStream(stagingPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                        using var archive = new ZipArchive(fs, ZipArchiveMode.Create);
+                        foreach (var target in targets)
                         {
-                            var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
-                            using var output = entry.Open();
-                            using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
-                            input.CopyTo(output);
-                            fileCount++;
+                            if (!Directory.Exists(target.Path)) continue;
+                            foreach (var file in Directory.EnumerateFiles(target.Path, "*", SearchOption.AllDirectories))
+                            {
+                                cancellation.ThrowIfCancellationRequested();
+                                var rel = Path.GetRelativePath(target.Path, file);
+                                var entryName = BackupSafety.NormalizeArchiveEntry(target.Prefix + "/" + rel.Replace('\\', '/'));
+                                try
+                                {
+                                    var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
+                                    using var output = entry.Open();
+                                    await using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                                    await input.CopyToAsync(output, cancellation);
+                                    fileCount++;
+                                }
+                                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                                {
+                                    if (requireComplete) throw;
+                                    skipped++;
+                                    _logger.LogWarning("Skipping unavailable backup file {File}: {Message}", file, ex.Message);
+                                }
+                            }
                         }
-                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                        {
-                            if (requireComplete) throw;
-                            skipped++;
-                            _logger.LogWarning("Skipping unavailable backup file {File}: {Message}", file, ex.Message);
-                        }
-                    }
-                }
-            }, ct);
+                    }, cancellation);
+                },
+                async cancellation =>
+                {
+                    metadata = new BackupMetadata(label, kind, createdAt, fileCount, skipped);
+                    await WriteBackupMetadataAsync(zipPath, metadata, cancellation);
+                },
+                ct);
 
-            var metadata = new BackupMetadata(label, kind, createdAt, fileCount, skipped);
-            await WriteBackupMetadataAsync(zipPath, metadata, ct);
             return new ArchiveCreateResult(true, zipPath, new FileInfo(zipPath).Length, metadata, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            TryDelete(zipPath);
-            TryDelete(MetadataPath(zipPath));
             return new ArchiveCreateResult(false, null, null, null, ex.Message);
         }
     }
@@ -479,11 +488,18 @@ public sealed class BackupService
                 meta?.Label,
                 meta?.FileCount,
                 meta?.SkippedFiles,
-                Restorable: meta?.SkippedFiles is not > 0));
+                Restorable: HasTrustedArchiveMetadata(meta)));
         }
 
         return result.OrderByDescending(x => x.CreatedAt).ToList();
     }
+
+    // Metadata-less legacy ZIPs stay visible for inspection, but fail closed:
+    // a structurally valid ZIP does not prove the backup contained every save.
+    private static bool HasTrustedArchiveMetadata(BackupMetadata? metadata)
+        => metadata is { FileCount: >= 0, SkippedFiles: 0 }
+            && (metadata.Kind == BackupKind.Archive || metadata.Kind == BackupKind.SafetyArchive)
+            && metadata.CreatedAt != default;
 
     private async Task<List<BackupInfo>> ListHyperVAsync(ServerDef def, CancellationToken ct)
     {
