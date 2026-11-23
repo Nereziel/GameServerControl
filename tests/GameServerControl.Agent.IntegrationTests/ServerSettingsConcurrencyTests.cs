@@ -100,8 +100,9 @@ public sealed class ServerSettingsConcurrencyTests
 
         var editorResponse = await editorResult.Content.ReadFromJsonAsync<ServerDef>();
         Assert.NotNull(editorResponse);
-        Assert.Equal(9, editorResponse.BackupRetention);
+        Assert.Equal("HTTP-edited server", editorResponse.Name);
         Assert.Equal("HTTP-edited server", fixture.Registry.Get("alpha")!.Name);
+        Assert.Equal(9, fixture.Registry.Get("alpha")!.BackupRetention);
         AssertPersisted(fixture, "HTTP-edited server", 9);
     }
 
@@ -113,7 +114,8 @@ public sealed class ServerSettingsConcurrencyTests
         Assert.Throws<ArgumentException>(() => fixture.Store.SetBackupRetention("alpha", 0));
         Assert.Throws<ArgumentException>(() => fixture.Store.SetBackupRetention("alpha", 201));
         Assert.Throws<KeyNotFoundException>(() => fixture.Store.SetBackupRetention("absent", 7));
-        Assert.Equal(original, fixture.Registry.Get("alpha"));
+        Assert.Equal(original.Name, fixture.Registry.Get("alpha")!.Name);
+        Assert.Equal(original.BackupRetention, fixture.Registry.Get("alpha")!.BackupRetention);
         Assert.Null(fixture.Registry.Get("beta")!.BackupRetention);
     }
 
