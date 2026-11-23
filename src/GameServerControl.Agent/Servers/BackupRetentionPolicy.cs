@@ -22,9 +22,13 @@ public static class BackupRetentionPolicy
 
         var oldComplete = NewestFirst(all.Where(x => x.Kind == BackupKind.Archive && x.Restorable
             && x.SkippedFiles is not > 0)).Skip(normalKeep);
-        var oldPartial = NewestFirst(all.Where(x => x.Kind == BackupKind.Archive && (!x.Restorable
-            || x.SkippedFiles is > 0))).Skip(PartialArchiveRetention);
-        var oldSafety = NewestFirst(all.Where(x => x.Kind == BackupKind.SafetyArchive))
+        // Unverified historical archives (no trustworthy sidecar) may be the
+        // only surviving save copy. Do not silently delete them as "partial".
+        // Only positively identified skipped-file archives use the partial quota.
+        var oldPartial = NewestFirst(all.Where(x => x.Kind == BackupKind.Archive
+            && x.SkippedFiles is > 0)).Skip(PartialArchiveRetention);
+        var oldSafety = NewestFirst(all.Where(x => x.Kind == BackupKind.SafetyArchive
+            && x.Restorable && x.SkippedFiles is not > 0))
             .Skip(SafetyArchiveRetention);
         return oldComplete.Concat(oldPartial).Concat(oldSafety).ToArray();
     }

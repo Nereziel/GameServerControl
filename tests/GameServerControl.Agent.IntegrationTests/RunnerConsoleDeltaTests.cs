@@ -64,6 +64,21 @@ public sealed class RunnerConsoleDeltaTests
         Assert.Equal(new long[] { 1, 2, 3, 4, 5 }, snapshot.Lines.Select(line => line.Sequence));
     }
 
+    [Fact]
+    public void Windows_native_process_parent_snapshot_is_usable_without_killing_processes()
+    {
+        var snapshotType = typeof(RunnerProcessHost).Assembly.GetType(
+            "GameServerControl.Runner.WindowsProcessParentSnapshot");
+        Assert.NotNull(snapshotType);
+        var read = snapshotType.GetMethod(
+            "DescendantsOf", BindingFlags.Public | BindingFlags.Static);
+        Assert.NotNull(read);
+
+        var result = read.Invoke(null, new object[] { Environment.ProcessId });
+        var descendants = Assert.IsAssignableFrom<IReadOnlySet<int>>(result);
+        Assert.DoesNotContain(Environment.ProcessId, descendants);
+    }
+
     private static RunnerManifest Manifest() =>
         new(
             "alpha",
