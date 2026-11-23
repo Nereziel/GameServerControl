@@ -83,6 +83,26 @@ public sealed class ServerSettingsConcurrencyTests
     }
 
     [Fact]
+    public void Retention_change_does_not_validate_or_replace_unrelated_legacy_fields()
+    {
+        using var factory = new AgentTestFactory();
+        using var client = factory.CreateClientWithToken(AgentTestFactory.AdminToken);
+        var registry = factory.Services.GetRequiredService<ServerRegistry>();
+        var backups = factory.Services.GetRequiredService<BackupService>();
+        var existing = registry.Get("alpha")!;
+
+        // An older webhook URL may be disallowed for new full-definition
+        // edits, but changing only the backup retention must not fail or
+        // mutate unrelated stored data.
+        var result = backups.SaveSettings("alpha", 6);
+
+        Assert.Equal(6, result.Retention);
+        Assert.Equal(existing.DiscordWebhookUrl, registry.Get("alpha")!.DiscordWebhookUrl);
+        Assert.Equal(existing.RconPassword, registry.Get("alpha")!.RconPassword);
+        Assert.Equal(6, registry.Get("alpha")!.BackupRetention);
+    }
+
+    [Fact]
     public async Task Concurrent_api_puts_preserve_retention_when_edit_form_is_stale()
     {
         using var fixture = new Fixture();
