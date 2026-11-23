@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 
 const backup = fs.readFileSync('src/GameServerControl.Agent/Servers/BackupService.cs', 'utf8');
+const publication = fs.readFileSync('src/GameServerControl.Agent/Servers/BackupArchivePublication.cs', 'utf8');
 const hv = fs.readFileSync('src/GameServerControl.Agent/Hyperv/HypervService.cs', 'utf8');
 const program = fs.readFileSync('src/GameServerControl.Agent/Program.cs', 'utf8');
 
@@ -16,7 +17,12 @@ requireToken(backup, 'BackupSafety.NormalizeArchiveEntry', 'ZIP entries must be 
 requireToken(backup, 'RestoreBareMetalFromArchiveAsync', 'BareMetal restore must use staged restore orchestration');
 requireToken(backup, 'Safety backup failed', 'Restore must abort when the mandatory safety backup fails');
 requireToken(backup, 'Backup is incomplete', 'Backups that skipped files must be rejected for restore');
-requireToken(backup, 'Restorable: meta?.SkippedFiles is not > 0', 'Incomplete backups must be marked non-restorable in listings');
+requireToken(backup, 'Restorable: HasTrustedArchiveMetadata(meta)', 'Backup listings must reject unverified archives');
+requireToken(backup, 'metadata is { FileCount: >= 0, SkippedFiles: 0 }', 'Only complete metadata may authorize restore');
+requireToken(backup, 'BackupArchivePublication.PublishAsync', 'Archive bytes must be staged before publication');
+requireToken(publication, 'File.Move(stagingPath, archivePath)', 'Completed archives must be published by rename');
+requireToken(publication, 'ct.ThrowIfCancellationRequested()', 'Cancellation must be checked before archive publication');
+requireToken(publication, 'TryDelete(stagingPath)', 'Interrupted archives must remove their staging files');
 requireToken(backup, '.gsc-restore-', 'Restore must extract into staging directories');
 requireToken(backup, '.gsc-old-', 'Restore must retain old directories for rollback during swap');
 requireToken(backup, 'BackupKind.SafetyArchive', 'Safety archives must be classified separately');

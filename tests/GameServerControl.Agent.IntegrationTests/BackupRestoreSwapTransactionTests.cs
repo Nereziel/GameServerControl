@@ -27,6 +27,28 @@ public sealed class BackupRestoreSwapTransactionTests
     }
 
     [Fact]
+    public void Cancellation_before_second_swap_restores_all_originals()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "gsc-restore-test-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var plans = CreatePlans(root);
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            Assert.ThrowsAny<OperationCanceledException>(() =>
+                BackupRestoreSwapTransactions.Commit(plans, cts.Token, moveDirectory: (from, to) =>
+                {
+                    Directory.Move(from, to);
+                    if (from == plans[0].Stage) cts.Cancel();
+                }));
+            Assert.True(BackupRestoreSwapTransactions.Rollback(plans));
+            Assert.Equal("old-A", File.ReadAllText(Path.Combine(plans[0].Target, "save.txt")));
+            Assert.Equal("old-B", File.ReadAllText(Path.Combine(plans[1].Target, "save.txt")));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
     public void Failure_during_cleanup_does_not_undo_successful_restore()
     {
         var root = Path.Combine(Path.GetTempPath(), "gsc-restore-test-" + Guid.NewGuid().ToString("N"));
