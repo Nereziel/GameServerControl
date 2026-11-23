@@ -31,7 +31,8 @@ public static class ProcessCleanupScope
 
     public static bool IsWithinWorkingDirectory(string? executable, string? workingDirectory)
     {
-        if (string.IsNullOrWhiteSpace(executable) || string.IsNullOrWhiteSpace(workingDirectory))
+        if (string.IsNullOrWhiteSpace(executable) || string.IsNullOrWhiteSpace(workingDirectory)
+            || !Path.IsPathFullyQualified(executable) || !Path.IsPathFullyQualified(workingDirectory))
             return false;
         try
         {
