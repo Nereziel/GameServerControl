@@ -24,6 +24,11 @@ public sealed class ProcessCleanupScopeTests
         Assert.False(ProcessCleanupScope.IsAllowedExtra(own, alphaRoot, new[] { "unrelated-server" }));
         Assert.False(ProcessCleanupScope.IsAllowedExtra(Path.Combine(root, "alpha-sibling", "game-server"),
             alphaRoot, new[] { "game-server" }));
+        var filesystemRoot = Path.GetPathRoot(alphaRoot)!;
+        Assert.False(ProcessCleanupScope.IsAllowedExtra(
+            Path.Combine(filesystemRoot, "game-server"), filesystemRoot, new[] { "game-server" }));
+        Assert.False(ProcessCleanupScope.IsAllowedExtra(
+            "game-server", alphaRoot, new[] { "game-server" }));
     }
 
     [Fact]
