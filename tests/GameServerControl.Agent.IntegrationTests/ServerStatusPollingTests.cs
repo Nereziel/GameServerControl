@@ -122,7 +122,7 @@ public sealed class ServerStatusPollingTests
 
         await Task.Delay(40);
         source.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await batch);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => { await batch; });
         Assert.Equal(0, running);
     }
 
@@ -175,7 +175,7 @@ public sealed class ServerStatusPollingTests
         };
         listener.SetMeasurementEventCallback<double>((instrument, value, tags, _) =>
         {
-            var label = string.Join(",", tags.Select(t => t.Key + "=" + t.Value));
+            var label = string.Join(",", tags.ToArray().Select(t => t.Key + "=" + t.Value));
             measurements.Add((instrument.Name, value, label));
         });
         listener.Start();
