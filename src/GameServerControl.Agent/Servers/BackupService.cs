@@ -694,11 +694,11 @@ public sealed class BackupService
         var root = document.RootElement;
         if (root.ValueKind != JsonValueKind.Object
             || !root.TryGetProperty("Kind", out var kind) || kind.ValueKind != JsonValueKind.String
-            || !root.TryGetProperty("CreatedAt", out var created)
+            || !root.TryGetProperty("CreatedAt", out var created) || created.ValueKind != JsonValueKind.String
             || !created.TryGetDateTimeOffset(out var timestamp) || timestamp == default
-            || !root.TryGetProperty("FileCount", out var fileCount)
+            || !root.TryGetProperty("FileCount", out var fileCount) || fileCount.ValueKind != JsonValueKind.Number
             || !fileCount.TryGetInt32(out var files) || files < 0
-            || !root.TryGetProperty("SkippedFiles", out var skipped)
+            || !root.TryGetProperty("SkippedFiles", out var skipped) || skipped.ValueKind != JsonValueKind.Number
             || !skipped.TryGetInt32(out var skippedCount) || skippedCount < 0)
             return null;
 
