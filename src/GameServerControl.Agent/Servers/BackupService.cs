@@ -687,7 +687,24 @@ public sealed class BackupService
     {
         var path = MetadataPath(zipPath);
         if (!File.Exists(path)) return null;
-        return JsonSerializer.Deserialize<BackupMetadata>(File.ReadAllText(path), JsonOpts);
+
+        // Missing JSON properties otherwise deserialize to zero values, which
+        // could turn a truncated sidecar into a false "complete" backup.
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("Kind", out var kind) || kind.ValueKind != JsonValueKind.String
+            || !root.TryGetProperty("CreatedAt", out var created)
+            || !created.TryGetDateTimeOffset(out var timestamp) || timestamp == default
+            || !root.TryGetProperty("FileCount", out var fileCount)
+            || !fileCount.TryGetInt32(out var files) || files < 0
+            || !root.TryGetProperty("SkippedFiles", out var skipped)
+            || !skipped.TryGetInt32(out var skippedCount) || skippedCount < 0)
+            return null;
+
+        var metadata = JsonSerializer.Deserialize<BackupMetadata>(root.GetRawText(), JsonOpts);
+        return metadata is { Kind: BackupKind.Archive or BackupKind.SafetyArchive }
+            ? metadata : null;
     }
 
     private static string CheckpointMetadataDir(ServerDef def, string backupRoot)
