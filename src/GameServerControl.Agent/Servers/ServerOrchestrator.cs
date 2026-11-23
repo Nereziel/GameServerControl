@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.IO.Compression;
 using System.Text.Json.Nodes;
 using GameServerControl.Agent.Config;
 using GameServerControl.Agent.Hubs;
@@ -61,9 +60,6 @@ public sealed class ServerOrchestrator
         _cfg = cfg;
         _logger = logger;
     }
-
-    private string BackupRoot => _cfg["Agent:BackupRoot"] ??
-        (OperatingSystem.IsWindows() ? @"C:\GameServerControl\Backups" : "/var/lib/gameservercontrol/backups");
 
     private GuestCredential GetCred(string? credId)
     {
@@ -445,178 +441,23 @@ public sealed class ServerOrchestrator
         return await StartCoreAsync(id, fromRestart: true, ct);
     }
 
-    public async Task<ActionResult> BackupAsync(string id, CancellationToken ct = default)
-    {
-        var corr = Guid.NewGuid().ToString("n");
-        var def = _registry.Get(id);
-        if (def is null) return new ActionResult(false, "Unknown server", corr);
-
-        if (def.HostingMode == HostingMode.BareMetal)
-            return await BackupBareMetalAsync(def, corr, ct);
-
-        var name = $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
-        await LogAsync(id, "orch", "Creating checkpoint " + name);
-        var ok = await _hv.CreateCheckpointAsync(def.VmName, name, ct);
-        if (!ok) return new ActionResult(false, "Checkpoint failed", corr);
-
-        _tracker.Update(id, s => s with { LastBackupAt = DateTimeOffset.UtcNow });
-        await RefreshStatusAsync(id, ct);
-        _ = _discord.SendAsync(def, DiscordNotifier.Kind.Info, "📦 Checkpoint created", name, ct);
-        return new ActionResult(true, "Checkpoint created: " + name, corr);
-    }
-
-    private async Task<ActionResult> BackupBareMetalAsync(ServerDef def, string corr, CancellationToken ct)
-    {
-        if (def.SaveDirs is null || def.SaveDirs.Length == 0)
-            return new ActionResult(false, "No SaveDirs configured for this server.", corr);
-
-        var backupRoot = BackupRoot;
-        var dest = Path.Combine(backupRoot, def.Id);
-        Directory.CreateDirectory(dest);
-        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-        var zipPath = Path.Combine(dest, $"{def.Id}-{stamp}.zip");
-
-        await LogAsync(def.Id, "orch", "Zipping save dirs to " + zipPath);
-        await Task.Run(() =>
-        {
-            using var fs = File.Create(zipPath);
-            using var archive = new ZipArchive(fs, ZipArchiveMode.Create);
-            foreach (var dir in def.SaveDirs)
-            {
-                if (!Directory.Exists(dir)) continue;
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var rel = Path.GetRelativePath(dir, file);
-                    var entryName = Path.Combine(prefix, rel).Replace('\\', '/');
-                    try
-                    {
-                        var e = archive.CreateEntry(entryName, CompressionLevel.Fastest);
-                        using var es = e.Open();
-                        using var src = File.OpenRead(file);
-                        src.CopyTo(es);
-                    }
-                    catch (IOException ex)
-                    {
-                        _logger.LogWarning("Skipping locked file {File}: {Msg}", file, ex.Message);
-                    }
-                }
-            }
-        }, ct);
-
-        var size = new FileInfo(zipPath).Length;
-        var keep = int.TryParse(_cfg["Agent:BackupRetention"], out var k) && k > 0 ? k : 10;
-        var olds = new DirectoryInfo(dest).GetFiles("*.zip").OrderByDescending(f => f.LastWriteTimeUtc).Skip(keep).ToList();
-        foreach (var f in olds)
-        {
-            try { f.Delete(); await LogAsync(def.Id, "backup", $"Pruned old backup {f.Name}"); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Prune failed for {File}", f.FullName); }
-        }
-
-        _tracker.Update(def.Id, s => s with { LastBackupAt = DateTimeOffset.UtcNow });
-        await RefreshStatusAsync(def.Id, ct);
-        _ = _discord.SendAsync(def, DiscordNotifier.Kind.Info,
-            "📦 Backup created",
-            $"{Path.GetFileName(zipPath)} ({size / 1024 / 1024} MB)", ct);
-        return new ActionResult(true, $"Backup created: {zipPath} ({size / 1024 / 1024} MB) — kept {Math.Min(keep, new DirectoryInfo(dest).GetFiles("*.zip").Length)}", corr);
-    }
+    // Compatibility methods for existing ServerOrchestrator consumers.
+    // All backup operations (including the legacy entry points) MUST use the
+    // same validation, metadata, retention, safety snapshots and staged restore
+    // rules as the Agent's HTTP endpoints. Do not reintroduce ZIP IO here.
+    public Task<ActionResult> BackupAsync(string id, CancellationToken ct = default)
+        => _backups.CreateAsync(id, ct);
 
     public Task<List<BackupInfo>> ListBackupsAsync(string id, CancellationToken ct = default)
-    {
-        var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
-        var dir = Path.Combine(BackupRoot, def.Id);
-        var list = new List<BackupInfo>();
-        if (!Directory.Exists(dir)) return Task.FromResult(list);
-        foreach (var f in new DirectoryInfo(dir).GetFiles("*.zip").OrderByDescending(f => f.LastWriteTimeUtc))
-        {
-            list.Add(new BackupInfo(
-                Id: f.Name,
-                ServerId: def.Id,
-                CreatedAt: new DateTimeOffset(f.LastWriteTimeUtc, TimeSpan.Zero),
-                CheckpointName: f.Name,
-                SizeBytes: f.Length));
-        }
-        return Task.FromResult(list);
-    }
+        => _backups.ListAsync(id, ct);
 
-    public async Task<ActionResult> RestoreBackupAsync(string id, string backupName, CancellationToken ct = default)
-    {
-        var corr = Guid.NewGuid().ToString("n");
-        var def = _registry.Get(id);
-        if (def is null) return new ActionResult(false, "Unknown server", corr);
-        if (def.SaveDirs is null || def.SaveDirs.Length == 0)
-            return new ActionResult(false, "No SaveDirs configured", corr);
-        if (def.HostingMode != HostingMode.BareMetal)
-            return new ActionResult(false, "Restore is only implemented for BareMetal servers", corr);
+    public Task<ActionResult> RestoreBackupAsync(
+        string id, string backupName, CancellationToken ct = default)
+        => _backups.RestoreAsync(id, backupName, ct);
 
-        var st = _tracker.Get(id);
-        if (st.ProcessState == ProcessState.Running)
-            return new ActionResult(false, "Stop the server before restoring a backup.", corr);
-
-        var backupRoot = BackupRoot;
-        var zipPath = Path.Combine(backupRoot, def.Id, backupName);
-        if (!File.Exists(zipPath)) return new ActionResult(false, "Backup not found: " + backupName, corr);
-
-        var safetyName = $"{def.Id}-prerestore-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip";
-        var safetyPath = Path.Combine(backupRoot, def.Id, safetyName);
-        try
-        {
-            await LogAsync(id, "restore", "Creating safety backup " + safetyName);
-            using var fs = File.Create(safetyPath);
-            using var ar = new ZipArchive(fs, ZipArchiveMode.Create);
-            foreach (var dir in def.SaveDirs)
-            {
-                if (!Directory.Exists(dir)) continue;
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                {
-                    var rel = Path.GetRelativePath(dir, f);
-                    var entry = ar.CreateEntry(Path.Combine(prefix, rel).Replace('\\', '/'), CompressionLevel.Fastest);
-                    using var es = entry.Open();
-                    using var src = File.OpenRead(f);
-                    src.CopyTo(es);
-                }
-            }
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "Safety backup failed (continuing)"); }
-
-        try
-        {
-            await LogAsync(id, "restore", $"Restoring from {backupName}");
-            using var archive = ZipFile.OpenRead(zipPath);
-            foreach (var dir in def.SaveDirs)
-            {
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/')) + "/";
-                Directory.CreateDirectory(dir);
-                foreach (var entry in archive.Entries.Where(e => e.FullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(e.Name)))
-                {
-                    var rel = entry.FullName.Substring(prefix.Length);
-                    var dest = Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar));
-                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    entry.ExtractToFile(dest, overwrite: true);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            await LogAsync(id, "restore", "ERROR: " + ex.Message);
-            return new ActionResult(false, "Restore failed: " + ex.Message, corr);
-        }
-
-        await RefreshStatusAsync(id, ct);
-        return new ActionResult(true, $"Restored from {backupName}. Safety copy: {safetyName}", corr);
-    }
-
-    public Task<bool> DeleteBackupAsync(string id, string backupName, CancellationToken ct = default)
-    {
-        var def = _registry.Get(id);
-        if (def is null) return Task.FromResult(false);
-        var zipPath = Path.Combine(BackupRoot, def.Id, backupName);
-        if (!File.Exists(zipPath)) return Task.FromResult(false);
-        try { File.Delete(zipPath); return Task.FromResult(true); }
-        catch (Exception ex) { _logger.LogWarning(ex, "Delete backup failed"); return Task.FromResult(false); }
-    }
+    public Task<bool> DeleteBackupAsync(
+        string id, string backupName, CancellationToken ct = default)
+        => _backups.DeleteAsync(id, backupName, ct);
 
     public Task<ActionResult> UpdateAsync(string id, CancellationToken ct = default)
         => WithLifecycleLockAsync(id, () => UpdateCoreAsync(id, ct), ct);
