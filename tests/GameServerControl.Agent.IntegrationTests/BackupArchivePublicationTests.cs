@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Text.Json.Nodes;
 using GameServerControl.Agent.Servers;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -95,6 +96,11 @@ public sealed class BackupArchivePublicationTests
     public async Task Listing_rejects_archives_without_verified_complete_metadata()
     {
         using var baseFactory = new AgentTestFactory();
+        var serversDoc = JsonNode.Parse(File.ReadAllText(baseFactory.ServersPath))!;
+        serversDoc["Servers"]![0]!["SaveDirs"] = new JsonArray(JsonValue.Create(
+            Path.Combine(baseFactory.TempRoot, "alpha-game")));
+        File.WriteAllText(baseFactory.ServersPath, serversDoc.ToJsonString());
+
         var backupRoot = Path.Combine(baseFactory.TempRoot, "backups");
         using var factory = baseFactory.WithWebHostBuilder(builder =>
             builder.ConfigureAppConfiguration((_, config) =>
@@ -110,13 +116,16 @@ public sealed class BackupArchivePublicationTests
         var missing = Path.Combine(backupDir, "alpha-legacy.zip");
         var invalid = Path.Combine(backupDir, "alpha-bad-meta.zip");
         var truncated = Path.Combine(backupDir, "alpha-truncated-meta.zip");
+        var mismatch = Path.Combine(backupDir, "alpha-mismatch.zip");
         var partial = Path.Combine(backupDir, "alpha-skipped.zip");
-        foreach (var file in new[] { complete, missing, invalid, truncated, partial })
+        foreach (var file in new[] { complete, missing, invalid, truncated, mismatch, partial })
             WriteArchive(file);
         File.WriteAllText(complete + ".meta.json", CompleteMetadata);
         File.WriteAllText(invalid + ".meta.json", "not json");
         File.WriteAllText(truncated + ".meta.json",
             """{"Kind":"Archive","CreatedAt":"2026-11-23T10:00:00Z","FileCount":1}""");
+        File.WriteAllText(mismatch + ".meta.json",
+            """{"Kind":"Archive","CreatedAt":"2026-11-23T10:00:00Z","FileCount":2,"SkippedFiles":0}""");
         File.WriteAllText(partial + ".meta.json",
             """{"Kind":"Archive","CreatedAt":"2026-11-23T10:00:00Z","FileCount":1,"SkippedFiles":1}""");
 
@@ -134,6 +143,10 @@ public sealed class BackupArchivePublicationTests
             Assert.False(restore.Success);
             Assert.Contains("incomplete or unverified", restore.Message, StringComparison.OrdinalIgnoreCase);
         }
+
+        var mismatchRestore = await service.RestoreAsync("alpha", Path.GetFileName(mismatch));
+        Assert.False(mismatchRestore.Success);
+        Assert.Contains("file count", mismatchRestore.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NewRoot()
