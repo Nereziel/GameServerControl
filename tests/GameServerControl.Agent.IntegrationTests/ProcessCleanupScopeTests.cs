@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Servers;
 using GameServerControl.Shared;
@@ -60,6 +61,42 @@ public sealed class ProcessCleanupScopeTests
             Path.Combine(a, "server.bin"), b, a, allowed));
         Assert.False(ProcessCleanupScope.IsOwnedLinuxExtra(
             Path.Combine(a, "server.bin"), null, a, allowed));
+    }
+
+    [Fact]
+    public async Task Linux_cleanup_refuses_a_shared_working_directory()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+
+        using var factory = new AgentTestFactory();
+        var servers = JsonNode.Parse(File.ReadAllText(factory.ServersPath))!;
+        var sharedRoot = servers["Servers"]![0]!["GuestWorkingDir"]!.GetValue<string>();
+        servers["Servers"]![1]!["GuestWorkingDir"] = sharedRoot;
+        File.WriteAllText(factory.ServersPath, servers.ToJsonString());
+
+        using var client = factory.CreateClient();
+        var registry = factory.Services.GetRequiredService<ServerRegistry>();
+        var local = factory.Services.GetRequiredService<LocalProcessService>();
+        var binary = File.Exists("/usr/bin/sleep") ? "/usr/bin/sleep" : "/bin/sleep";
+        var executable = Path.Combine(sharedRoot, "gscsleep");
+        File.Copy(binary, executable);
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+        using var process = Process.Start(new ProcessStartInfo(executable, "30")
+        {
+            UseShellExecute = false,
+            WorkingDirectory = sharedRoot
+        })!;
+        try
+        {
+            await local.KillByNamesAsync(registry.Get("alpha")!, new[] { "gscsleep" });
+            Assert.False(process.HasExited);
+        }
+        finally
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+            try { await process.WaitForExitAsync(); } catch { }
+        }
     }
 
     [Fact]
