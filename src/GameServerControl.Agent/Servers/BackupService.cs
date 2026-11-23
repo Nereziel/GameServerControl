@@ -85,6 +85,23 @@ public sealed class BackupService
         }
     }
 
+    // Local retention is independent of offsite availability. Once a complete
+    // archive exists, every exit path (including a cancelled mirror) must apply
+    // the local retention policy. Use a non-cancelled token for this short local
+    // housekeeping step so cancellation cannot grow backups without bound.
+    private async Task<string?> MirrorAndPruneBareMetalAsync(
+        ServerDef def, string? localArchive, CancellationToken ct)
+    {
+        try
+        {
+            return await MirrorOffsiteIfConfiguredAsync(def, localArchive, ct);
+        }
+        finally
+        {
+            await PruneBareMetalAsync(def, CancellationToken.None);
+        }
+    }
+
     private int DefaultBackupRetention
         => int.TryParse(_cfg["Agent:BackupRetention"], out var value) && value > 0
             ? Math.Clamp(value, 1, 200)
@@ -145,12 +162,11 @@ public sealed class BackupService
                     $"{created.Metadata.SkippedFiles} file(s) were skipped. Restore is disabled. Complete backups are preserved independently.",
                     corr);
             }
-            var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, created.Path, ct);
+            var offsiteProblem = await MirrorAndPruneBareMetalAsync(def, created.Path, ct);
+            _tracker.Update(id, state => state with { LastBackupAt = DateTimeOffset.UtcNow });
             if (offsiteProblem is not null)
                 return new ActionResult(false,
                     $"Local backup retained: {Path.GetFileName(created.Path)}. " + offsiteProblem, corr);
-            await PruneBareMetalAsync(def, ct);
-            _tracker.Update(id, state => state with { LastBackupAt = DateTimeOffset.UtcNow });
             return new ActionResult(true,
                 $"Backup created: {Path.GetFileName(created.Path)} ({mb:0.##} MB).", corr);
         }
@@ -209,13 +225,11 @@ public sealed class BackupService
 
         if (!created.Success)
             return new ActionResult(false, created.Error ?? "Pre-update backup failed", corr);
-        var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, created.Path, ct);
+        var offsiteProblem = await MirrorAndPruneBareMetalAsync(def, created.Path, ct);
+        _tracker.Update(id, current => current with { LastBackupAt = DateTimeOffset.UtcNow });
         if (offsiteProblem is not null)
             return new ActionResult(false,
                 "Local pre-update snapshot retained, but update was cancelled. " + offsiteProblem, corr);
-
-        await PruneBareMetalAsync(def, ct);
-        _tracker.Update(id, current => current with { LastBackupAt = DateTimeOffset.UtcNow });
         return new ActionResult(true, "Pre-update backup: " + Path.GetFileName(created.Path), corr);
     }
 
@@ -307,12 +321,10 @@ public sealed class BackupService
             ct);
         if (!safety.Success)
             return new ActionResult(false, "Safety backup failed: " + (safety.Error ?? "unknown error") + ". Restore was not started.", corr);
-        var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, safety.Path, ct);
+        var offsiteProblem = await MirrorAndPruneBareMetalAsync(def, safety.Path, ct);
         if (offsiteProblem is not null)
             return new ActionResult(false,
                 "Local pre-restore safety snapshot retained, but restore was not started. " + offsiteProblem, corr);
-
-        await PruneBareMetalAsync(def, ct);
 
         var swaps = targets.Select(t => new RestoreSwapStep
         {
