@@ -39,6 +39,7 @@ public sealed class BackupService
     private readonly HypervService _hv;
     private readonly LocalProcessService _local;
     private readonly ServerRegistry _registry;
+    private readonly ServerLifecycleGate _lifecycleGate;
     private readonly ServerStore _store;
     private readonly StatusTracker _tracker;
     private readonly IConfiguration _cfg;
@@ -48,6 +49,7 @@ public sealed class BackupService
         HypervService hv,
         LocalProcessService local,
         ServerRegistry registry,
+        ServerLifecycleGate lifecycleGate,
         ServerStore store,
         StatusTracker tracker,
         IConfiguration cfg,
@@ -56,6 +58,7 @@ public sealed class BackupService
         _hv = hv;
         _local = local;
         _registry = registry;
+        _lifecycleGate = lifecycleGate;
         _store = store;
         _tracker = tracker;
         _cfg = cfg;
@@ -227,7 +230,12 @@ public sealed class BackupService
             : await ListHyperVAsync(def, ct);
     }
 
-    public async Task<ActionResult> RestoreAsync(string id, string backupName, CancellationToken ct = default)
+    public Task<ActionResult> RestoreAsync(string id, string backupName, CancellationToken ct = default)
+        => _lifecycleGate.RunExclusiveAsync(id, () => RestoreCoreAsync(id, backupName, ct), ct);
+
+    // Called with the shared per-server lifecycle gate held. This includes the
+    // stopped-process probe, safety snapshot, archive staging, swap and rollback.
+    private async Task<ActionResult> RestoreCoreAsync(string id, string backupName, CancellationToken ct)
     {
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);
@@ -326,6 +334,14 @@ public sealed class BackupService
         {
             ExtractArchiveToStages(zipPath, targets, swaps, ct);
 
+            // Another process manager (outside the Agent lifecycle) could start
+            // the game while the safety archive was being created. Recheck
+            // immediately before swapping save directories.
+            var (stillProbeOk, stillRunningPid) = await _local.FindProcessAsync(def, ct);
+            if (!stillProbeOk || stillRunningPid is not null)
+                throw new InvalidOperationException(
+                    "Game process state changed or could not be verified. Restore was aborted before swapping saves.");
+
             BackupRestoreSwapTransactions.Commit(swaps, ct);
 
             // All swap steps must succeed before any original data is deleted.
@@ -377,6 +393,11 @@ public sealed class BackupService
         }
 
         await PruneHyperVAsync(def, ct);
+        // A VM may have been powered on outside GameServerControl during the
+        // safety checkpoint. Never apply a restore to a running/unknown VM.
+        if (await _hv.GetStateAsync(def.VmName, ct) != VmState.Off)
+            return new ActionResult(false,
+                "VM state changed during pre-restore backup. Restore was not started.", corr);
         var restored = await _hv.RestoreCheckpointAsync(def.VmName, checkpoint.CheckpointName, ct);
         return restored
             ? new ActionResult(true, $"Restored checkpoint {checkpoint.CheckpointName}. Safety copy: {safetyName}", corr)

@@ -107,6 +107,7 @@ builder.Services.AddSingleton<ServerDiagnostics>(sp =>
         sp.GetRequiredService<ILogger<ServerDiagnostics>>());
 });
 builder.Services.AddSingleton<ServerAlertPolicy>();
+builder.Services.AddSingleton<ServerLifecycleGate>();
 builder.Services.AddSingleton<ServerOrchestrator>();
 builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
