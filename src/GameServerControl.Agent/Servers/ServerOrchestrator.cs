@@ -536,73 +536,11 @@ public sealed class ServerOrchestrator
         return Task.FromResult(list);
     }
 
-    public async Task<ActionResult> RestoreBackupAsync(string id, string backupName, CancellationToken ct = default)
-    {
-        var corr = Guid.NewGuid().ToString("n");
-        var def = _registry.Get(id);
-        if (def is null) return new ActionResult(false, "Unknown server", corr);
-        if (def.SaveDirs is null || def.SaveDirs.Length == 0)
-            return new ActionResult(false, "No SaveDirs configured", corr);
-        if (def.HostingMode != HostingMode.BareMetal)
-            return new ActionResult(false, "Restore is only implemented for BareMetal servers", corr);
-
-        var st = _tracker.Get(id);
-        if (st.ProcessState == ProcessState.Running)
-            return new ActionResult(false, "Stop the server before restoring a backup.", corr);
-
-        var backupRoot = BackupRoot;
-        var zipPath = Path.Combine(backupRoot, def.Id, backupName);
-        if (!File.Exists(zipPath)) return new ActionResult(false, "Backup not found: " + backupName, corr);
-
-        var safetyName = $"{def.Id}-prerestore-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip";
-        var safetyPath = Path.Combine(backupRoot, def.Id, safetyName);
-        try
-        {
-            await LogAsync(id, "restore", "Creating safety backup " + safetyName);
-            using var fs = File.Create(safetyPath);
-            using var ar = new ZipArchive(fs, ZipArchiveMode.Create);
-            foreach (var dir in def.SaveDirs)
-            {
-                if (!Directory.Exists(dir)) continue;
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                {
-                    var rel = Path.GetRelativePath(dir, f);
-                    var entry = ar.CreateEntry(Path.Combine(prefix, rel).Replace('\\', '/'), CompressionLevel.Fastest);
-                    using var es = entry.Open();
-                    using var src = File.OpenRead(f);
-                    src.CopyTo(es);
-                }
-            }
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "Safety backup failed (continuing)"); }
-
-        try
-        {
-            await LogAsync(id, "restore", $"Restoring from {backupName}");
-            using var archive = ZipFile.OpenRead(zipPath);
-            foreach (var dir in def.SaveDirs)
-            {
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/')) + "/";
-                Directory.CreateDirectory(dir);
-                foreach (var entry in archive.Entries.Where(e => e.FullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(e.Name)))
-                {
-                    var rel = entry.FullName.Substring(prefix.Length);
-                    var dest = Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar));
-                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    entry.ExtractToFile(dest, overwrite: true);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            await LogAsync(id, "restore", "ERROR: " + ex.Message);
-            return new ActionResult(false, "Restore failed: " + ex.Message, corr);
-        }
-
-        await RefreshStatusAsync(id, ct);
-        return new ActionResult(true, $"Restored from {backupName}. Safety copy: {safetyName}", corr);
-    }
+    // Preserve the legacy public method without a second, unlocked restore
+    // implementation. The BackupService owns validation, safety copies,
+    // rollback and the shared lifecycle gate.
+    public Task<ActionResult> RestoreBackupAsync(string id, string backupName, CancellationToken ct = default)
+        => _backups.RestoreAsync(id, backupName, ct);
 
     public Task<bool> DeleteBackupAsync(string id, string backupName, CancellationToken ct = default)
     {
