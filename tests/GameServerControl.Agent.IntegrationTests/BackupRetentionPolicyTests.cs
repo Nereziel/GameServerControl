@@ -31,6 +31,37 @@ public sealed class BackupRetentionPolicyTests
     }
 
     [Fact]
+    public void Unverified_legacy_archives_are_preserved_even_when_partial_quota_is_exceeded()
+    {
+        var archives = new[]
+        {
+            Snapshot("complete", 10),
+            Snapshot("partial-4", 9, restorable: false),
+            Snapshot("partial-3", 8, restorable: false),
+            Snapshot("partial-2", 7, restorable: false),
+            Snapshot("partial-1", 6, restorable: false),
+            Snapshot("legacy-archive", 1) with { Restorable = false, SkippedFiles = null },
+            Snapshot("corrupt-metadata", 0) with { Restorable = false, SkippedFiles = null },
+            Snapshot("legacy-safety", 0, BackupKind.SafetyArchive) with
+            {
+                Restorable = false,
+                SkippedFiles = null
+            },
+            Snapshot("safety-new-1", 10, BackupKind.SafetyArchive),
+            Snapshot("safety-new-2", 9, BackupKind.SafetyArchive),
+            Snapshot("safety-new-3", 8, BackupKind.SafetyArchive),
+            Snapshot("safety-new-4", 7, BackupKind.SafetyArchive)
+        };
+
+        var evictions = BackupRetentionPolicy.SelectBareMetalEvictions(archives, normalKeep: 1);
+        Assert.Contains(evictions, x => x.CheckpointName == "partial-1.zip");
+        Assert.Contains(evictions, x => x.CheckpointName == "safety-new-4.zip");
+        Assert.DoesNotContain(evictions, x => x.CheckpointName == "legacy-archive.zip");
+        Assert.DoesNotContain(evictions, x => x.CheckpointName == "corrupt-metadata.zip");
+        Assert.DoesNotContain(evictions, x => x.CheckpointName == "legacy-safety.zip");
+    }
+
+    [Fact]
     public void Safety_and_incomplete_archives_have_independent_quotas()
     {
         var archives = new[]
