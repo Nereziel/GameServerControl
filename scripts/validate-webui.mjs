@@ -84,8 +84,22 @@ if (!coreForUi.includes('closeMobileNavigation') ||
 const programForUi = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Program.cs'), 'utf8');
 const orchestratorForUi = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Servers/ServerOrchestrator.cs'), 'utf8');
 const metricsForUi = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Servers/ProcessMetricsSampler.cs'), 'utf8');
-for (const token of ['var syncRelay = statusCycle++ % 6 == 0', 'TimeSpan.FromSeconds(5)'])
+for (const token of [
+  'new PeriodicTimer(ServerStatusCadence.CycleInterval)',
+  'cadence.ShouldSyncRelay(now)',
+  'cadence.ShouldCheckDisk(now)',
+  'poller.PollAsync(ids,',
+  'poller.RecordCycle('
+])
   if (!programForUi.includes(token)) throw new Error('Server metrics polling regression: '+token);
+const pollerForUi = fs.readFileSync(path.resolve('src/GameServerControl.Agent/Servers/ServerStatusPoller.cs'), 'utf8');
+for (const token of [
+  'TimeSpan.FromSeconds(5)', 'TimeSpan.FromSeconds(30)', 'TimeSpan.FromMinutes(1)',
+  'MaxDegreeOfParallelism = _maxConcurrency',
+  'deadline.CancelAfter(_timeout)',
+  'gsc.status.poll.duration', 'gsc.status.cycle.duration'
+])
+  if (!pollerForUi.includes(token)) throw new Error('Bounded status polling contract regression: '+token);
 if (!orchestratorForUi.includes('_metrics.Sample(def, pp)') ||
     !metricsForUi.includes('RSDragonwildsServer-Win64-Shipping') ||
     !metricsForUi.includes('Process.GetProcessById(pid)'))

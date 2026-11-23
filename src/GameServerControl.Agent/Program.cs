@@ -94,6 +94,7 @@ builder.Services.AddHttpClient("managed-hosts", client => client.Timeout = Timeo
 builder.Services.AddSingleton<ManagedHostStore>();
 builder.Services.AddSingleton<ManagedHostGateway>();
 builder.Services.AddSingleton<ServerStore>();
+builder.Services.AddSingleton<ServerStatusPoller>();
 builder.Services.AddSingleton<PublicRelayManager>();
 builder.Services.AddSingleton<StatusTracker>();
 builder.Services.AddSingleton<ServerUpdateConsole>();
@@ -107,6 +108,7 @@ builder.Services.AddSingleton<ServerDiagnostics>(sp =>
         sp.GetRequiredService<ILogger<ServerDiagnostics>>());
 });
 builder.Services.AddSingleton<ServerAlertPolicy>();
+builder.Services.AddSingleton<ServerLifecycleGate>();
 builder.Services.AddSingleton<ServerOrchestrator>();
 builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
@@ -855,6 +857,7 @@ app.MapHub<StatusHub>("/hubs/status").RequireAuthorization();
 
 _ = Task.Run(async () =>
 {
+    var stopping = app.Lifetime.ApplicationStopping;
     var orch = app.Services.GetRequiredService<ServerOrchestrator>();
     var reg = app.Services.GetRequiredService<ServerRegistry>();
     var relay = app.Services.GetRequiredService<PublicRelayManager>();
@@ -862,60 +865,93 @@ _ = Task.Run(async () =>
     var diagnostics = app.Services.GetRequiredService<ServerDiagnostics>();
     var discord = app.Services.GetRequiredService<DiscordNotifier>();
     var alertPolicy = app.Services.GetRequiredService<ServerAlertPolicy>();
-    var statusCycle = 0;
-    var pollPolicy = new ServerStatusPollPolicy();
     var tracker = app.Services.GetRequiredService<StatusTracker>();
-    while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
+    var pollPolicy = new ServerStatusPollPolicy();
+    var cadence = new ServerStatusCadence();
+    var poller = app.Services.GetRequiredService<ServerStatusPoller>();
+
+    // PeriodicTimer uses a fixed five-second tick instead of adding five
+    // seconds *after* a slow cycle. Only one cycle is active at any time;
+    // individual server reads may run concurrently, but Relay mutations stay
+    // serialized and lifecycle Start/Stop/Update are never launched here.
+    using var timer = new PeriodicTimer(ServerStatusCadence.CycleInterval);
+    while (!stopping.IsCancellationRequested)
     {
-        // Sample live server CPU/RAM every five seconds; reconcile public Relay
-        // rules on the original ~30-second cadence to avoid unnecessary API calls.
-        var syncRelay = statusCycle++ % 6 == 0;
-        var checkDisk = statusCycle % 12 == 1;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var servers = reg.All;
-        bool? relayReachable = null;
-        if (syncRelay && servers.Any(s => relay.SettingsFor(s.Id).Enabled))
+        var attempted = 0;
+        var syncRelay = false;
+        try
         {
-            try { relayReachable = (await relay.GetGlobalStatusAsync(app.Lifetime.ApplicationStopping)).Reachable; }
-            catch (Exception ex) { relayReachable = false; log.LogDebug(ex, "Public relay health check failed"); }
-        }
-        foreach (var s in servers)
-        {
-            try
+            var now = DateTimeOffset.UtcNow;
+            syncRelay = cadence.ShouldSyncRelay(now);
+            var checkDisk = cadence.ShouldCheckDisk(now);
+
+            // Unknown/running servers are checked each five-second tick.
+            // Known stopped servers are checked no more often than 15 seconds.
+            var ids = servers
+                .Where(s => pollPolicy.ShouldPoll(s.Id, tracker.Get(s.Id).ProcessState, now))
+                .Select(s => s.Id)
+                .ToArray();
+            attempted = ids.Length;
+
+            // Bound process/Runner reads across DIFFERENT server instances.
+            // Each in-flight read is awaited before another cycle may begin;
+            // cancellation does not detach tasks that might later modify state.
+            var fresh = await poller.PollAsync(ids,
+                (id, token) => orch.RefreshStatusAsync(id, token), stopping);
+
+            bool? relayReachable = null;
+            if (syncRelay && servers.Any(s => relay.SettingsFor(s.Id).Enabled))
             {
-                // Running/unknown servers are always checked every five seconds.
-                // A known stopped server is rechecked every 15 seconds; explicit
-                // start/stop actions still refresh status immediately.
-                var previous = tracker.Get(s.Id);
-                var pollNow = pollPolicy.ShouldPoll(s.Id, previous.ProcessState, DateTimeOffset.UtcNow);
-                var status = pollNow
-                    ? await orch.RefreshStatusAsync(s.Id, app.Lifetime.ApplicationStopping)
-                    : previous;
-                if (syncRelay)
+                try { relayReachable = (await relay.GetGlobalStatusAsync(stopping)).Reachable; }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested) { throw; }
+                catch (Exception ex) { relayReachable = false; log.LogDebug(ex, "Public relay health check failed"); }
+            }
+
+            // Relay operations touch shared routing state and remain sequential.
+            foreach (var s in servers)
+            {
+                try
                 {
-                    var relayActive = status.ProcessState == ProcessState.Running && relay.SettingsFor(s.Id).Enabled;
-                    var synced = true;
-                    try { await relay.EnsureForServerAsync(s, status.ProcessState == ProcessState.Running, app.Lifetime.ApplicationStopping); }
-                    catch (Exception ex) { synced = false; log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
-                    if (alertPolicy.ReportRelay(s.Id, relayActive, synced && (!relayActive || relayReachable == true)))
+                    var status = fresh.TryGetValue(s.Id, out var current)
+                        ? current : tracker.Get(s.Id);
+                    if (syncRelay)
                     {
-                        diagnostics.Record(s.Id, "RelayUnavailable", "Error", "Public VPS Relay could not be reached or synchronized.");
-                        _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Public VPS Relay unavailable",
-                            "The Agent cannot reach or synchronize the public Relay. Check Server Network settings.");
+                        var relayActive = status.ProcessState == ProcessState.Running && relay.SettingsFor(s.Id).Enabled;
+                        var synced = true;
+                        try { await relay.EnsureForServerAsync(s, status.ProcessState == ProcessState.Running, stopping); }
+                        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { throw; }
+                        catch (Exception ex) { synced = false; log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
+                        if (alertPolicy.ReportRelay(s.Id, relayActive, synced && (!relayActive || relayReachable == true)))
+                        {
+                            diagnostics.Record(s.Id, "RelayUnavailable", "Error", "Public VPS Relay could not be reached or synchronized.");
+                            _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Public VPS Relay unavailable",
+                                "The Agent cannot reach or synchronize the public Relay. Check Server Network settings.");
+                        }
+                    }
+                    if (checkDisk && status.ProcessState == ProcessState.Running &&
+                        alertPolicy.ReportFreeDisk(s.Id, ServerAlertPolicy.AvailableDiskBytes(s.GuestWorkingDir)))
+                    {
+                        diagnostics.Record(s.Id, "LowDisk", "Error", "Available space on the game server volume is below 5 GiB.");
+                        _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Low game server disk space",
+                            "Less than 5 GiB is available on the game server volume. Check storage before the next save or backup.");
                     }
                 }
-                if (checkDisk && status.ProcessState == ProcessState.Running &&
-                    alertPolicy.ReportFreeDisk(s.Id, ServerAlertPolicy.AvailableDiskBytes(s.GuestWorkingDir)))
-                {
-                    diagnostics.Record(s.Id, "LowDisk", "Error", "Available space on the game server volume is below 5 GiB.");
-                    _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Low game server disk space",
-                        "Less than 5 GiB is available on the game server volume. Check storage before the next save or backup.");
-                }
+                catch (OperationCanceledException) when (stopping.IsCancellationRequested) { throw; }
+                catch (Exception ex) { log.LogDebug(ex, "Status monitoring failed for {Id}", s.Id); }
             }
-            catch (OperationCanceledException) { break; }
-            catch (Exception ex) { log.LogDebug(ex, "Status refresh failed for {Id}", s.Id); }
         }
-        try { await Task.Delay(TimeSpan.FromSeconds(5), app.Lifetime.ApplicationStopping); }
-        catch (OperationCanceledException) { break; }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { break; }
+        catch (Exception ex) { log.LogError(ex, "Status cycle failed; monitoring will retry on the next tick."); }
+        finally
+        {
+            poller.RecordCycle(System.Diagnostics.Stopwatch.GetElapsedTime(started),
+                servers.Count, attempted, syncRelay);
+        }
+
+        try { if (!await timer.WaitForNextTickAsync(stopping)) break; }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { break; }
     }
 });
 
