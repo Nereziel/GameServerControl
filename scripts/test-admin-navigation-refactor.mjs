@@ -73,9 +73,13 @@ readonly=false;
 const schedule={innerHTML:''};
 await ctx.renderServerSchedule(def,schedule);
 assert.match(schedule.innerHTML,/Scheduled maintenance/);
-for(const id of ['swRestart','swRestartHour','swUpdate','swDay','swUpdateHour','swBackup','swBackupMinute'])
+for(const id of ['swScheduleRestart','swRestartHour','swUpdate','swDay','swUpdateHour','swBackup','swBackupMinute'])
   assert.ok(schedule.innerHTML.includes('id="'+id+'"'),'scheduled control missing: '+id);
 assert.doesNotMatch(schedule.innerHTML,/swUpdateTerminal|swUpdateState|swAutoUpdateOnStart/);
+assert.equal(workspace.split('id="swRestart"').length-1,1,
+  'The header Restart button and Schedule daily restart must have distinct IDs');
+assert.match(schedule.innerHTML,/id="swScheduleRestart"[^>]*checked/,
+  'The saved daily restart preference must be displayed as checked');
 assert.doesNotMatch(schedule.innerHTML,/data-gsc-action="action"/,
   'Schedule must never directly run a game update or Apply configuration');
 assert.match(schedule.innerHTML,/Open Updates/);
@@ -87,6 +91,34 @@ await ctx.renderServerSchedule(def,schedule);
 assert.match(schedule.innerHTML,/systemd timers or cron/);
 assert.match(schedule.innerHTML,/Save schedule<\/button>/);
 assert.match(schedule.innerHTML,/button class="btn primary" type="button" disabled/);
+
+// Exercise the save handler against two simultaneously rendered controls. The
+// header Restart button is not a checkbox; selecting it loses the enabled flag.
+const saveFrom=workspace.indexOf('async function serverWorkspaceSaveSchedule(id)');
+const saveTo=workspace.indexOf('async function serverWorkspaceClearSchedule(id)',saveFrom);
+assert.ok(saveFrom>0&&saveTo>saveFrom,'Schedule save handler must exist');
+const saved=[];
+const controls={
+  '#swRestart':{tagName:'BUTTON'},
+  '#swScheduleRestart':{checked:true},
+  '#swRestartHour':{value:'5'},
+  '#swUpdate':{checked:true},
+  '#swDay':{value:'Wednesday'},
+  '#swUpdateHour':{value:'4'},
+  '#swBackup':{checked:true},
+  '#swBackupMinute':{value:'0'}
+};
+ctx.$=selector=>controls[selector];
+ctx.api=async(path,options)=>{saved.push({path,options})};
+ctx.toast=()=>{};
+ctx.serverWorkspaceRefreshTab=()=>{};
+vm.runInNewContext(workspace.slice(saveFrom,saveTo),ctx);
+await ctx.serverWorkspaceSaveSchedule('dragon');
+assert.equal(saved.length,1);
+assert.equal(saved[0].path,'/api/servers/dragon/schedule');
+assert.equal(saved[0].options.method,'POST');
+assert.equal(JSON.parse(saved[0].options.body).dailyRestartEnabled,true,
+  'Daily restart must use the schedule checkbox, never the header Restart button');
 
 assert.match(workspace,/const target='#server\/'\+encodeURIComponent\(id\)\+'\/updates'/,
   'manual and lifecycle updates must navigate to the Updates page');
