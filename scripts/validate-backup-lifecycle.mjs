@@ -34,10 +34,10 @@ requireToken(program, 'MapPost("/servers/{id}/backups"', 'Named backup route is 
 // than BackupService. Keep public compatibility shims, never a second backup
 // implementation that can bypass metadata, ownership or staging validation.
 for (const [pattern, label] of [
-  [/public Task<ActionResult> BackupAsync\\(string id, CancellationToken ct = default\\)\\s*=> _backups\\.CreateAsync\\(id, ct\\);/, 'Create'],
-  [/public Task<List<BackupInfo>> ListBackupsAsync\\(string id, CancellationToken ct = default\\)\\s*=> _backups\\.ListAsync\\(id, ct\\);/, 'List'],
-  [/public Task<ActionResult> RestoreBackupAsync\\(\\s*string id, string backupName, CancellationToken ct = default\\)\\s*=> _backups\\.RestoreAsync\\(id, backupName, ct\\);/, 'Restore'],
-  [/public Task<bool> DeleteBackupAsync\\(\\s*string id, string backupName, CancellationToken ct = default\\)\\s*=> _backups\\.DeleteAsync\\(id, backupName, ct\\);/, 'Delete']
+  [/public Task<ActionResult> BackupAsync\(string id, CancellationToken ct = default\)\s*=> _backups\.CreateAsync\(id, ct\);/, 'Create'],
+  [/public Task<List<BackupInfo>> ListBackupsAsync\(string id, CancellationToken ct = default\)\s*=> _backups\.ListAsync\(id, ct\);/, 'List'],
+  [/public Task<ActionResult> RestoreBackupAsync\(\s*string id, string backupName, CancellationToken ct = default\)\s*=> _backups\.RestoreAsync\(id, backupName, ct\);/, 'Restore'],
+  [/public Task<bool> DeleteBackupAsync\(\s*string id, string backupName, CancellationToken ct = default\)\s*=> _backups\.DeleteAsync\(id, backupName, ct\);/, 'Delete']
 ]) {
   if (!pattern.test(orchestrator))
     throw new Error('Legacy ' + label + ' backup entry point must delegate to BackupService');
