@@ -17,6 +17,8 @@ const context={
   window:{},
   GSCUX:{actions:{}},
   ACTIVE_HOST_ID:'all',
+  HOST_OVERVIEW:[],
+  SERVER_FILTER:{query:'',state:'all'},
   SERVERS:[],
   esc,
   isReadOnly:()=>readOnly,
@@ -30,10 +32,11 @@ const context={
 vm.runInNewContext(work.slice(start,end),context);
 const def={id:'dw',name:'Dragonwilds',gameType:'SteamGeneric',hostingMode:'BareMetal',steamAppId:'4019830'};
 const status={processState:'NotRunning',cpuPercent:0,memoryMB:512,pidInGuest:null,lastError:''};
-const button=(html,label)=>{
+const buttonFor=(html,label,name)=>{
   const all=html.match(/<button\b[^>]*>/g)||[];
-  return all.find(b=>b.includes(`aria-label="${label} Dragonwilds"`))||'';
+  return all.find(b=>b.includes(`aria-label="${label} ${name}"`))||'';
 };
+const button=(html,label)=>buttonFor(html,label,'Dragonwilds');
 const stopped=context.serverWorkspaceRenderListRow(def,status);
 assert.match(stopped,/sw-server-list-row/);
 assert.match(stopped,/sw-list-name/);
@@ -75,6 +78,46 @@ readOnly=true;
 const noActions=context.serverWorkspaceRenderListRow(def,status);
 for(const name of ['Start','Stop','Restart','Update'])
   assert.match(button(noActions,name),/\sdisabled/, 'ReadOnly must not act: '+name);
+readOnly=false;
+
+// End-to-end UI rendering uses the same HOST_OVERVIEW JSON projection that
+// Cloudflare Worker returns; no local SERVERS hydration is required here.
+const remoteSteam={...def,processState:'NotRunning',cpuPercent:2,memoryMB:512,pidInGuest:null,hasError:false};
+const remoteCustom={
+  id:'custom',name:'Custom server',gameType:'Custom',hostingMode:'BareMetal',
+  steamAppId:null,processState:'NotRunning',cpuPercent:null,memoryMB:null,
+  pidInGuest:null,hasError:false
+};
+context.HOST_OVERVIEW=[
+  {id:'host-one',name:'Steam host',online:true,isLocal:false,
+   servers:[remoteSteam,remoteCustom]}
+];
+const overview={innerHTML:''};
+context.renderAllHostDashboard(overview);
+assert.doesNotMatch(buttonFor(overview.innerHTML,'Update','Dragonwilds'),/\sdisabled/,
+  'Stopped Steam server in All computers must offer Update to Admin');
+assert.match(buttonFor(overview.innerHTML,'Update','Dragonwilds'),/serverWorkspaceHostAction/,
+  'Remote Update must be routed to the correct Agent');
+assert.match(buttonFor(overview.innerHTML,'Update','Custom server'),/\sdisabled/,
+  'Non-Steam server must not offer Update');
+assert.match(buttonFor(overview.innerHTML,'Update','Custom server'),/No Steam App ID configured/);
+
+context.HOST_OVERVIEW[0].servers[0]={...remoteSteam,processState:'Running'};
+context.renderAllHostDashboard(overview);
+assert.match(buttonFor(overview.innerHTML,'Update','Dragonwilds'),/\sdisabled/,
+  'Running Steam server must not offer Update');
+context.HOST_OVERVIEW[0].servers[0]={...remoteSteam,processState:'Working'};
+context.renderAllHostDashboard(overview);
+assert.match(buttonFor(overview.innerHTML,'Update','Dragonwilds'),/\sdisabled/,
+  'Busy Steam server must not offer Update');
+
+context.HOST_OVERVIEW[0].servers[0]=remoteSteam;
+readOnly=true;
+context.renderAllHostDashboard(overview);
+for(const name of ['Dragonwilds','Custom server'])
+  for(const op of ['Start','Stop','Restart','Update'])
+    assert.match(buttonFor(overview.innerHTML,op,name),/\sdisabled/,
+      `ReadOnly cannot invoke ${op} on ${name} through All computers`);
 readOnly=false;
 
 const remote=context.serverWorkspaceRenderListRow(def,status,{hostId:'host-one',hostName:'Remote computer'});
