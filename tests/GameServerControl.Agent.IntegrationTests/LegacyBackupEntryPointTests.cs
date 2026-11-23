@@ -94,7 +94,8 @@ public sealed class LegacyBackupEntryPointTests
         var original = Assert.Single(await fixture.Orchestrator.ListBackupsAsync("alpha"));
 
         Assert.False(await fixture.Orchestrator.DeleteBackupAsync("beta", original.CheckpointName));
-        Assert.Throws<ArgumentException>(() => fixture.Orchestrator.DeleteBackupAsync("alpha", "../alpha/" + original.CheckpointName));
+        await Assert.ThrowsAsync<ArgumentException>(
+            () => fixture.Orchestrator.DeleteBackupAsync("alpha", "../alpha/" + original.CheckpointName));
         var invalidRestore = await fixture.Orchestrator.RestoreBackupAsync("alpha", "../alpha/" + original.CheckpointName);
         Assert.False(invalidRestore.Success);
         Assert.True(File.Exists(fixture.ArchivePath(original.CheckpointName)));
