@@ -297,7 +297,7 @@ public sealed class BackupService
 
         var zipPath = BackupSafety.ResolveUnderRoot(ServerBackupDir(def), safeName);
         var targets = GetSaveTargets(def, requireAnyExisting: false);
-        ValidateArchiveEntries(zipPath, targets);
+        ValidateArchiveEntries(zipPath, targets, owned.FileCount);
 
         var safety = await CreateBareMetalArchiveAsync(
             def,
@@ -559,16 +559,20 @@ public sealed class BackupService
         }
     }
 
-    private void ValidateArchiveEntries(string zipPath, IReadOnlyList<SaveTarget> targets)
+    private void ValidateArchiveEntries(string zipPath, IReadOnlyList<SaveTarget> targets, int? expectedFileCount)
     {
         using var archive = ZipFile.OpenRead(zipPath);
+        var actualFiles = 0;
         foreach (var entry in archive.Entries)
         {
             var normalized = BackupSafety.NormalizeArchiveEntry(entry.FullName);
             if (!targets.Any(t => normalized.Equals(t.Prefix, StringComparison.OrdinalIgnoreCase)
                 || normalized.StartsWith(t.Prefix + "/", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException($"Backup contains unexpected path '{entry.FullName}'.");
+            if (!string.IsNullOrEmpty(entry.Name)) actualFiles++;
         }
+        if (expectedFileCount is int expected && actualFiles != expected)
+            throw new InvalidDataException("Backup ZIP file count does not match the saved metadata.");
     }
 
     private void ExtractArchiveToStages(
