@@ -14,7 +14,7 @@ public sealed class ServerOrchestrator
 {
     private readonly ProcessMetricsSampler _metrics = new();
     private readonly ConcurrentDictionary<string, bool> _stopRequested = new();
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _lifecycleLocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ServerLifecycleGate _lifecycleGate;
     private readonly ServerUpdateConsole _updateConsole;
     private readonly HypervService _hv;
     private readonly GuestProcessService _guest;
@@ -43,6 +43,7 @@ public sealed class ServerOrchestrator
         SteamCmdManager steamCmd,
         DragonwildsConfig dragonwildsConfig,
         BackupService backups,
+        ServerLifecycleGate lifecycleGate,
         IConfiguration cfg,
         ILogger<ServerOrchestrator> logger)
     {
@@ -58,6 +59,7 @@ public sealed class ServerOrchestrator
         _steamCmd = steamCmd;
         _dragonwildsConfig = dragonwildsConfig;
         _backups = backups;
+        _lifecycleGate = lifecycleGate;
         _cfg = cfg;
         _logger = logger;
     }
@@ -203,17 +205,11 @@ public sealed class ServerOrchestrator
         _logger.LogInformation("[{Id}] {Src}: {Text}", id, source, text);
     }
 
-    private async Task<ActionResult> WithLifecycleLockAsync(
+    // Restart and auto-update call private *CoreAsync methods under this one
+    // outer lock. Never acquire the gate from those nested methods.
+    private Task<ActionResult> WithLifecycleLockAsync(
         string id, Func<Task<ActionResult>> operation, CancellationToken ct)
-    {
-        var gate = _lifecycleLocks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
-        if (!await gate.WaitAsync(0, ct))
-            return new ActionResult(false,
-                "Another Start, Stop, Restart or Update operation is already running for this server.",
-                Guid.NewGuid().ToString("n"));
-        try { return await operation(); }
-        finally { gate.Release(); }
-    }
+        => _lifecycleGate.RunExclusiveAsync(id, operation, ct);
 
     // Auto-update settings are independent: a Restart does not implicitly
     // inherit AutoUpdateOnStart. This also prevents a duplicate SteamCMD run.
