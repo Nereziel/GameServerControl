@@ -390,12 +390,21 @@ public sealed class ServerOrchestrator
                     }
                 }
             }
-            if (!stoppedGracefully)
-                await _local.StopProcessAsync(def, pid, force, ct);
+            // A failed or unverified main-process stop is not permission to
+            // terminate other processes; do not claim the server is stopped.
+            var stopped = stoppedGracefully || await _local.StopProcessAsync(def, pid, force, ct);
+            if (!stopped)
+            {
+                _stopRequested.TryRemove(id, out _);
+                _diagnostics.Record(id, "Stop", "Error",
+                    "Main process stop failed or its identity could not be verified. Extra cleanup was skipped.");
+                return new ActionResult(false,
+                    "Server process could not be safely stopped; additional process cleanup was skipped.", corr);
+            }
 
             if (def.StopProcessNames is { Length: > 0 } extras)
             {
-                await LogAsync(id, "orch", "Killing additional process names: " + string.Join(", ", extras));
+                await LogAsync(id, "orch", "Cleaning up verified server child processes: " + string.Join(", ", extras));
                 await _local.KillByNamesAsync(def, extras, ct);
             }
 
