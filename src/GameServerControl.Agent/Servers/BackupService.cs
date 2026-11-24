@@ -39,6 +39,7 @@ public sealed class BackupService
     private readonly HypervService _hv;
     private readonly LocalProcessService _local;
     private readonly ServerRegistry _registry;
+    private readonly ServerLifecycleGate _lifecycleGate;
     private readonly ServerStore _store;
     private readonly StatusTracker _tracker;
     private readonly IConfiguration _cfg;
@@ -48,6 +49,7 @@ public sealed class BackupService
         HypervService hv,
         LocalProcessService local,
         ServerRegistry registry,
+        ServerLifecycleGate lifecycleGate,
         ServerStore store,
         StatusTracker tracker,
         IConfiguration cfg,
@@ -56,6 +58,7 @@ public sealed class BackupService
         _hv = hv;
         _local = local;
         _registry = registry;
+        _lifecycleGate = lifecycleGate;
         _store = store;
         _tracker = tracker;
         _cfg = cfg;
@@ -85,6 +88,23 @@ public sealed class BackupService
         }
     }
 
+    // Local retention is independent of offsite availability. Once a complete
+    // archive exists, every exit path (including a cancelled mirror) must apply
+    // the local retention policy. Use a non-cancelled token for this short local
+    // housekeeping step so cancellation cannot grow backups without bound.
+    private async Task<string?> MirrorAndPruneBareMetalAsync(
+        ServerDef def, string? localArchive, CancellationToken ct)
+    {
+        try
+        {
+            return await MirrorOffsiteIfConfiguredAsync(def, localArchive, ct);
+        }
+        finally
+        {
+            await PruneBareMetalAsync(def, CancellationToken.None);
+        }
+    }
+
     private int DefaultBackupRetention
         => int.TryParse(_cfg["Agent:BackupRetention"], out var value) && value > 0
             ? Math.Clamp(value, 1, 200)
@@ -104,9 +124,10 @@ public sealed class BackupService
     {
         if (retention is < 1 or > 200)
             throw new ArgumentException("Backup retention must be between 1 and 200.", nameof(retention));
-        var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
-        _store.Update(id, def with { BackupRetention = retention });
-        return new BackupSettings(retention, true, DefaultBackupRetention);
+        // Apply only the requested field against the latest ServerStore state.
+        // A previous Registry.Get() snapshot may already be stale.
+        var updated = _store.SetBackupRetention(id, retention);
+        return new BackupSettings(updated.BackupRetention!.Value, true, DefaultBackupRetention);
     }
 
     public Task<ActionResult> CreateAsync(string id, CancellationToken ct = default)
@@ -145,12 +166,11 @@ public sealed class BackupService
                     $"{created.Metadata.SkippedFiles} file(s) were skipped. Restore is disabled. Complete backups are preserved independently.",
                     corr);
             }
-            var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, created.Path, ct);
+            var offsiteProblem = await MirrorAndPruneBareMetalAsync(def, created.Path, ct);
+            _tracker.Update(id, state => state with { LastBackupAt = DateTimeOffset.UtcNow });
             if (offsiteProblem is not null)
                 return new ActionResult(false,
                     $"Local backup retained: {Path.GetFileName(created.Path)}. " + offsiteProblem, corr);
-            await PruneBareMetalAsync(def, ct);
-            _tracker.Update(id, state => state with { LastBackupAt = DateTimeOffset.UtcNow });
             return new ActionResult(true,
                 $"Backup created: {Path.GetFileName(created.Path)} ({mb:0.##} MB).", corr);
         }
@@ -209,13 +229,11 @@ public sealed class BackupService
 
         if (!created.Success)
             return new ActionResult(false, created.Error ?? "Pre-update backup failed", corr);
-        var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, created.Path, ct);
+        var offsiteProblem = await MirrorAndPruneBareMetalAsync(def, created.Path, ct);
+        _tracker.Update(id, current => current with { LastBackupAt = DateTimeOffset.UtcNow });
         if (offsiteProblem is not null)
             return new ActionResult(false,
                 "Local pre-update snapshot retained, but update was cancelled. " + offsiteProblem, corr);
-
-        await PruneBareMetalAsync(def, ct);
-        _tracker.Update(id, current => current with { LastBackupAt = DateTimeOffset.UtcNow });
         return new ActionResult(true, "Pre-update backup: " + Path.GetFileName(created.Path), corr);
     }
 
@@ -227,7 +245,12 @@ public sealed class BackupService
             : await ListHyperVAsync(def, ct);
     }
 
-    public async Task<ActionResult> RestoreAsync(string id, string backupName, CancellationToken ct = default)
+    public Task<ActionResult> RestoreAsync(string id, string backupName, CancellationToken ct = default)
+        => _lifecycleGate.RunExclusiveAsync(id, () => RestoreCoreAsync(id, backupName, ct), ct);
+
+    // Called with the shared per-server lifecycle gate held. This includes the
+    // stopped-process probe, safety snapshot, archive staging, swap and rollback.
+    private async Task<ActionResult> RestoreCoreAsync(string id, string backupName, CancellationToken ct)
     {
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);
@@ -293,11 +316,11 @@ public sealed class BackupService
         if (owned is null)
             return new ActionResult(false, "Backup not found or not owned by GameServerControl: " + safeName, corr);
         if (!owned.Restorable || owned.SkippedFiles is > 0)
-            return new ActionResult(false, "Backup is incomplete because files were skipped during creation; restore is disabled to prevent data loss.", corr);
+            return new ActionResult(false, "Backup is incomplete or unverified (missing/invalid metadata or skipped files); restore is disabled to prevent data loss.", corr);
 
         var zipPath = BackupSafety.ResolveUnderRoot(ServerBackupDir(def), safeName);
         var targets = GetSaveTargets(def, requireAnyExisting: false);
-        ValidateArchiveEntries(zipPath, targets);
+        ValidateArchiveEntries(zipPath, targets, owned.FileCount);
 
         var safety = await CreateBareMetalArchiveAsync(
             def,
@@ -307,12 +330,10 @@ public sealed class BackupService
             ct);
         if (!safety.Success)
             return new ActionResult(false, "Safety backup failed: " + (safety.Error ?? "unknown error") + ". Restore was not started.", corr);
-        var offsiteProblem = await MirrorOffsiteIfConfiguredAsync(def, safety.Path, ct);
+        var offsiteProblem = await MirrorAndPruneBareMetalAsync(def, safety.Path, ct);
         if (offsiteProblem is not null)
             return new ActionResult(false,
                 "Local pre-restore safety snapshot retained, but restore was not started. " + offsiteProblem, corr);
-
-        await PruneBareMetalAsync(def, ct);
 
         var swaps = targets.Select(t => new RestoreSwapStep
         {
@@ -325,6 +346,14 @@ public sealed class BackupService
         try
         {
             ExtractArchiveToStages(zipPath, targets, swaps, ct);
+
+            // Another process manager (outside the Agent lifecycle) could start
+            // the game while the safety archive was being created. Recheck
+            // immediately before swapping save directories.
+            var (stillProbeOk, stillRunningPid) = await _local.FindProcessAsync(def, ct);
+            if (!stillProbeOk || stillRunningPid is not null)
+                throw new InvalidOperationException(
+                    "Game process state changed or could not be verified. Restore was aborted before swapping saves.");
 
             BackupRestoreSwapTransactions.Commit(swaps, ct);
 
@@ -377,6 +406,11 @@ public sealed class BackupService
         }
 
         await PruneHyperVAsync(def, ct);
+        // A VM may have been powered on outside GameServerControl during the
+        // safety checkpoint. Never apply a restore to a running/unknown VM.
+        if (await _hv.GetStateAsync(def.VmName, ct) != VmState.Off)
+            return new ActionResult(false,
+                "VM state changed during pre-restore backup. Restore was not started.", corr);
         var restored = await _hv.RestoreCheckpointAsync(def.VmName, checkpoint.CheckpointName, ct);
         return restored
             ? new ActionResult(true, $"Restored checkpoint {checkpoint.CheckpointName}. Safety copy: {safetyName}", corr)
@@ -401,54 +435,63 @@ public sealed class BackupService
         var serverDir = ServerBackupDir(def);
         Directory.CreateDirectory(serverDir);
         var safety = kind == BackupKind.SafetyArchive;
+        // Distinct paths prevent concurrent creations from sharing a metadata sidecar.
+        var nonce = Guid.NewGuid().ToString("N")[..12];
         var baseName = safety
-            ? $"{def.Id}-{(label == "Pre-update backup" ? "preupdate" : "prerestore")}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip"
-            : $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}.zip";
+            ? $"{def.Id}-{(label == "Pre-update backup" ? "preupdate" : "prerestore")}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{nonce}.zip"
+            : $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}-{nonce}.zip";
         var zipPath = UniqueArchivePath(serverDir, baseName);
         var createdAt = DateTimeOffset.UtcNow;
         var fileCount = 0;
         var skipped = 0;
+        BackupMetadata? metadata = null;
 
         try
         {
-            await Task.Run(() =>
-            {
-                using var fs = new FileStream(zipPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-                using var archive = new ZipArchive(fs, ZipArchiveMode.Create);
-                foreach (var target in targets)
+            await BackupArchivePublication.PublishAsync(zipPath,
+                async (stagingPath, cancellation) =>
                 {
-                    if (!Directory.Exists(target.Path)) continue;
-                    foreach (var file in Directory.EnumerateFiles(target.Path, "*", SearchOption.AllDirectories))
+                    await Task.Run(async () =>
                     {
-                        ct.ThrowIfCancellationRequested();
-                        var rel = Path.GetRelativePath(target.Path, file);
-                        var entryName = BackupSafety.NormalizeArchiveEntry(target.Prefix + "/" + rel.Replace('\\', '/'));
-                        try
+                        await using var fs = new FileStream(stagingPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                        using var archive = new ZipArchive(fs, ZipArchiveMode.Create);
+                        foreach (var target in targets)
                         {
-                            var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
-                            using var output = entry.Open();
-                            using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
-                            input.CopyTo(output);
-                            fileCount++;
+                            if (!Directory.Exists(target.Path)) continue;
+                            foreach (var file in Directory.EnumerateFiles(target.Path, "*", SearchOption.AllDirectories))
+                            {
+                                cancellation.ThrowIfCancellationRequested();
+                                var rel = Path.GetRelativePath(target.Path, file);
+                                var entryName = BackupSafety.NormalizeArchiveEntry(target.Prefix + "/" + rel.Replace('\\', '/'));
+                                try
+                                {
+                                    var entry = archive.CreateEntry(entryName, CompressionLevel.Fastest);
+                                    using var output = entry.Open();
+                                    await using var input = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+                                    await input.CopyToAsync(output, cancellation);
+                                    fileCount++;
+                                }
+                                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                                {
+                                    if (requireComplete) throw;
+                                    skipped++;
+                                    _logger.LogWarning("Skipping unavailable backup file {File}: {Message}", file, ex.Message);
+                                }
+                            }
                         }
-                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-                        {
-                            if (requireComplete) throw;
-                            skipped++;
-                            _logger.LogWarning("Skipping unavailable backup file {File}: {Message}", file, ex.Message);
-                        }
-                    }
-                }
-            }, ct);
+                    }, cancellation);
+                },
+                async cancellation =>
+                {
+                    metadata = new BackupMetadata(label, kind, createdAt, fileCount, skipped);
+                    await WriteBackupMetadataAsync(zipPath, metadata, cancellation);
+                },
+                ct);
 
-            var metadata = new BackupMetadata(label, kind, createdAt, fileCount, skipped);
-            await WriteBackupMetadataAsync(zipPath, metadata, ct);
             return new ArchiveCreateResult(true, zipPath, new FileInfo(zipPath).Length, metadata, null);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            TryDelete(zipPath);
-            TryDelete(MetadataPath(zipPath));
             return new ArchiveCreateResult(false, null, null, null, ex.Message);
         }
     }
@@ -479,11 +522,18 @@ public sealed class BackupService
                 meta?.Label,
                 meta?.FileCount,
                 meta?.SkippedFiles,
-                Restorable: meta?.SkippedFiles is not > 0));
+                Restorable: HasTrustedArchiveMetadata(meta)));
         }
 
         return result.OrderByDescending(x => x.CreatedAt).ToList();
     }
+
+    // Metadata-less legacy ZIPs stay visible for inspection, but fail closed:
+    // a structurally valid ZIP does not prove the backup contained every save.
+    private static bool HasTrustedArchiveMetadata(BackupMetadata? metadata)
+        => metadata is { FileCount: >= 0, SkippedFiles: 0 }
+            && (metadata.Kind == BackupKind.Archive || metadata.Kind == BackupKind.SafetyArchive)
+            && metadata.CreatedAt != default;
 
     private async Task<List<BackupInfo>> ListHyperVAsync(ServerDef def, CancellationToken ct)
     {
@@ -543,16 +593,20 @@ public sealed class BackupService
         }
     }
 
-    private void ValidateArchiveEntries(string zipPath, IReadOnlyList<SaveTarget> targets)
+    private void ValidateArchiveEntries(string zipPath, IReadOnlyList<SaveTarget> targets, int? expectedFileCount)
     {
         using var archive = ZipFile.OpenRead(zipPath);
+        var actualFiles = 0;
         foreach (var entry in archive.Entries)
         {
             var normalized = BackupSafety.NormalizeArchiveEntry(entry.FullName);
             if (!targets.Any(t => normalized.Equals(t.Prefix, StringComparison.OrdinalIgnoreCase)
                 || normalized.StartsWith(t.Prefix + "/", StringComparison.OrdinalIgnoreCase)))
                 throw new InvalidDataException($"Backup contains unexpected path '{entry.FullName}'.");
+            if (!string.IsNullOrEmpty(entry.Name)) actualFiles++;
         }
+        if (expectedFileCount is int expected && actualFiles != expected)
+            throw new InvalidDataException("Backup ZIP file count does not match the saved metadata.");
     }
 
     private void ExtractArchiveToStages(
@@ -671,7 +725,24 @@ public sealed class BackupService
     {
         var path = MetadataPath(zipPath);
         if (!File.Exists(path)) return null;
-        return JsonSerializer.Deserialize<BackupMetadata>(File.ReadAllText(path), JsonOpts);
+
+        // Missing JSON properties otherwise deserialize to zero values, which
+        // could turn a truncated sidecar into a false "complete" backup.
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object
+            || !root.TryGetProperty("Kind", out var kind) || kind.ValueKind != JsonValueKind.String
+            || !root.TryGetProperty("CreatedAt", out var created) || created.ValueKind != JsonValueKind.String
+            || !created.TryGetDateTimeOffset(out var timestamp) || timestamp == default
+            || !root.TryGetProperty("FileCount", out var fileCount) || fileCount.ValueKind != JsonValueKind.Number
+            || !fileCount.TryGetInt32(out var files) || files < 0
+            || !root.TryGetProperty("SkippedFiles", out var skipped) || skipped.ValueKind != JsonValueKind.Number
+            || !skipped.TryGetInt32(out var skippedCount) || skippedCount < 0)
+            return null;
+
+        var metadata = JsonSerializer.Deserialize<BackupMetadata>(root.GetRawText(), JsonOpts);
+        return metadata is { Kind: BackupKind.Archive or BackupKind.SafetyArchive }
+            ? metadata : null;
     }
 
     private static string CheckpointMetadataDir(ServerDef def, string backupRoot)

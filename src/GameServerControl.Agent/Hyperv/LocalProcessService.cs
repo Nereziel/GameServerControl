@@ -422,14 +422,24 @@ public sealed class LocalProcessService
     public Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default) =>
         FindProcessCoreAsync(exePath, FindServerForExe(exePath), ct);
 
-    private async Task<(bool Ok, int? Pid)> FindProcessCoreAsync(string exePath, ServerDef? def, CancellationToken ct)
+    // Monitoring probes must not mutate firewall rules before the observation
+    // has passed the lifecycle/version/deadline fence.
+    public Task<(bool Ok, int? Pid)> ObserveProcessAsync(ServerDef def, CancellationToken ct = default) =>
+        FindProcessCoreAsync(def.GuestExePath, def, ct, reconcileFirewall: false);
+
+    public void ReconcileObservedFirewall(ServerDef def, bool running) =>
+        SetFirewallState(def, open: running, out _);
+
+    private async Task<(bool Ok, int? Pid)> FindProcessCoreAsync(string exePath, ServerDef? def, CancellationToken ct,
+        bool reconcileFirewall = true)
     {
         if (OperatingSystem.IsWindows())
         {
             if (def is null) return (false, null);
             var result = await _windowsRunner.FindAsync(def, ct);
+            ct.ThrowIfCancellationRequested();
             if (!result.Ok) return (false, null);
-            SetFirewallState(def, open: result.Pid is not null, out _);
+            if (reconcileFirewall) SetFirewallState(def, open: result.Pid is not null, out _);
             return (true, result.Pid);
         }
         if (def?.GameType == GameType.Minecraft &&
@@ -460,43 +470,62 @@ public sealed class LocalProcessService
 
     private Task<(bool Ok, int? Pid)> FindLocalProcessAsync(string exePath, CancellationToken ct = default)
     {
-        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Direct game process discovery is disabled on Windows.");
+        if (OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("Direct game process discovery is disabled on Windows.");
+
         var def = FindServerForExe(exePath);
         var processImage = ResolveProcessImagePath(exePath);
         try
         {
             var name = Path.GetFileNameWithoutExtension(processImage);
-            var candidates = Process.GetProcessesByName(name);
-            if (candidates.Length == 0)
+            var matches = new List<int>();
+            var unknownOwnership = false;
+            foreach (var candidate in Process.GetProcessesByName(name))
             {
-                SetFirewallState(def, open: false, out _);
-                return Task.FromResult<(bool, int?)>((true, null));
-            }
-
-            var unreadable = new List<Process>();
-            foreach (var p in candidates)
-            {
-                try
+                using (candidate)
                 {
-                    if (PathsEqual(p.MainModule?.FileName, processImage))
+                    ct.ThrowIfCancellationRequested();
+                    try
                     {
-                        SetFirewallState(def, open: true, out _);
-                        return Task.FromResult<(bool, int?)>((true, p.Id));
+                        if (!PathsEqual(candidate.MainModule?.FileName, processImage))
+                            continue;
+
+                        if (def is not null)
+                        {
+                            var cwd = new DirectoryInfo($"/proc/{candidate.Id}/cwd")
+                                .ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+                            if (!ProcessCleanupScope.IsSameDirectory(cwd, def.GuestWorkingDir))
+                                continue;
+                        }
+
+                        matches.Add(candidate.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        unknownOwnership = true;
+                        _logger.LogWarning(ex,
+                            "Could not verify process {Pid} for {Exe}; refusing ambiguous process lookup.",
+                            candidate.Id, processImage);
                     }
                 }
-                catch { unreadable.Add(p); }
             }
 
-            if (candidates.Length == 1 && unreadable.Count == 1)
+            if (matches.Count == 1 && !unknownOwnership)
             {
                 SetFirewallState(def, open: true, out _);
-                return Task.FromResult<(bool, int?)>((true, unreadable[0].Id));
+                return Task.FromResult<(bool, int?)>((true, matches[0]));
+            }
+            if (matches.Count > 1 || unknownOwnership)
+            {
+                _logger.LogWarning("Ambiguous or unverifiable process lookup for {Exe}: {Count} owned candidates.",
+                    processImage, matches.Count);
+                return Task.FromResult<(bool, int?)>((false, null));
             }
 
-            if (candidates.Length > 1)
-                _logger.LogWarning("Ambiguous process lookup for {Exe}: found {Count} processes named {Name} and no exact path match.", processImage, candidates.Length, name);
-            return Task.FromResult<(bool, int?)>((candidates.Length == 1, null));
+            SetFirewallState(def, open: false, out _);
+            return Task.FromResult<(bool, int?)>((true, null));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "FindProcess failed for {Exe}", processImage);
@@ -533,10 +562,23 @@ public sealed class LocalProcessService
                     try
                     {
                         var actual = candidate.MainModule?.FileName;
-                        if (actual is null || PathsEqual(actual, processImage)) p = candidate;
-                        else _logger.LogWarning("Refusing to stop pid {Pid}: executable is {Actual}, expected {Expected}.", id, actual, processImage);
+                        var cwd = def is null ? null : new DirectoryInfo($"/proc/{id}/cwd")
+                            .ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+                        var matches = PathsEqual(actual, processImage)
+                            && (def is null || ProcessCleanupScope.IsSameDirectory(cwd, def.GuestWorkingDir));
+                        if (matches) p = candidate;
+                        else
+                        {
+                            _logger.LogWarning("Refusing to stop pid {Pid}: executable or working directory does not match server {ServerId}.",
+                                id, def?.Id ?? "(unknown)");
+                            candidate.Dispose();
+                        }
                     }
-                    catch { p = candidate; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Refusing to stop pid {Pid}: process ownership cannot be verified.", id);
+                        candidate.Dispose();
+                    }
                 }
                 catch { }
             }
@@ -726,21 +768,68 @@ public sealed class LocalProcessService
         if (OperatingSystem.IsWindows())
         {
             var result = await _windowsRunner.KillExtrasAsync(def, ct);
-            if (!result.Ok) _logger.LogWarning("Runner extra-process cleanup failed for {ServerId}: {Error}", def.Id, result.Error);
+            if (!result.Ok)
+                _logger.LogWarning("Runner extra-process cleanup failed for {ServerId}: {Error}", def.Id, result.Error);
             return;
         }
 
-        foreach (var raw in exeNames.Distinct(StringComparer.OrdinalIgnoreCase))
+        // A process name is not an ownership identity. /proc/<pid>/cwd and the
+        // executable image must both belong to this server's dedicated root.
+        var names = exeNames.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (def.HostingMode != HostingMode.BareMetal
+            || string.IsNullOrWhiteSpace(def.GuestWorkingDir)
+            || !Directory.Exists(def.GuestWorkingDir))
         {
+            _logger.LogWarning("Skipping extra process cleanup for {ServerId}: working directory is unavailable.", def.Id);
+            return;
+        }
+
+        // Multiple registered servers in one working directory cannot be
+        // distinguished by cwd. Refuse cleanup rather than killing a sibling.
+        if (_registry.All.Any(other => other.HostingMode == HostingMode.BareMetal
+                && !string.Equals(other.Id, def.Id, StringComparison.OrdinalIgnoreCase)
+                && ProcessCleanupScope.IsSameDirectory(other.GuestWorkingDir, def.GuestWorkingDir)))
+        {
+            _logger.LogWarning("Skipping extra process cleanup for {ServerId}: working directory is shared with another server.", def.Id);
+            return;
+        }
+
+        foreach (var raw in names)
+        {
+            ct.ThrowIfCancellationRequested();
             var bare = Path.GetFileNameWithoutExtension(raw);
-            if (string.IsNullOrEmpty(bare)) continue;
-            try
+            if (string.IsNullOrWhiteSpace(bare)) continue;
+            foreach (var process in Process.GetProcessesByName(bare))
             {
-                foreach (var p in Process.GetProcessesByName(bare))
-                    try { p.Kill(entireProcessTree: true); }
-                    catch (Exception ex) { _logger.LogDebug(ex, "Kill pid {Pid} ({Name}) failed", p.Id, bare); }
+                using (process)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    try
+                    {
+                        var startTime = process.StartTime.ToUniversalTime().Ticks;
+                        var executable = process.MainModule?.FileName;
+                        var processCwd = new DirectoryInfo($"/proc/{process.Id}/cwd")
+                            .ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+                        if (!ProcessCleanupScope.IsOwnedLinuxExtra(executable, processCwd, def.GuestWorkingDir, names))
+                        {
+                            _logger.LogDebug("Skipping unowned extra PID {Pid} ({Name}) for server {ServerId}.",
+                                process.Id, bare, def.Id);
+                            continue;
+                        }
+                        // Refuse PID reuse or a process that exited during inspection.
+                        if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != startTime)
+                            continue;
+                        process.Kill(entireProcessTree: true);
+                        await process.WaitForExitAsync(ct);
+                    }
+                    catch (InvalidOperationException) { /* Process exited during inspection. */ }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Could not verify or stop extra PID {Pid} for server {ServerId}; leaving it running.",
+                            process.Id, def.Id);
+                    }
+                }
             }
-            catch (Exception ex) { _logger.LogDebug(ex, "Kill by name {Name} failed", bare); }
         }
     }
 

@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.IO.Compression;
 using System.Text.Json.Nodes;
 using GameServerControl.Agent.Config;
 using GameServerControl.Agent.Hubs;
@@ -14,7 +13,7 @@ public sealed class ServerOrchestrator
 {
     private readonly ProcessMetricsSampler _metrics = new();
     private readonly ConcurrentDictionary<string, bool> _stopRequested = new();
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> _lifecycleLocks = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ServerLifecycleGate _lifecycleGate;
     private readonly ServerUpdateConsole _updateConsole;
     private readonly HypervService _hv;
     private readonly GuestProcessService _guest;
@@ -43,6 +42,7 @@ public sealed class ServerOrchestrator
         SteamCmdManager steamCmd,
         DragonwildsConfig dragonwildsConfig,
         BackupService backups,
+        ServerLifecycleGate lifecycleGate,
         IConfiguration cfg,
         ILogger<ServerOrchestrator> logger)
     {
@@ -58,12 +58,10 @@ public sealed class ServerOrchestrator
         _steamCmd = steamCmd;
         _dragonwildsConfig = dragonwildsConfig;
         _backups = backups;
+        _lifecycleGate = lifecycleGate;
         _cfg = cfg;
         _logger = logger;
     }
-
-    private string BackupRoot => _cfg["Agent:BackupRoot"] ??
-        (OperatingSystem.IsWindows() ? @"C:\GameServerControl\Backups" : "/var/lib/gameservercontrol/backups");
 
     private GuestCredential GetCred(string? credId)
     {
@@ -77,9 +75,41 @@ public sealed class ServerOrchestrator
     }
 
     public async Task<ServerStatus> RefreshStatusAsync(string id, CancellationToken ct = default)
+        => await RefreshStatusForMonitoringAsync(id, ct) ?? _tracker.Get(id);
+
+    // REST and background observations share the same fence. A skipped or
+    // superseded poll returns null to the scheduler; REST returns cached state.
+    public async Task<ServerStatus?> RefreshStatusForMonitoringAsync(string id, CancellationToken ct = default)
     {
         var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
+        var version = _lifecycleGate.TryBeginObservation(id, ct);
+        if (version is null) return null;
+        var observation = await ObserveStatusAsync(def, ct);
+        ct.ThrowIfCancellationRequested();
+        return await _lifecycleGate.TryPublishObservationAsync<ServerStatus>(
+            id, version.Value, async () =>
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!ReferenceEquals(_registry.Get(id), def)) return null!;
+                return await PublishStatusAsync(def, observation, ct);
+            }, ct);
+    }
 
+    // Start/Stop/Restart already own the lifecycle publication boundary.
+    // Their internal refresh must not reacquire it or return cached state.
+    private async Task<ServerStatus> RefreshStatusCoreAsync(string id, CancellationToken ct)
+    {
+        var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
+        var observation = await ObserveStatusAsync(def, ct);
+        return await PublishStatusAsync(def, observation, ct);
+    }
+
+    private sealed record StatusObservation(VmState VmState, ProcessState ProcessState,
+        int? Pid, Dictionary<string, string>? Metadata);
+
+    private async Task<StatusObservation> ObserveStatusAsync(ServerDef def, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
         VmState vmState;
         ProcessState procState;
         int? pid = null;
@@ -87,7 +117,7 @@ public sealed class ServerOrchestrator
         if (def.HostingMode == HostingMode.BareMetal)
         {
             vmState = VmState.NotApplicable;
-            var (ok, foundPid) = await _local.FindProcessAsync(def, ct);
+            var (ok, foundPid) = await _local.ObserveProcessAsync(def, ct);
             procState = !ok ? ProcessState.Unknown : (foundPid is null ? ProcessState.NotRunning : ProcessState.Running);
             pid = foundPid;
         }
@@ -109,6 +139,7 @@ public sealed class ServerOrchestrator
                     var (ok, foundPid) = await _guest.FindProcessAsync(def.VmName, cred, def.GuestExePath, ct);
                     if (ok) { pid = foundPid; procState = foundPid is null ? ProcessState.NotRunning : ProcessState.Running; }
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, "FindProcess failed for {Vm}", def.VmName);
@@ -120,11 +151,25 @@ public sealed class ServerOrchestrator
             }
         }
 
+        var metadata = await BuildMetadataAsync(def, ct);
+        ct.ThrowIfCancellationRequested();
+        return new StatusObservation(vmState, procState, pid, metadata);
+    }
+
+    private async Task<ServerStatus> PublishStatusAsync(ServerDef def, StatusObservation observation, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var id = def.Id;
+        var (vmState, procState, pid, metadata) = observation;
         (double? cpuPct, long? memMB) = def.HostingMode == HostingMode.BareMetal && pid is int pp
             ? _metrics.Sample(def, pp)
             : (null, null);
 
-        var metadata = await BuildMetadataAsync(def, ct);
+        ct.ThrowIfCancellationRequested();
+        // Commit is accepted at this boundary. Finish its effects together,
+        // even if the deadline expires during broadcast/firewall reconciliation.
+        if (def.HostingMode == HostingMode.BareMetal && procState is ProcessState.Running or ProcessState.NotRunning)
+            _local.ReconcileObservedFirewall(def, procState == ProcessState.Running);
         var prevState = _tracker.Get(id).ProcessState;
 
         var status = _tracker.Update(id, cur => cur with
@@ -181,6 +226,7 @@ public sealed class ServerOrchestrator
                 dict["ServerName"] = sn.ToString();
             return dict.Count > 0 ? dict : null;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return null; }
     }
 
@@ -203,17 +249,11 @@ public sealed class ServerOrchestrator
         _logger.LogInformation("[{Id}] {Src}: {Text}", id, source, text);
     }
 
-    private async Task<ActionResult> WithLifecycleLockAsync(
+    // Restart and auto-update call private *CoreAsync methods under this one
+    // outer lock. Never acquire the gate from those nested methods.
+    private Task<ActionResult> WithLifecycleLockAsync(
         string id, Func<Task<ActionResult>> operation, CancellationToken ct)
-    {
-        var gate = _lifecycleLocks.GetOrAdd(id, _ => new SemaphoreSlim(1, 1));
-        if (!await gate.WaitAsync(0, ct))
-            return new ActionResult(false,
-                "Another Start, Stop, Restart or Update operation is already running for this server.",
-                Guid.NewGuid().ToString("n"));
-        try { return await operation(); }
-        finally { gate.Release(); }
-    }
+        => _lifecycleGate.RunExclusiveAsync(id, operation, ct);
 
     // Auto-update settings are independent: a Restart does not implicitly
     // inherit AutoUpdateOnStart. This also prevents a duplicate SteamCMD run.
@@ -296,7 +336,7 @@ public sealed class ServerOrchestrator
         if (alreadyOk && existingPid is int pidAlready)
         {
             _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pidAlready });
-            await RefreshStatusAsync(def.Id, ct);
+            await RefreshStatusCoreAsync(def.Id, ct);
             return new ActionResult(true, $"Already running (pid={pidAlready})", corr);
         }
 
@@ -305,7 +345,7 @@ public sealed class ServerOrchestrator
         if (!started) return StartFailure(def.Id, corr, ExplainLaunchError(err));
 
         _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pid, StartedAt = DateTimeOffset.UtcNow, LastError = null });
-        await RefreshStatusAsync(def.Id, ct);
+        await RefreshStatusCoreAsync(def.Id, ct);
         _diagnostics.Record(def.Id, "Start", "Success", "Server started via Agent.");
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Up, "▶ Server started", $"{def.Name} is up (pid={pid}).", ct);
         return new ActionResult(true, $"Started (pid={pid})", corr);
@@ -358,7 +398,7 @@ public sealed class ServerOrchestrator
         if (!started) return new ActionResult(false, "Process launch failed: " + err, corr);
 
         _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pid, StartedAt = DateTimeOffset.UtcNow, LastError = null });
-        await RefreshStatusAsync(def.Id, ct);
+        await RefreshStatusCoreAsync(def.Id, ct);
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Up, "▶ Server started", $"{def.Name} is up (pid={pid}).", ct);
         return new ActionResult(true, $"Started (pid={pid})", corr);
     }
@@ -394,17 +434,26 @@ public sealed class ServerOrchestrator
                     }
                 }
             }
-            if (!stoppedGracefully)
-                await _local.StopProcessAsync(def, pid, force, ct);
+            // A failed or unverified main-process stop is not permission to
+            // terminate other processes; do not claim the server is stopped.
+            var stopped = stoppedGracefully || await _local.StopProcessAsync(def, pid, force, ct);
+            if (!stopped)
+            {
+                _stopRequested.TryRemove(id, out _);
+                _diagnostics.Record(id, "Stop", "Error",
+                    "Main process stop failed or its identity could not be verified. Extra cleanup was skipped.");
+                return new ActionResult(false,
+                    "Server process could not be safely stopped; additional process cleanup was skipped.", corr);
+            }
 
             if (def.StopProcessNames is { Length: > 0 } extras)
             {
-                await LogAsync(id, "orch", "Killing additional process names: " + string.Join(", ", extras));
+                await LogAsync(id, "orch", "Cleaning up verified server child processes: " + string.Join(", ", extras));
                 await _local.KillByNamesAsync(def, extras, ct);
             }
 
             _tracker.Update(id, s => s with { ProcessState = ProcessState.NotRunning, PidInGuest = null });
-            await RefreshStatusAsync(id, ct);
+            await RefreshStatusCoreAsync(id, ct);
             _stopRequested.TryRemove(id, out _);
             _diagnostics.Record(id, "Stop", "Info", "Server stopped by operator.");
             _ = _discord.SendAsync(def, DiscordNotifier.Kind.Down, "■ Server stopped", $"{def.Name} stopped via dashboard.", ct);
@@ -426,7 +475,7 @@ public sealed class ServerOrchestrator
         }
 
         _tracker.Update(id, s => s with { ProcessState = ProcessState.NotRunning, PidInGuest = null });
-        await RefreshStatusAsync(id, ct);
+        await RefreshStatusCoreAsync(id, ct);
         _stopRequested.TryRemove(id, out _);
         _diagnostics.Record(id, "Stop", "Info", "Server stopped by operator.");
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Down, "■ Server stopped", $"{def.Name} stopped via dashboard.", ct);
@@ -445,178 +494,23 @@ public sealed class ServerOrchestrator
         return await StartCoreAsync(id, fromRestart: true, ct);
     }
 
-    public async Task<ActionResult> BackupAsync(string id, CancellationToken ct = default)
-    {
-        var corr = Guid.NewGuid().ToString("n");
-        var def = _registry.Get(id);
-        if (def is null) return new ActionResult(false, "Unknown server", corr);
-
-        if (def.HostingMode == HostingMode.BareMetal)
-            return await BackupBareMetalAsync(def, corr, ct);
-
-        var name = $"{def.Id}-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
-        await LogAsync(id, "orch", "Creating checkpoint " + name);
-        var ok = await _hv.CreateCheckpointAsync(def.VmName, name, ct);
-        if (!ok) return new ActionResult(false, "Checkpoint failed", corr);
-
-        _tracker.Update(id, s => s with { LastBackupAt = DateTimeOffset.UtcNow });
-        await RefreshStatusAsync(id, ct);
-        _ = _discord.SendAsync(def, DiscordNotifier.Kind.Info, "📦 Checkpoint created", name, ct);
-        return new ActionResult(true, "Checkpoint created: " + name, corr);
-    }
-
-    private async Task<ActionResult> BackupBareMetalAsync(ServerDef def, string corr, CancellationToken ct)
-    {
-        if (def.SaveDirs is null || def.SaveDirs.Length == 0)
-            return new ActionResult(false, "No SaveDirs configured for this server.", corr);
-
-        var backupRoot = BackupRoot;
-        var dest = Path.Combine(backupRoot, def.Id);
-        Directory.CreateDirectory(dest);
-        var stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
-        var zipPath = Path.Combine(dest, $"{def.Id}-{stamp}.zip");
-
-        await LogAsync(def.Id, "orch", "Zipping save dirs to " + zipPath);
-        await Task.Run(() =>
-        {
-            using var fs = File.Create(zipPath);
-            using var archive = new ZipArchive(fs, ZipArchiveMode.Create);
-            foreach (var dir in def.SaveDirs)
-            {
-                if (!Directory.Exists(dir)) continue;
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var rel = Path.GetRelativePath(dir, file);
-                    var entryName = Path.Combine(prefix, rel).Replace('\\', '/');
-                    try
-                    {
-                        var e = archive.CreateEntry(entryName, CompressionLevel.Fastest);
-                        using var es = e.Open();
-                        using var src = File.OpenRead(file);
-                        src.CopyTo(es);
-                    }
-                    catch (IOException ex)
-                    {
-                        _logger.LogWarning("Skipping locked file {File}: {Msg}", file, ex.Message);
-                    }
-                }
-            }
-        }, ct);
-
-        var size = new FileInfo(zipPath).Length;
-        var keep = int.TryParse(_cfg["Agent:BackupRetention"], out var k) && k > 0 ? k : 10;
-        var olds = new DirectoryInfo(dest).GetFiles("*.zip").OrderByDescending(f => f.LastWriteTimeUtc).Skip(keep).ToList();
-        foreach (var f in olds)
-        {
-            try { f.Delete(); await LogAsync(def.Id, "backup", $"Pruned old backup {f.Name}"); }
-            catch (Exception ex) { _logger.LogWarning(ex, "Prune failed for {File}", f.FullName); }
-        }
-
-        _tracker.Update(def.Id, s => s with { LastBackupAt = DateTimeOffset.UtcNow });
-        await RefreshStatusAsync(def.Id, ct);
-        _ = _discord.SendAsync(def, DiscordNotifier.Kind.Info,
-            "📦 Backup created",
-            $"{Path.GetFileName(zipPath)} ({size / 1024 / 1024} MB)", ct);
-        return new ActionResult(true, $"Backup created: {zipPath} ({size / 1024 / 1024} MB) — kept {Math.Min(keep, new DirectoryInfo(dest).GetFiles("*.zip").Length)}", corr);
-    }
+    // Compatibility methods for existing ServerOrchestrator consumers.
+    // All backup operations (including the legacy entry points) MUST use the
+    // same validation, metadata, retention, safety snapshots and staged restore
+    // rules as the Agent's HTTP endpoints. Do not reintroduce ZIP IO here.
+    public Task<ActionResult> BackupAsync(string id, CancellationToken ct = default)
+        => _backups.CreateAsync(id, ct);
 
     public Task<List<BackupInfo>> ListBackupsAsync(string id, CancellationToken ct = default)
-    {
-        var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
-        var dir = Path.Combine(BackupRoot, def.Id);
-        var list = new List<BackupInfo>();
-        if (!Directory.Exists(dir)) return Task.FromResult(list);
-        foreach (var f in new DirectoryInfo(dir).GetFiles("*.zip").OrderByDescending(f => f.LastWriteTimeUtc))
-        {
-            list.Add(new BackupInfo(
-                Id: f.Name,
-                ServerId: def.Id,
-                CreatedAt: new DateTimeOffset(f.LastWriteTimeUtc, TimeSpan.Zero),
-                CheckpointName: f.Name,
-                SizeBytes: f.Length));
-        }
-        return Task.FromResult(list);
-    }
+        => _backups.ListAsync(id, ct);
 
-    public async Task<ActionResult> RestoreBackupAsync(string id, string backupName, CancellationToken ct = default)
-    {
-        var corr = Guid.NewGuid().ToString("n");
-        var def = _registry.Get(id);
-        if (def is null) return new ActionResult(false, "Unknown server", corr);
-        if (def.SaveDirs is null || def.SaveDirs.Length == 0)
-            return new ActionResult(false, "No SaveDirs configured", corr);
-        if (def.HostingMode != HostingMode.BareMetal)
-            return new ActionResult(false, "Restore is only implemented for BareMetal servers", corr);
+    public Task<ActionResult> RestoreBackupAsync(
+        string id, string backupName, CancellationToken ct = default)
+        => _backups.RestoreAsync(id, backupName, ct);
 
-        var st = _tracker.Get(id);
-        if (st.ProcessState == ProcessState.Running)
-            return new ActionResult(false, "Stop the server before restoring a backup.", corr);
-
-        var backupRoot = BackupRoot;
-        var zipPath = Path.Combine(backupRoot, def.Id, backupName);
-        if (!File.Exists(zipPath)) return new ActionResult(false, "Backup not found: " + backupName, corr);
-
-        var safetyName = $"{def.Id}-prerestore-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip";
-        var safetyPath = Path.Combine(backupRoot, def.Id, safetyName);
-        try
-        {
-            await LogAsync(id, "restore", "Creating safety backup " + safetyName);
-            using var fs = File.Create(safetyPath);
-            using var ar = new ZipArchive(fs, ZipArchiveMode.Create);
-            foreach (var dir in def.SaveDirs)
-            {
-                if (!Directory.Exists(dir)) continue;
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/'));
-                foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-                {
-                    var rel = Path.GetRelativePath(dir, f);
-                    var entry = ar.CreateEntry(Path.Combine(prefix, rel).Replace('\\', '/'), CompressionLevel.Fastest);
-                    using var es = entry.Open();
-                    using var src = File.OpenRead(f);
-                    src.CopyTo(es);
-                }
-            }
-        }
-        catch (Exception ex) { _logger.LogWarning(ex, "Safety backup failed (continuing)"); }
-
-        try
-        {
-            await LogAsync(id, "restore", $"Restoring from {backupName}");
-            using var archive = ZipFile.OpenRead(zipPath);
-            foreach (var dir in def.SaveDirs)
-            {
-                var prefix = Path.GetFileName(dir.TrimEnd('\\', '/')) + "/";
-                Directory.CreateDirectory(dir);
-                foreach (var entry in archive.Entries.Where(e => e.FullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(e.Name)))
-                {
-                    var rel = entry.FullName.Substring(prefix.Length);
-                    var dest = Path.Combine(dir, rel.Replace('/', Path.DirectorySeparatorChar));
-                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    entry.ExtractToFile(dest, overwrite: true);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            await LogAsync(id, "restore", "ERROR: " + ex.Message);
-            return new ActionResult(false, "Restore failed: " + ex.Message, corr);
-        }
-
-        await RefreshStatusAsync(id, ct);
-        return new ActionResult(true, $"Restored from {backupName}. Safety copy: {safetyName}", corr);
-    }
-
-    public Task<bool> DeleteBackupAsync(string id, string backupName, CancellationToken ct = default)
-    {
-        var def = _registry.Get(id);
-        if (def is null) return Task.FromResult(false);
-        var zipPath = Path.Combine(BackupRoot, def.Id, backupName);
-        if (!File.Exists(zipPath)) return Task.FromResult(false);
-        try { File.Delete(zipPath); return Task.FromResult(true); }
-        catch (Exception ex) { _logger.LogWarning(ex, "Delete backup failed"); return Task.FromResult(false); }
-    }
+    public Task<bool> DeleteBackupAsync(
+        string id, string backupName, CancellationToken ct = default)
+        => _backups.DeleteAsync(id, backupName, ct);
 
     public Task<ActionResult> UpdateAsync(string id, CancellationToken ct = default)
         => WithLifecycleLockAsync(id, () => UpdateCoreAsync(id, ct), ct);

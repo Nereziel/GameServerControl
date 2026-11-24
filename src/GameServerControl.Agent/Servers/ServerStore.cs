@@ -56,19 +56,49 @@ public sealed class ServerStore
 
     public ServerDef Update(string id, ServerDef def)
     {
-        var normalized = Normalize(def with { Id = id });
-        Validate(normalized);
+        // This is the general server-definition editor. Dedicated settings are
+        // intentionally changed through narrow endpoints and must not be reset
+        // by a stale edit form which was opened before those settings changed.
         lock (_lock)
         {
             var list = LoadAll();
             var idx = list.FindIndex(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
             if (idx < 0) throw new KeyNotFoundException(id);
+            var current = list[idx];
+            var normalized = Normalize(def with
+            {
+                Id = id,
+                BackupRetention = current.BackupRetention,
+                AutoUpdateOnStart = current.AutoUpdateOnStart,
+                AutoUpdateOnRestart = current.AutoUpdateOnRestart
+            });
+            Validate(normalized);
             ValidatePortConflicts(normalized, list, id);
             list[idx] = normalized;
             SaveAll(list);
             _registry.Reload();
+            return normalized;
         }
-        return normalized;
+    }
+
+    // A settings edit must read the *latest persisted* definition under the
+    // same lock used by full server edits. Never write a stale Registry.Get()
+    // snapshot back to disk merely to change the backup retention field.
+    public ServerDef SetBackupRetention(string id, int retention)
+    {
+        if (retention is < 1 or > 200)
+            throw new ArgumentException("Backup retention must be between 1 and 200.", nameof(retention));
+        lock (_lock)
+        {
+            var list = LoadAll();
+            var idx = list.FindIndex(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (idx < 0) throw new KeyNotFoundException(id);
+            var updated = list[idx] with { BackupRetention = retention };
+            list[idx] = updated;
+            SaveAll(list);
+            _registry.Reload();
+            return updated;
+        }
     }
 
     // Narrow update: does not round-trip credentials or reject unrelated legacy
