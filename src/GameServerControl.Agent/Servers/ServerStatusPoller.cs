@@ -46,7 +46,7 @@ public sealed class ServerStatusPoller
 
     public async Task<IReadOnlyDictionary<string, ServerStatus>> PollAsync(
         IEnumerable<string> serverIds,
-        Func<string, CancellationToken, Task<ServerStatus>> refresh,
+        Func<string, CancellationToken, Task<ServerStatus?>> refresh,
         CancellationToken stopping = default)
     {
         var ids = serverIds.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -73,6 +73,10 @@ public sealed class ServerStatusPoller
                     _logger.LogWarning(
                         "Status poll for {ServerId} returned after its {TimeoutMs} ms deadline; stale result ignored.",
                         id, _timeout.TotalMilliseconds);
+                }
+                else if (status is null)
+                {
+                    outcome = "superseded";
                 }
                 else
                 {

@@ -75,9 +75,41 @@ public sealed class ServerOrchestrator
     }
 
     public async Task<ServerStatus> RefreshStatusAsync(string id, CancellationToken ct = default)
+        => await RefreshStatusForMonitoringAsync(id, ct) ?? _tracker.Get(id);
+
+    // REST and background observations share the same fence. A skipped or
+    // superseded poll returns null to the scheduler; REST returns cached state.
+    public async Task<ServerStatus?> RefreshStatusForMonitoringAsync(string id, CancellationToken ct = default)
     {
         var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
+        var version = _lifecycleGate.TryBeginObservation(id, ct);
+        if (version is null) return null;
+        var observation = await ObserveStatusAsync(def, ct);
+        ct.ThrowIfCancellationRequested();
+        return await _lifecycleGate.TryPublishObservationAsync<ServerStatus>(
+            id, version.Value, async () =>
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!ReferenceEquals(_registry.Get(id), def)) return null!;
+                return await PublishStatusAsync(def, observation, ct);
+            }, ct);
+    }
 
+    // Start/Stop/Restart already own the lifecycle publication boundary.
+    // Their internal refresh must not reacquire it or return cached state.
+    private async Task<ServerStatus> RefreshStatusCoreAsync(string id, CancellationToken ct)
+    {
+        var def = _registry.Get(id) ?? throw new KeyNotFoundException(id);
+        var observation = await ObserveStatusAsync(def, ct);
+        return await PublishStatusAsync(def, observation, ct);
+    }
+
+    private sealed record StatusObservation(VmState VmState, ProcessState ProcessState,
+        int? Pid, Dictionary<string, string>? Metadata);
+
+    private async Task<StatusObservation> ObserveStatusAsync(ServerDef def, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
         VmState vmState;
         ProcessState procState;
         int? pid = null;
@@ -85,7 +117,7 @@ public sealed class ServerOrchestrator
         if (def.HostingMode == HostingMode.BareMetal)
         {
             vmState = VmState.NotApplicable;
-            var (ok, foundPid) = await _local.FindProcessAsync(def, ct);
+            var (ok, foundPid) = await _local.ObserveProcessAsync(def, ct);
             procState = !ok ? ProcessState.Unknown : (foundPid is null ? ProcessState.NotRunning : ProcessState.Running);
             pid = foundPid;
         }
@@ -107,6 +139,7 @@ public sealed class ServerOrchestrator
                     var (ok, foundPid) = await _guest.FindProcessAsync(def.VmName, cred, def.GuestExePath, ct);
                     if (ok) { pid = foundPid; procState = foundPid is null ? ProcessState.NotRunning : ProcessState.Running; }
                 }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
                 catch (Exception ex)
                 {
                     _logger.LogDebug(ex, "FindProcess failed for {Vm}", def.VmName);
@@ -118,11 +151,25 @@ public sealed class ServerOrchestrator
             }
         }
 
+        var metadata = await BuildMetadataAsync(def, ct);
+        ct.ThrowIfCancellationRequested();
+        return new StatusObservation(vmState, procState, pid, metadata);
+    }
+
+    private async Task<ServerStatus> PublishStatusAsync(ServerDef def, StatusObservation observation, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var id = def.Id;
+        var (vmState, procState, pid, metadata) = observation;
         (double? cpuPct, long? memMB) = def.HostingMode == HostingMode.BareMetal && pid is int pp
             ? _metrics.Sample(def, pp)
             : (null, null);
 
-        var metadata = await BuildMetadataAsync(def, ct);
+        ct.ThrowIfCancellationRequested();
+        // Commit is accepted at this boundary. Finish its effects together,
+        // even if the deadline expires during broadcast/firewall reconciliation.
+        if (def.HostingMode == HostingMode.BareMetal && procState is ProcessState.Running or ProcessState.NotRunning)
+            _local.ReconcileObservedFirewall(def, procState == ProcessState.Running);
         var prevState = _tracker.Get(id).ProcessState;
 
         var status = _tracker.Update(id, cur => cur with
@@ -179,6 +226,7 @@ public sealed class ServerOrchestrator
                 dict["ServerName"] = sn.ToString();
             return dict.Count > 0 ? dict : null;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return null; }
     }
 
@@ -288,7 +336,7 @@ public sealed class ServerOrchestrator
         if (alreadyOk && existingPid is int pidAlready)
         {
             _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pidAlready });
-            await RefreshStatusAsync(def.Id, ct);
+            await RefreshStatusCoreAsync(def.Id, ct);
             return new ActionResult(true, $"Already running (pid={pidAlready})", corr);
         }
 
@@ -297,7 +345,7 @@ public sealed class ServerOrchestrator
         if (!started) return StartFailure(def.Id, corr, ExplainLaunchError(err));
 
         _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pid, StartedAt = DateTimeOffset.UtcNow, LastError = null });
-        await RefreshStatusAsync(def.Id, ct);
+        await RefreshStatusCoreAsync(def.Id, ct);
         _diagnostics.Record(def.Id, "Start", "Success", "Server started via Agent.");
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Up, "▶ Server started", $"{def.Name} is up (pid={pid}).", ct);
         return new ActionResult(true, $"Started (pid={pid})", corr);
@@ -350,7 +398,7 @@ public sealed class ServerOrchestrator
         if (!started) return new ActionResult(false, "Process launch failed: " + err, corr);
 
         _tracker.Update(def.Id, s => s with { ProcessState = ProcessState.Running, PidInGuest = pid, StartedAt = DateTimeOffset.UtcNow, LastError = null });
-        await RefreshStatusAsync(def.Id, ct);
+        await RefreshStatusCoreAsync(def.Id, ct);
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Up, "▶ Server started", $"{def.Name} is up (pid={pid}).", ct);
         return new ActionResult(true, $"Started (pid={pid})", corr);
     }
@@ -405,7 +453,7 @@ public sealed class ServerOrchestrator
             }
 
             _tracker.Update(id, s => s with { ProcessState = ProcessState.NotRunning, PidInGuest = null });
-            await RefreshStatusAsync(id, ct);
+            await RefreshStatusCoreAsync(id, ct);
             _stopRequested.TryRemove(id, out _);
             _diagnostics.Record(id, "Stop", "Info", "Server stopped by operator.");
             _ = _discord.SendAsync(def, DiscordNotifier.Kind.Down, "■ Server stopped", $"{def.Name} stopped via dashboard.", ct);
@@ -427,7 +475,7 @@ public sealed class ServerOrchestrator
         }
 
         _tracker.Update(id, s => s with { ProcessState = ProcessState.NotRunning, PidInGuest = null });
-        await RefreshStatusAsync(id, ct);
+        await RefreshStatusCoreAsync(id, ct);
         _stopRequested.TryRemove(id, out _);
         _diagnostics.Record(id, "Stop", "Info", "Server stopped by operator.");
         _ = _discord.SendAsync(def, DiscordNotifier.Kind.Down, "■ Server stopped", $"{def.Name} stopped via dashboard.", ct);

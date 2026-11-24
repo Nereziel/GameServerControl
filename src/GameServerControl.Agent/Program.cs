@@ -709,35 +709,62 @@ api.MapGet("/servers/{id}/status", async (string id, ServerOrchestrator orch, Ca
     catch (KeyNotFoundException) { return Results.NotFound(); }
 });
 api.MapGet("/status", (StatusTracker tracker) => Results.Ok(tracker.Snapshot()));
-api.MapPost("/servers/{id}/start", async (string id, ServerOrchestrator orch, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, CancellationToken ct) =>
+api.MapPost("/servers/{id}/start", async (string id, ServerOrchestrator orch, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, ServerLifecycleGate lifecycleGate, CancellationToken ct) =>
 {
     var result = await orch.StartAsync(id, ct);
-    var def = reg.Get(id);
-    if (result.Success && def is not null)
+    if (result.Success)
     {
-        try { await relay.EnsureForServerAsync(def, tracker.Get(id).ProcessState == ProcessState.Running, ct); }
+        try
+        {
+            // Reconcile from current state, not the outcome of an older action.
+            // If another lifecycle operation has begun, it owns the next sync.
+            await lifecycleGate.TryRunIdleAsync(id, async () =>
+            {
+                var def = reg.Get(id);
+                if (def is not null)
+                    await relay.EnsureForServerAsync(def, tracker.Get(id).ProcessState == ProcessState.Running, ct);
+            }, ct);
+        }
         catch (Exception ex) { result = result with { Message = result.Message + " Public relay warning: " + ex.Message }; }
     }
     return Results.Ok(result);
 });
-api.MapPost("/servers/{id}/stop", async (string id, bool? stopVm, bool? force, ServerOrchestrator orch, ServerRegistry reg, PublicRelayManager relay, CancellationToken ct) =>
+api.MapPost("/servers/{id}/stop", async (string id, bool? stopVm, bool? force, ServerOrchestrator orch, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, ServerLifecycleGate lifecycleGate, CancellationToken ct) =>
 {
     var result = await orch.StopAsync(id, stopVm ?? true, force ?? false, ct);
-    var def = reg.Get(id);
-    if (def is not null)
+    if (result.Success)
     {
-        try { await relay.EnsureForServerAsync(def, false, ct); }
+        try
+        {
+            // Reconcile from current state, not the outcome of an older action.
+            // If another lifecycle operation has begun, it owns the next sync.
+            await lifecycleGate.TryRunIdleAsync(id, async () =>
+            {
+                var def = reg.Get(id);
+                if (def is not null)
+                    await relay.EnsureForServerAsync(def, tracker.Get(id).ProcessState == ProcessState.Running, ct);
+            }, ct);
+        }
         catch (Exception ex) { result = result with { Message = result.Message + " Public relay warning: " + ex.Message }; }
     }
     return Results.Ok(result);
 });
-api.MapPost("/servers/{id}/restart", async (string id, ServerOrchestrator orch, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, CancellationToken ct) =>
+api.MapPost("/servers/{id}/restart", async (string id, ServerOrchestrator orch, ServerRegistry reg, StatusTracker tracker, PublicRelayManager relay, ServerLifecycleGate lifecycleGate, CancellationToken ct) =>
 {
     var result = await orch.RestartAsync(id, ct);
-    var def = reg.Get(id);
-    if (result.Success && def is not null)
+    if (result.Success)
     {
-        try { await relay.EnsureForServerAsync(def, tracker.Get(id).ProcessState == ProcessState.Running, ct); }
+        try
+        {
+            // Reconcile from current state, not the outcome of an older action.
+            // If another lifecycle operation has begun, it owns the next sync.
+            await lifecycleGate.TryRunIdleAsync(id, async () =>
+            {
+                var def = reg.Get(id);
+                if (def is not null)
+                    await relay.EnsureForServerAsync(def, tracker.Get(id).ProcessState == ProcessState.Running, ct);
+            }, ct);
+        }
         catch (Exception ex) { result = result with { Message = result.Message + " Public relay warning: " + ex.Message }; }
     }
     return Results.Ok(result);
@@ -855,6 +882,9 @@ api.MapDelete("/tokens/{id}", (string id, TokenRegistry tokens) =>
 
 app.MapHub<StatusHub>("/hubs/status").RequireAuthorization();
 
+// Deterministic integration fixtures may disable the background loop;
+// production hosts always run it.
+if (!(app.Environment.IsEnvironment("Testing") && app.Configuration.GetValue<bool>("Agent:DisableStatusMonitoring")))
 _ = Task.Run(async () =>
 {
     var stopping = app.Lifetime.ApplicationStopping;
@@ -869,6 +899,7 @@ _ = Task.Run(async () =>
     var pollPolicy = new ServerStatusPollPolicy();
     var cadence = new ServerStatusCadence();
     var poller = app.Services.GetRequiredService<ServerStatusPoller>();
+    var lifecycleGate = app.Services.GetRequiredService<ServerLifecycleGate>();
 
     // PeriodicTimer uses a fixed five-second tick instead of adding five
     // seconds *after* a slow cycle. Only one cycle is active at any time;
@@ -898,8 +929,8 @@ _ = Task.Run(async () =>
             // Bound process/Runner reads across DIFFERENT server instances.
             // Each in-flight read is awaited before another cycle may begin;
             // cancellation does not detach tasks that might later modify state.
-            var fresh = await poller.PollAsync(ids,
-                (id, token) => orch.RefreshStatusAsync(id, token), stopping);
+            await poller.PollAsync(ids,
+                (id, token) => orch.RefreshStatusForMonitoringAsync(id, token), stopping);
 
             bool? relayReachable = null;
             if (syncRelay && servers.Any(s => relay.SettingsFor(s.Id).Enabled))
@@ -914,29 +945,37 @@ _ = Task.Run(async () =>
             {
                 try
                 {
-                    var status = fresh.TryGetValue(s.Id, out var current)
-                        ? current : tracker.Get(s.Id);
-                    if (syncRelay)
+                    if (!syncRelay && !checkDisk) continue;
+                    await lifecycleGate.TryRunIdleAsync(s.Id, async () =>
                     {
-                        var relayActive = status.ProcessState == ProcessState.Running && relay.SettingsFor(s.Id).Enabled;
-                        var synced = true;
-                        try { await relay.EnsureForServerAsync(s, status.ProcessState == ProcessState.Running, stopping); }
-                        catch (OperationCanceledException) when (stopping.IsCancellationRequested) { throw; }
-                        catch (Exception ex) { synced = false; log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
-                        if (alertPolicy.ReportRelay(s.Id, relayActive, synced && (!relayActive || relayReachable == true)))
+                        // Read the latest definition and tracker state only
+                        // after entering the publication boundary. Never use
+                        // a snapshot from before another Start/Stop/Restore.
+                        var def = reg.Get(s.Id);
+                        if (def is null) return;
+                        var status = tracker.Get(s.Id);
+                        if (syncRelay)
                         {
-                            diagnostics.Record(s.Id, "RelayUnavailable", "Error", "Public VPS Relay could not be reached or synchronized.");
-                            _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Public VPS Relay unavailable",
-                                "The Agent cannot reach or synchronize the public Relay. Check Server Network settings.");
+                            var relayActive = status.ProcessState == ProcessState.Running && relay.SettingsFor(s.Id).Enabled;
+                            var synced = true;
+                            try { await relay.EnsureForServerAsync(def, status.ProcessState == ProcessState.Running, stopping); }
+                            catch (OperationCanceledException) when (stopping.IsCancellationRequested) { throw; }
+                            catch (Exception ex) { synced = false; log.LogDebug(ex, "Public relay sync failed for {Id}", s.Id); }
+                            if (alertPolicy.ReportRelay(s.Id, relayActive, synced && (!relayActive || relayReachable == true)))
+                            {
+                                diagnostics.Record(s.Id, "RelayUnavailable", "Error", "Public VPS Relay could not be reached or synchronized.");
+                                _ = discord.SendAsync(def, DiscordNotifier.Kind.Warn, "Public VPS Relay unavailable",
+                                    "The Agent cannot reach or synchronize the public Relay. Check Server Network settings.");
+                            }
                         }
-                    }
-                    if (checkDisk && status.ProcessState == ProcessState.Running &&
-                        alertPolicy.ReportFreeDisk(s.Id, ServerAlertPolicy.AvailableDiskBytes(s.GuestWorkingDir)))
-                    {
-                        diagnostics.Record(s.Id, "LowDisk", "Error", "Available space on the game server volume is below 5 GiB.");
-                        _ = discord.SendAsync(s, DiscordNotifier.Kind.Warn, "Low game server disk space",
-                            "Less than 5 GiB is available on the game server volume. Check storage before the next save or backup.");
-                    }
+                        if (checkDisk && status.ProcessState == ProcessState.Running &&
+                            alertPolicy.ReportFreeDisk(s.Id, ServerAlertPolicy.AvailableDiskBytes(def.GuestWorkingDir)))
+                        {
+                            diagnostics.Record(s.Id, "LowDisk", "Error", "Available space on the game server volume is below 5 GiB.");
+                            _ = discord.SendAsync(def, DiscordNotifier.Kind.Warn, "Low game server disk space",
+                                "Less than 5 GiB is available on the game server volume. Check storage before the next save or backup.");
+                        }
+                    }, stopping);
                 }
                 catch (OperationCanceledException) when (stopping.IsCancellationRequested) { throw; }
                 catch (Exception ex) { log.LogDebug(ex, "Status monitoring failed for {Id}", s.Id); }

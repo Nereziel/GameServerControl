@@ -422,14 +422,24 @@ public sealed class LocalProcessService
     public Task<(bool Ok, int? Pid)> FindProcessAsync(string exePath, CancellationToken ct = default) =>
         FindProcessCoreAsync(exePath, FindServerForExe(exePath), ct);
 
-    private async Task<(bool Ok, int? Pid)> FindProcessCoreAsync(string exePath, ServerDef? def, CancellationToken ct)
+    // Monitoring probes must not mutate firewall rules before the observation
+    // has passed the lifecycle/version/deadline fence.
+    public Task<(bool Ok, int? Pid)> ObserveProcessAsync(ServerDef def, CancellationToken ct = default) =>
+        FindProcessCoreAsync(def.GuestExePath, def, ct, reconcileFirewall: false);
+
+    public void ReconcileObservedFirewall(ServerDef def, bool running) =>
+        SetFirewallState(def, open: running, out _);
+
+    private async Task<(bool Ok, int? Pid)> FindProcessCoreAsync(string exePath, ServerDef? def, CancellationToken ct,
+        bool reconcileFirewall = true)
     {
         if (OperatingSystem.IsWindows())
         {
             if (def is null) return (false, null);
             var result = await _windowsRunner.FindAsync(def, ct);
+            ct.ThrowIfCancellationRequested();
             if (!result.Ok) return (false, null);
-            SetFirewallState(def, open: result.Pid is not null, out _);
+            if (reconcileFirewall) SetFirewallState(def, open: result.Pid is not null, out _);
             return (true, result.Pid);
         }
         if (def?.GameType == GameType.Minecraft &&

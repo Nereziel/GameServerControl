@@ -89,6 +89,8 @@ for (const token of [
   'cadence.ShouldSyncRelay(now)',
   'cadence.ShouldCheckDisk(now)',
   'poller.PollAsync(ids,',
+  'orch.RefreshStatusForMonitoringAsync(id, token)',
+  'lifecycleGate.TryRunIdleAsync(s.Id,',
   'poller.RecordCycle('
 ])
   if (!programForUi.includes(token)) throw new Error('Server metrics polling regression: '+token);
@@ -100,6 +102,10 @@ for (const token of [
   'gsc.status.poll.duration', 'gsc.status.cycle.duration'
 ])
   if (!pollerForUi.includes(token)) throw new Error('Bounded status polling contract regression: '+token);
+if (programForUi.includes('fresh.TryGetValue(s.Id') ||
+    !orchestratorForUi.includes('_lifecycleGate.TryPublishObservationAsync<ServerStatus>') ||
+    !orchestratorForUi.includes('RefreshStatusCoreAsync('))
+  throw new Error('Monitoring publication must be fenced against lifecycle operations.');
 if (!orchestratorForUi.includes('_metrics.Sample(def, pp)') ||
     !metricsForUi.includes('RSDragonwildsServer-Win64-Shipping') ||
     !metricsForUi.includes('Process.GetProcessById(pid)'))
