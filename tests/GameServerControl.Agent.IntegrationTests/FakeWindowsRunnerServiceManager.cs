@@ -28,8 +28,10 @@ public sealed class FakeWindowsRunnerServiceManager : IWindowsRunnerServiceManag
     public Task<RunnerResponse> StartAsync(ServerDef def, CancellationToken ct = default) =>
         Task.FromResult(new RunnerResponse(true, Pid: 1234));
 
+    public Func<ServerDef, CancellationToken, Task<RunnerResponse>>? FindOverride { get; set; }
+
     public Task<RunnerResponse> FindAsync(ServerDef def, CancellationToken ct = default) =>
-        Task.FromResult(new RunnerResponse(true));
+        FindOverride?.Invoke(def, ct) ?? Task.FromResult(new RunnerResponse(true));
 
     public Task<RunnerResponse> StopAsync(ServerDef def, bool force, CancellationToken ct = default) =>
         Task.FromResult(new RunnerResponse(true));
