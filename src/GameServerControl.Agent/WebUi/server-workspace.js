@@ -194,7 +194,7 @@ function serverWorkspaceHasUnsavedChanges() {
   if (SERVER_WORKSPACE.tab === 'files' && window.GSC_FILES?.dirty) return true;
   const body = document.getElementById('swTabBody');
   if (!body) return false;
-  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly, #swBackupLabel, #swBackupRetention, #swAutoUpdateOnStart, #swAutoUpdateOnRestart')).some(input => {
+  return Array.from(body.querySelectorAll('[data-cfg], #swNetworkPorts, #swScheduleRestart, #swRestartHour, #swUpdate, #swDay, #swUpdateHour, #swBackup, #swBackupMinute, #swAccessHost, #swAccessPort, #swAccessPassword, #swAccessClear, #swDiscordUrl, #swDiscordAlertsOnly, #swBackupLabel, #swBackupRetention, #swAutoUpdateOnStart, #swAutoUpdateOnRestart')).some(input => {
     if (input.disabled) return false;
     if (input.type === 'checkbox') return input.checked !== input.defaultChecked;
     if (input.tagName === 'SELECT') {
@@ -901,7 +901,7 @@ async function renderServerSchedule(def, body) {
     <button class="btn primary" type="button" ${disabled} ${uiAction('serverWorkspaceSaveSchedule',[def.id])}>Save schedule</button>
   </div>
   <section class="sw-section"><h3>Daily restart</h3>
-    <div class="checkrow"><input id="swRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''} ${disabled}><label for="swRestart">Restart this server every day</label></div>
+    <div class="checkrow"><input id="swScheduleRestart" type="checkbox" ${schedule.dailyRestartEnabled ? 'checked' : ''} ${disabled}><label for="swScheduleRestart">Restart this server every day</label></div>
     <div class="field"><label for="swRestartHour">Hour (0–23)</label><input id="swRestartHour" type="number" min="0" max="23" value="${schedule.dailyRestartHour ?? 5}" ${disabled}></div>
   </section>
   <section class="sw-section"><h3>Weekly game update</h3>
@@ -918,7 +918,7 @@ async function renderServerSchedule(def, body) {
 
 async function serverWorkspaceSaveSchedule(id) {
   const body = {
-    dailyRestartEnabled: $('#swRestart').checked,
+    dailyRestartEnabled: $('#swScheduleRestart').checked,
     dailyRestartHour: Number($('#swRestartHour').value || 5),
     weeklyUpdateEnabled: $('#swUpdate').checked,
     weeklyUpdateDay: $('#swDay').value,
