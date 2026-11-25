@@ -48,7 +48,7 @@ app.Use(async (ctx, next) =>
     await next();
 });
 
-var mutationGate = new SemaphoreSlim(1, 1);
+var mutationGate = app.Services.GetRequiredService<RelayStateStore>().MutationGate;
 
 app.MapGet("/api/health", (RelayStateStore store, IptablesRelay iptables) => Results.Ok(new
 {
@@ -78,6 +78,8 @@ app.MapPut("/api/routes/{serverId}", async (string serverId, RelayRouteDefinitio
     await mutationGate.WaitAsync(ct);
     try
     {
+        if (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         var routes = store.Snapshot()
             .Where(r => !string.Equals(r.ServerId, serverId, StringComparison.OrdinalIgnoreCase))
             .Append(definition)
@@ -100,6 +102,8 @@ app.MapDelete("/api/routes/{serverId}", async (string serverId, RelayStateStore 
     await mutationGate.WaitAsync(ct);
     try
     {
+        if (app.Lifetime.ApplicationStopping.IsCancellationRequested)
+            return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
         var existing = store.Snapshot();
         var routes = existing.Where(r => !string.Equals(r.ServerId, serverId, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (routes.Length == existing.Length) return Results.NoContent();
@@ -118,9 +122,14 @@ app.Lifetime.ApplicationStopping.Register(() =>
 {
     try
     {
-        app.Services.GetRequiredService<IptablesRelay>()
-            .RebuildAsync(Array.Empty<RelayRouteDefinition>(), CancellationToken.None)
-            .GetAwaiter().GetResult();
+        mutationGate.Wait();
+        try
+        {
+            app.Services.GetRequiredService<IptablesRelay>()
+                .RebuildAsync(Array.Empty<RelayRouteDefinition>(), CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        finally { mutationGate.Release(); }
     }
     catch (Exception ex)
     {

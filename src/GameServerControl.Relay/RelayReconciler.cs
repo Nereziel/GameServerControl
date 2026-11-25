@@ -20,16 +20,22 @@ public sealed class RelayReconciler : BackgroundService
         {
             try
             {
-                var routes = _store.Snapshot();
-                if (first)
+                await _store.MutationGate.WaitAsync(stoppingToken);
+                try
                 {
-                    await _iptables.RebuildAsync(routes, stoppingToken);
-                    first = false;
+                    stoppingToken.ThrowIfCancellationRequested();
+                    var routes = _store.Snapshot();
+                    if (first)
+                    {
+                        await _iptables.RebuildAsync(routes, stoppingToken);
+                        first = false;
+                    }
+                    else
+                    {
+                        await _iptables.EnsureAsync(routes, stoppingToken);
+                    }
                 }
-                else
-                {
-                    await _iptables.EnsureAsync(routes, stoppingToken);
-                }
+                finally { _store.MutationGate.Release(); }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

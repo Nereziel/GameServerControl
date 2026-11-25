@@ -85,8 +85,13 @@ public sealed class IptablesRelay
 
             _verifiedRulesetFingerprint = null;
             await EnsureInfrastructureAsync(ct);
+            // Rebuild our own chains on drift: appending missing rules alone
+            // cannot remove obsolete DNAT rules left by an interrupted mutation.
+            await RunAsync(new[] { "-t", "nat", "-F", DnatChain }, true, ct);
+            await RunAsync(new[] { "-t", "nat", "-F", SnatChain }, true, ct);
+            await RunAsync(new[] { "-F", ForwardChain }, true, ct);
             foreach (var rule in BuildRules(routes))
-                await EnsureRuleAsync(rule, ct);
+                await AppendRuleAsync(rule, ct);
 
             // If iptables-save is unavailable, keep the original full check path.
             _verifiedRulesetFingerprint = await CaptureRulesetFingerprintAsync(ct);
