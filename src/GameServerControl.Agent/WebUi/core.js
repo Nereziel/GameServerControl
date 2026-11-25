@@ -354,17 +354,18 @@ async function localBrowserKeyDelete(){
   })}finally{db.close()}
 }
 const localBrowserBase64=buffer=>btoa(String.fromCharCode(...new Uint8Array(buffer)));
-async function rememberLocalBrowser(){
+async function rememberLocalBrowser(signal){
   const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
   const publicKey=localBrowserBase64(await crypto.subtle.exportKey('spki',pair.publicKey));
-  const registered=await api('/api/auth/browser-key',{method:'POST',body:JSON.stringify({publicKey})});
+  const registered=await api('/api/auth/browser-key',{method:'POST',body:JSON.stringify({publicKey}),signal});
   if(!registered?.id)throw new Error('Agent did not accept the browser signing key.');
   await localBrowserKeyWrite({id:registered.id,privateKey:pair.privateKey});
 }
 
 let LOGIN_PENDING=false;
 function normalizeLoginUrl(value){
-  const url=new URL(value.trim()||location.origin);
+  let url;
+  try{url=new URL(value.trim()||location.origin)}catch{throw new Error('Enter a valid HTTP or HTTPS Agent URL.')}
   if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)
     throw new Error('Enter a valid HTTP or HTTPS Agent URL without credentials, query or fragment.');
   if(location.protocol==='https:'&&url.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname))
@@ -453,7 +454,10 @@ async function login(){
     const identity=await verifyLoginIdentity(connection);
     persistLoginConnection(connection);
     if(remember&&String(identity.role).toLowerCase()==='admin'){
-      try{await rememberLocalBrowser()}catch{rememberWarning=true}
+      const rememberController=new AbortController();
+      const rememberTimeout=setTimeout(()=>rememberController.abort(),5000);
+      try{await rememberLocalBrowser(rememberController.signal)}catch{rememberWarning=true}
+      finally{clearTimeout(rememberTimeout)}
     }else if(remember){rememberWarning=true}
     const tokenInput=$('#loginToken');tokenInput.type='password';tokenInput.value='';
     await boot(identity);
@@ -549,7 +553,11 @@ async function init(){
     }
   }
   let previous=null;
-  if(token){previous={url:url||location.origin,token}}
+  if(token){
+    // Legacy links can authenticate only to the page's own Agent, never a
+    // different destination supplied by a query parameter.
+    try{if(normalizeLoginUrl(url||location.origin)===location.origin)previous={url:location.origin,token}}catch{}
+  }
   else{try{previous=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')}catch{}}
   let message='';
   if(previous?.url&&previous?.token){
