@@ -77,9 +77,9 @@ async function refreshJobs(render=true){
   if(badge){badge.textContent=active;badge.classList.toggle('hidden',active===0)}
   if(render||CURRENT_VIEW==='installs')renderJobs();
 }
-function phaseText(p){return({queued:'Queued',steamcmd:'SteamCMD',download:'Downloading',verify:'Verifying',
+function phaseText(p){const label=({queued:'Queued',steamcmd:'SteamCMD',download:'Downloading',verify:'Verifying',
   register:'Registering',done:'Completed',failed:'Failed',cancelled:'Cancelled',
-  interrupted:'Interrupted by Agent restart',expired:'Unavailable'})[p]||p}
+  interrupted:'Interrupted by Agent restart',expired:'Unavailable'})[p]||p;return globalThis.GSC_I18N?.t(label)??label}
 function mayCancelInstall(p){
   return !!p&&!p.finished&&supportsAgentFeature('install.cancel')&&
     !(typeof isReadOnly==='function'&&isReadOnly());

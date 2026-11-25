@@ -2,6 +2,9 @@
 (() => {
   'use strict';
   const cs = Object.freeze({
+  "Registering": "Registrace",
+  "Interrupted by Agent restart": "Přerušeno restartem Agenta",
+  "Unavailable": "Nedostupné",
   "SELF-HOSTED / SERVER OPERATIONS": "VLASTNÍ HOSTING / SPRÁVA SERVERŮ",
   "Your servers.": "Vaše servery.",
   "One control panel.": "Jeden ovládací panel.",
@@ -594,8 +597,8 @@
   }
   function set(el,source) {
     if (!el) return;
-    if (known(source)) el.setAttribute('data-gsc-i18n',source);
-    else el.removeAttribute('data-gsc-i18n');
+    if (known(source)) { if (el.getAttribute('data-gsc-i18n') !== source) el.setAttribute('data-gsc-i18n',source); }
+    else if (el.hasAttribute('data-gsc-i18n')) el.removeAttribute('data-gsc-i18n');
     const value = t(source);
     if (el.textContent !== value) el.textContent = value;
   }

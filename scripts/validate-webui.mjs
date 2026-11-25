@@ -307,6 +307,7 @@ try {
     }
   }
 
+  runNode(path.resolve('scripts/test-i18n.mjs'), 'EN/CZ locale switching and safe text handling');
   runNode(path.resolve('scripts/test-login-flow.mjs'), 'Login form, identity and session regression');
   runNode(path.resolve('scripts/test-game-picker-focus.mjs'), 'Create server game picker focus regression');
   runNode(path.resolve('scripts/test-install-job-resume-ui.mjs'), 'Install history and cancellation UI');

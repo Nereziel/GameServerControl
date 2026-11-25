@@ -231,7 +231,7 @@ function renderAllHostDashboard(root){
   const metrics=[['Game servers',entries.length],['Running',running],
     ['Online computers',groups.filter(x=>x.online).length+'/'+groups.length],['Attention needed',issues]];
   const stats='<div class="dashboard-stats">'+metrics.map(([label,value])=>
-    '<div class="dashboard-stat"><div><span>'+esc(label)+'</span><strong>'+esc(value)+'</strong></div></div>'
+    '<div class="dashboard-stat"><div><span data-gsc-i18n="'+esc(label)+'">'+esc(label)+'</span><strong>'+esc(value)+'</strong></div></div>'
   ).join('')+'</div>';
   const query=SERVER_FILTER.query, filter=SERVER_FILTER.state;
   const sections=groups.map(host=>{
@@ -271,7 +271,7 @@ function serverWorkspaceRenderListActions(id, name, state, steamAppId, hostId = 
   const button = (op, text, disabled, extraClass = '', reason = '') =>
     `<button type="button" class="btn sw-list-action ${extraClass}" ${disabled ? 'disabled' : ''}
        aria-label="${esc(text + ' ' + name)}" ${reason ? 'title="' + esc(reason) + '"' : ''}
-       ${route(op)}>${text}</button>`;
+       ${route(op)} data-gsc-i18n="${esc(text)}">${text}</button>`;
   const updateReason = !steamAppId ? 'No Steam App ID configured'
     : up ? 'Stop the server before updating game files' : 'Update and validate game files';
   return button('start', 'Start', up || busy || readOnly, 'primary') +
@@ -402,8 +402,8 @@ function updateServerWorkspaceHeader(def) {
 
   const stateEl = $('#swState');
   if (stateEl) {
-    stateEl.textContent = state;
-    globalThis.GSC_I18N?.set(stateEl,state);
+    if(globalThis.GSC_I18N)globalThis.GSC_I18N.set(stateEl,state);
+    else stateEl.textContent=state;
     stateEl.className = 'sw-state ' + serverWorkspaceStateClass(state);
   }
   const start = $('#swStart'), stop = $('#swStop'), restart = $('#swRestart'), update = $('#swUpdateButton');

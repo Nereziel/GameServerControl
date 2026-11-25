@@ -378,6 +378,7 @@ function updateLoginTarget(){
   try{
     const address=normalizeLoginUrl(input.value);
     const url=new URL(address);
+    target.removeAttribute?.('data-gsc-i18n');
     target.textContent=address;
     local=address===location.origin&&isLocalBrowserOrigin()&&!window.GSC_CLOUD_MODE;
     httpWarning=url.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname);
@@ -815,6 +816,7 @@ function clearNotice(){const n=$('#noticeBar');if(n)n.classList.add('hidden');if
 function setNotice(msg,kind='info',persistent=false,title=null){
   const n=$('#noticeBar'),text=$('#noticeText'),head=$('#noticeTitle');if(!n||!text||!head)return;
   clearNotice();n.className='noticebar '+(kind||'info');text.textContent=msg||'';head.textContent=title||(kind==='err'?'Error':kind==='ok'?'Done':'Status');n.classList.remove('hidden');
+  globalThis.GSC_I18N?.set(head,title||(kind==='err'?'Error':kind==='ok'?'Done':'Status'));
   if(!persistent)GSCUX.noticeTimer=setTimeout(clearNotice,kind==='err'?9000:5000);
 }
 // The notice bar lives inside #app, so it is hidden while the login form is open.
@@ -957,11 +959,11 @@ action=async function(id,a){
 
 function setWorkspaceHeading(title, context='CONTROL PANEL / OVERVIEW',translateTitle=true){
   const heading=$('#pageHeading'), eyebrow=$('#pageEyebrow');
-  if(heading&&heading.textContent!==title)heading.textContent=title;
-  if(eyebrow&&eyebrow.textContent!==context)eyebrow.textContent=context;
-  if(translateTitle)globalThis.GSC_I18N?.set(heading,title);
-  else heading?.removeAttribute('data-gsc-i18n');
-  globalThis.GSC_I18N?.set(eyebrow,context);
+  const i18n=globalThis.GSC_I18N;
+  if(i18n&&translateTitle)i18n.set(heading,title);
+  else if(heading){heading.removeAttribute?.('data-gsc-i18n');if(heading.textContent!==title)heading.textContent=title}
+  if(i18n)i18n.set(eyebrow,context);
+  else if(eyebrow&&eyebrow.textContent!==context)eyebrow.textContent=context;
 }
 function closeMobileNavigation(){
   $('#app')?.classList.remove('nav-open');
