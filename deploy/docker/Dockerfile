@@ -1,13 +1,13 @@
 # Build stage
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
 WORKDIR /src
 COPY src/GameServerControl.Shared/ ./GameServerControl.Shared/
 COPY src/GameServerControl.Agent/ ./GameServerControl.Agent/
-COPY Directory.Build.props ./
+COPY Directory.Build.props global.json ./
 RUN dotnet publish GameServerControl.Agent/GameServerControl.Agent.csproj -c Release -r linux-x64 --self-contained false -o /app
 
 # Runtime stage. ASP.NET runtime + 32-bit libs that steamcmd needs.
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble
 RUN dpkg --add-architecture i386 && \
     apt-get update && \
     apt-get install -y --no-install-recommends \

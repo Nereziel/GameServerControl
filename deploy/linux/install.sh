@@ -30,10 +30,10 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-# 1) .NET 8 SDK present?
-if ! command -v dotnet >/dev/null 2>&1; then
-  echo "ERROR: dotnet CLI not found. Install .NET 8 SDK first:"
-  echo "  Debian/Ubuntu: https://learn.microsoft.com/dotnet/core/install/linux-ubuntu"
+# 1) .NET 10 SDK present?
+if ! command -v dotnet >/dev/null 2>&1 || ! dotnet --list-sdks | grep -E '^10\.0\.' >/dev/null; then
+  echo "ERROR: .NET 10 SDK not found. Install .NET 10 SDK first:"
+  echo "  Debian/Ubuntu: https://learn.microsoft.com/dotnet/core/install/linux-ubuntu-install"
   echo "  Fedora/RHEL:   https://learn.microsoft.com/dotnet/core/install/linux-rhel"
   exit 1
 fi

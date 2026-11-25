@@ -1,11 +1,15 @@
 version: 2
 
 updates:
-  # Keep the .NET 8 Agent/API/Web application on its current major line.
+  # Keep the .NET 10 Agent/API/Web application on its current major line.
   - package-ecosystem: "nuget"
     directories:
       - "/src/GameServerControl.Agent"
       - "/src/GameServerControl.Shared"
+      - "/src/GameServerControl.Runner"
+      - "/src/GameServerControl.Tray"
+      - "/src/GameServerControl.Relay"
+      - "/tests/GameServerControl.Agent.IntegrationTests"
     schedule:
       interval: "weekly"
     groups:
@@ -19,11 +23,11 @@ updates:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
-      # PowerShell 7.4 targets net8.0; 7.5+ requires a newer .NET runtime.
+      # PowerShell 7.6 targets net10.0; 7.7+ requires a newer .NET runtime.
       # Revisit this temporary restriction when upgrading the Agent target framework.
       - dependency-name: "System.Management.Automation"
         versions:
-          - "[7.5.0,)"
+          - "[7.7.0,)"
     open-pull-requests-limit: 5
 
   # Cloudflare Worker tooling. Wrangler stays pinned to a tested major.
