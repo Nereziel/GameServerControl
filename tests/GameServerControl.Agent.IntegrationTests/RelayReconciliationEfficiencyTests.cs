@@ -22,7 +22,7 @@ public sealed class RelayReconciliationEfficiencyTests
             var log = Path.Combine(dir, "calls.log");
             var ruleset = Path.Combine(dir, "ruleset.txt");
 
-            File.WriteAllText(iptables, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'iptables v1.8.9 (nf_tables)'; exit 0; fi\necho check >> '" + log + "'\nexit 0\n");
+            File.WriteAllText(iptables, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'iptables v1.8.9 (nf_tables)'; exit 0; fi\necho \"$*\" >> '" + log + "'\nexit 0\n");
             File.WriteAllText(iptablesSave,
                 "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'iptables-save v1.8.9 (nf_tables)'; exit 0; fi\nprintf '# Generated at %s\\n' \"$(date +%s%N)\"\ncat '" + ruleset + "'\n");
             File.WriteAllText(ruleset,
@@ -62,6 +62,7 @@ public sealed class RelayReconciliationEfficiencyTests
             await relay.EnsureAsync(routes);
             var afterDrift = File.ReadAllLines(log).Length;
             Assert.True(afterDrift > initialChecks);
+            Assert.Contains(File.ReadAllLines(log).Skip(initialChecks), line => line.Contains("-F GSC_RELAY_DNAT"));
 
             await relay.EnsureAsync(routes);
             Assert.Equal(afterDrift, File.ReadAllLines(log).Length);

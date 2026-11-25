@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+const source=fs.readFileSync('src/GameServerControl.Agent/WebUi/core.js','utf8');
+const begin=source.indexOf('async function loadCapabilities(){');
+const end=source.indexOf('\n}',source.indexOf('async function loadProfiles(){'))+2;
+assert.ok(begin>=0&&end>begin);
+const pending=[];
+const ctx={ACTIVE_HOST_ID:'a',HOST_SWITCH_EPOCH:1,HOST_CAPABILITIES:{schemaVersion:0,features:[]},PROFILES:[],GAMES:[],
+  api:path=>new Promise(resolve=>pending.push({path,resolve})),profileToGame:p=>p};
+vm.createContext(ctx);vm.runInContext(source.slice(begin,end),ctx);
+const oldProfiles=ctx.loadProfiles(),oldCaps=ctx.loadCapabilities();
+ctx.ACTIVE_HOST_ID='b';ctx.HOST_SWITCH_EPOCH++;
+const newProfiles=ctx.loadProfiles(),newCaps=ctx.loadCapabilities();
+pending[2].resolve([{key:'b',installable:true}]);
+pending[3].resolve({schemaVersion:1,features:['b']});
+await Promise.all([newProfiles,newCaps]);
+pending[0].resolve([{key:'a',installable:true}]);
+pending[1].resolve({schemaVersion:1,features:['a']});
+await Promise.all([oldProfiles,oldCaps]);
+assert.equal(ctx.PROFILES[0].key,'b');
+assert.equal(ctx.GAMES[0].key,'b');
+assert.equal(ctx.HOST_CAPABILITIES.features[0],'b');
+// A -> B -> A must reject the response from the first visit too.
+const firstVisit=ctx.loadCapabilities();
+ctx.HOST_SWITCH_EPOCH+=2;
+pending[4].resolve({schemaVersion:1,features:['stale']});
+await firstVisit;
+assert.equal(ctx.HOST_CAPABILITIES.features[0],'b');
+console.log('Host switch stale response regression passed.');

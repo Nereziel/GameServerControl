@@ -118,23 +118,4 @@ app.MapDelete("/api/routes/{serverId}", async (string serverId, RelayStateStore 
     finally { mutationGate.Release(); }
 });
 
-app.Lifetime.ApplicationStopping.Register(() =>
-{
-    try
-    {
-        mutationGate.Wait();
-        try
-        {
-            app.Services.GetRequiredService<IptablesRelay>()
-                .RebuildAsync(Array.Empty<RelayRouteDefinition>(), CancellationToken.None)
-                .GetAwaiter().GetResult();
-        }
-        finally { mutationGate.Release(); }
-    }
-    catch (Exception ex)
-    {
-        app.Logger.LogError(ex, "Could not flush public relay rules during shutdown");
-    }
-});
-
 app.Run();

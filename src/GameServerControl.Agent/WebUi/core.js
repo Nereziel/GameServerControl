@@ -107,8 +107,8 @@ async function selectHost(id){
     if(select)select.value=ACTIVE_HOST_ID;
     return;
   }
-  stopStatusStream();
   closeModal();
+  stopStatusStream();
   ACTIVE_HOST_ID=id;
   const epoch=++HOST_SWITCH_EPOCH;
   const current=()=>epoch===HOST_SWITCH_EPOCH;

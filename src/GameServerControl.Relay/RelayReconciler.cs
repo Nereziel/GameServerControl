@@ -13,6 +13,25 @@ public sealed class RelayReconciler : BackgroundService
         _logger = logger;
     }
 
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        // Stop the reconciliation loop before removing the firewall chains.
+        await base.StopAsync(cancellationToken);
+        try
+        {
+            await _store.MutationGate.WaitAsync(cancellationToken);
+            try
+            {
+                await _iptables.RebuildAsync(Array.Empty<GameServerControl.Shared.RelayRouteDefinition>(), cancellationToken);
+            }
+            finally { _store.MutationGate.Release(); }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not flush public relay rules during shutdown");
+        }
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var first = true;
