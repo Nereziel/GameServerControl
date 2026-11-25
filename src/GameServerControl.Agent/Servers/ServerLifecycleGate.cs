@@ -26,14 +26,18 @@ public sealed class ServerLifecycleGate
 
     private State For(string id) => _gates.GetOrAdd(id, _ => new State());
 
-    public async Task<ActionResult> RunExclusiveAsync(
+    public Task<ActionResult> RunExclusiveAsync(
         string serverId, Func<Task<ActionResult>> operation, CancellationToken ct = default)
+        => RunExclusiveAsync(serverId, operation, () => new ActionResult(false,
+            "Another Start, Stop, Restart, Update or Restore operation is already running for this server.",
+            Guid.NewGuid().ToString("n")), ct);
+
+    public async Task<T> RunExclusiveAsync<T>(
+        string serverId, Func<Task<T>> operation, Func<T> busy, CancellationToken ct = default)
     {
         var state = For(serverId);
         if (!await state.Lifecycle.WaitAsync(0, ct))
-            return new ActionResult(false,
-                "Another Start, Stop, Restart, Update or Restore operation is already running for this server.",
-                Guid.NewGuid().ToString("n"));
+            return busy();
 
         lock (state.Sync)
         {

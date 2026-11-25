@@ -7,6 +7,8 @@
     }
   },
   "Agent": {
+    "_PermanentDeleteRootHelp": "Optional absolute dedicated game-server parent folder. Only child server directories may be permanently deleted; leave empty to disable file deletion.",
+    "PermanentDeleteRoot": "",
     "_BindHelp": "The Agent serves both the API and Web UI. Loopback is safest by default; use a Tailscale/private IP only when direct remote access is required.",
     "Bind": "http://127.0.0.1:5099",
 

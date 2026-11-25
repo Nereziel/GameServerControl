@@ -1,5 +1,6 @@
 using GameServerControl.Agent.Hyperv;
 using GameServerControl.Agent.Logs;
+using GameServerControl.Agent.Networking;
 using GameServerControl.Shared;
 
 namespace GameServerControl.Agent.Servers;
@@ -26,6 +27,9 @@ public sealed class ServerDeletionService
     private readonly LocalProcessService _local;
     private readonly LogTailService _tail;
     private readonly MaintenanceScheduler _scheduler;
+    private readonly ServerLifecycleGate _lifecycle;
+    private readonly IWindowsRunnerServiceManager _runners;
+    private readonly PublicRelayManager _relay;
     private readonly IConfiguration _cfg;
     private readonly IHostEnvironment _env;
     private readonly ILogger<ServerDeletionService> _logger;
@@ -37,6 +41,9 @@ public sealed class ServerDeletionService
         LocalProcessService local,
         LogTailService tail,
         MaintenanceScheduler scheduler,
+        ServerLifecycleGate lifecycle,
+        IWindowsRunnerServiceManager runners,
+        PublicRelayManager relay,
         IConfiguration cfg,
         IHostEnvironment env,
         ILogger<ServerDeletionService> logger)
@@ -47,21 +54,27 @@ public sealed class ServerDeletionService
         _local = local;
         _tail = tail;
         _scheduler = scheduler;
+        _lifecycle = lifecycle;
+        _runners = runners;
+        _relay = relay;
         _cfg = cfg;
         _env = env;
         _logger = logger;
     }
 
-    public async Task<DeleteServerResult> DeleteCompletelyAsync(
-        string id,
-        DeleteServerRequest request,
-        CancellationToken ct = default)
+    public Task<DeleteServerResult> DeleteCompletelyAsync(
+        string id, DeleteServerRequest request, CancellationToken ct = default)
+        => _lifecycle.RunExclusiveAsync(id, () => DeleteCoreAsync(id, request, ct),
+            () => Fail("busy", "Another lifecycle operation is running for this server."), ct);
+
+    private async Task<DeleteServerResult> DeleteCoreAsync(
+        string id, DeleteServerRequest request, CancellationToken ct)
     {
         var def = _registry.Get(id);
         if (def is null)
             return Fail("not_found", "Server not found.");
 
-        if (!string.Equals(request.Confirmation?.Trim(), def.Name, StringComparison.Ordinal))
+        if (!string.Equals(request.Confirmation, def.Name, StringComparison.Ordinal))
             return Fail("confirmation_mismatch", $"Type the exact server name '{def.Name}' to confirm deletion.");
 
         if (def.HostingMode != HostingMode.BareMetal)
@@ -70,16 +83,21 @@ public sealed class ServerDeletionService
         if (!TryValidateDeleteRoot(def, out var deleteRoot, out var validationError))
             return Fail("unsafe_path", validationError!);
 
+        if (!Directory.Exists(deleteRoot) || ContainsReparsePoint(deleteRoot))
+            return Fail("unsafe_path", "The server folder must exist and must not contain symbolic links or reparse points.");
+        if (!BackupLocationIsSafe(deleteRoot, out var rootError))
+            return Fail("unsafe_backup_path", rootError!);
+
         // Stop log tail first so it cannot keep the log file open during deletion.
         _tail.Stop(id);
 
         // Stop the game process, but do not stop a VM (BareMetal is enforced above).
-        var stop = await _orchestrator.StopAsync(id, stopVm: false, force: false, ct);
+        var stop = await _orchestrator.StopCoreAsync(id, stopVm: false, force: false, ct);
         if (!stop.Success)
             return Fail("stop_failed", "Server could not be stopped: " + stop.Message);
 
         // Verify independently that the executable process is really gone before deleting files.
-        var (processCheckOk, remainingPid) = await _local.FindProcessAsync(def.GuestExePath, ct);
+        var (processCheckOk, remainingPid) = await _local.FindProcessAsync(def, ct);
         if (!processCheckOk)
             return Fail("stop_unverified", "GameServerControl could not verify that the server process stopped. No files were deleted.");
         if (remainingPid is not null)
@@ -100,36 +118,45 @@ public sealed class ServerDeletionService
             backupCreated = true;
         }
 
+        // Prevent Windows Runner autostart and remove its ACL/service state
+        // before deleting files. Keep the deprovision fence until removal ends.
+        var deprovisioned = false;
         try
         {
-            if (Directory.Exists(deleteRoot))
+            if (OperatingSystem.IsWindows())
+                await _scheduler.ApplyAsync(id, null, ct);
+            if (_runners.Supports(def))
             {
-                if (ContainsReparsePoint(deleteRoot))
-                    return Fail("reparse_point", "The server folder contains a symbolic link/junction/reparse point. Refusing recursive deletion for safety.");
-
-                NormalizeAttributes(deleteRoot);
-                Directory.Delete(deleteRoot, recursive: true);
+                var cleanup = await _runners.DeprovisionAsync(def, ct);
+                if (!cleanup.Ok) return Fail("runner_cleanup_failed", cleanup.Error);
+                deprovisioned = true;
             }
+
+            // A second check closes the window while the backup was made.
+            if (!TryValidateDeleteRoot(def, out var checkedRoot, out var error) ||
+                !PathsEqual(checkedRoot, deleteRoot) || !Directory.Exists(deleteRoot) ||
+                ContainsReparsePoint(deleteRoot))
+                return Fail("unsafe_path", error ?? "Server folder changed during deletion.");
+            ct.ThrowIfCancellationRequested();
+
+            // Once destructive work starts, finish local bookkeeping even if
+            // the HTTP client disconnects. A registry mutation cannot overlap
+            // this operation for the same server through the lifecycle gate.
+            NormalizeAttributes(deleteRoot);
+            Directory.Delete(deleteRoot, recursive: true);
+            if (!_store.Delete(id))
+                return new DeleteServerResult(false, "definition_delete_failed",
+                    "Server files were deleted but the definition could not be removed.", deleteRoot, backupCreated);
+            await _relay.RemoveServerAsync(id, CancellationToken.None);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Permanent deletion failed for {Id} at {Path}", id, deleteRoot);
-            return Fail("delete_failed", "Could not delete the complete server folder. The server remains registered. " + ex.Message);
+            _logger.LogError(ex, "Permanent deletion failed for {Id}", id);
+            return Fail("delete_failed", "Deletion did not complete. Check the Agent log and server folder before retrying.");
         }
-
-        // Files are gone, so now remove GameServerControl's own scheduled maintenance tasks.
-        try { await _scheduler.ApplyAsync(id, null, ct); }
-        catch (Exception ex)
+        finally
         {
-            _logger.LogWarning(ex, "Failed to remove maintenance tasks for {Id}; continuing with definition deletion", id);
-        }
-
-        if (!_store.Delete(id))
-        {
-            _logger.LogError("Server files for {Id} were deleted but the server definition could not be removed", id);
-            return new DeleteServerResult(false, "definition_delete_failed",
-                "Server files were deleted, but its GameServerControl definition could not be removed. Reload the server list and remove the stale definition manually.",
-                deleteRoot, backupCreated);
+            if (deprovisioned) _runners.CompleteDeprovision(id);
         }
 
         return new DeleteServerResult(true, "deleted",
@@ -159,9 +186,36 @@ public sealed class ServerDeletionService
                 return false;
             }
 
+            // Complete deletion is opt-in and limited to a dedicated local root.
+            var allowed = _cfg["Agent:PermanentDeleteRoot"];
+            if (string.IsNullOrWhiteSpace(allowed) || !Path.IsPathFullyQualified(allowed) ||
+                !PathContainment.IsWithinRoot(allowed, deleteRoot))
+            {
+                error = "Permanent deletion requires a dedicated Agent:PermanentDeleteRoot containing this server folder.";
+                return false;
+            }
+            // Reject links in every ancestor, not just the final directory.
+            for (var ancestor = new DirectoryInfo(deleteRoot); ancestor is not null; ancestor = ancestor.Parent)
+            {
+                if (ancestor.Exists && (ancestor.Attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    error = "Server folder has a symbolic-link or reparse-point ancestor.";
+                    return false;
+                }
+            }
+            foreach (var other in _registry.All.Where(x => x.HostingMode == HostingMode.BareMetal && !string.Equals(x.Id, def.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (string.IsNullOrWhiteSpace(other.GuestWorkingDir)) continue;
+                if (IsSameOrChild(other.GuestWorkingDir, deleteRoot) || IsSameOrChild(deleteRoot, other.GuestWorkingDir))
+                {
+                    error = "Server folder overlaps another registered server.";
+                    return false;
+                }
+            }
             // Require the configured executable to live inside the directory being deleted.
             var exe = Path.GetFullPath(def.GuestExePath);
-            if (!IsSameOrChild(exe, deleteRoot) || PathsEqual(exe, deleteRoot))
+            var javaServer = def.GameType == GameType.Minecraft && def.GameProfileKey != "minecraft-bedrock";
+            if (javaServer ? !File.Exists(Path.Combine(deleteRoot, "server.jar")) : (!IsSameOrChild(exe, deleteRoot) || PathsEqual(exe, deleteRoot)))
             {
                 error = "The configured server executable is not inside the server folder. Refusing recursive deletion.";
                 return false;
@@ -171,6 +225,14 @@ public sealed class ServerDeletionService
             {
                 _env.ContentRootPath,
                 AppContext.BaseDirectory,
+                _cfg["Agent:DataDir"],
+                _cfg["Agent:OffsiteBackupRoot"],
+                OperatingSystem.IsLinux() ? "/etc" : null,
+                OperatingSystem.IsLinux() ? "/usr" : null,
+                OperatingSystem.IsLinux() ? "/boot" : null,
+                OperatingSystem.IsLinux() ? "/proc" : null,
+                OperatingSystem.IsLinux() ? "/sys" : null,
+                OperatingSystem.IsLinux() ? "/dev" : null,
                 Environment.GetFolderPath(Environment.SpecialFolder.Windows),
                 Environment.GetFolderPath(Environment.SpecialFolder.System),
                 Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
@@ -231,11 +293,11 @@ public sealed class ServerDeletionService
         while (pending.Count > 0)
         {
             var current = pending.Pop();
-            foreach (var dir in Directory.EnumerateDirectories(current))
+            foreach (var entry in Directory.EnumerateFileSystemEntries(current))
             {
-                var attrs = File.GetAttributes(dir);
+                var attrs = File.GetAttributes(entry);
                 if ((attrs & FileAttributes.ReparsePoint) != 0) return true;
-                pending.Push(dir);
+                if ((attrs & FileAttributes.Directory) != 0) pending.Push(entry);
             }
         }
         return false;
