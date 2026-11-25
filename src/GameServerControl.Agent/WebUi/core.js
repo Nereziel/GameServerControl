@@ -607,14 +607,17 @@ function renderServers(){
 async function action(id,a){toast(`${id}: ${a}…`);try{const r=await api(`/api/servers/${encodeURIComponent(id)}/${a}`,{method:'POST'});toast(r.success?r.message:('Failed: '+r.message),r.success?'ok':'err');setTimeout(loadServers,800)}catch(e){toast(`${a} failed: ${e.message}`,'err')}}
 
 async function checkForUpdate(force=false){
-  if(!CFG.token)return null;
+  if(!CFG.token||ACTIVE_HOST_ID==='all')return null;
+  const epoch=HOST_SWITCH_EPOCH;
   try{
-    UPDATE_STATUS=await api(force?'/api/version/check':'/api/version',force?{method:'POST'}:{});
+    const result=await api(force?'/api/version/check':'/api/version',force?{method:'POST'}:{});
+    if(epoch!==HOST_SWITCH_EPOCH)return null;
+    UPDATE_STATUS=result;
     const btn=$('#updateBtn');
     if(btn){btn.classList.toggle('hidden',!UPDATE_STATUS?.updateAvailable);btn.textContent=UPDATE_STATUS?.updateAvailable?`Update · ${UPDATE_STATUS.latestVersion}`:'Update'}
     if(CURRENT_VIEW==='system')renderSystemView();
     return UPDATE_STATUS;
-  }catch{return UPDATE_STATUS}
+  }catch{return epoch===HOST_SWITCH_EPOCH?UPDATE_STATUS:null}
 }
 
 async function openUpdate(){

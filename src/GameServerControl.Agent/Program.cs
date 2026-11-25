@@ -472,7 +472,7 @@ api.MapGet("/servers/{id}/update/console", (string id, long? since, ServerRegist
 api.MapPut("/servers/{id}", async (string id, ServerDef def, ServerStore store, ServerLifecycleGate lifecycle, CancellationToken ct) =>
     await lifecycle.RunExclusiveAsync<IResult>(id, () =>
     {
-        try { return Task.FromResult<IResult>(Results.Ok(store.Update(id, def))); }
+        try { return Task.FromResult<IResult>(Results.Ok(store.Update(id, def, preserveNotifications: true))); }
         catch (ArgumentException ex) { return Task.FromResult<IResult>(Results.BadRequest(new { error = ex.Message })); }
         catch (KeyNotFoundException) { return Task.FromResult<IResult>(Results.NotFound()); }
     }, () => Results.Conflict(new { error = "Another lifecycle operation is running." }), ct));

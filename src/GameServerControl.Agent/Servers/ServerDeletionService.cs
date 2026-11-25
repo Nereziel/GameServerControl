@@ -24,6 +24,7 @@ public sealed class ServerDeletionService
     private readonly ServerRegistry _registry;
     private readonly ServerStore _store;
     private readonly ServerOrchestrator _orchestrator;
+    private readonly BackupService _backups;
     private readonly LocalProcessService _local;
     private readonly LogTailService _tail;
     private readonly MaintenanceScheduler _scheduler;
@@ -38,6 +39,7 @@ public sealed class ServerDeletionService
         ServerRegistry registry,
         ServerStore store,
         ServerOrchestrator orchestrator,
+        BackupService backups,
         LocalProcessService local,
         LogTailService tail,
         MaintenanceScheduler scheduler,
@@ -51,6 +53,7 @@ public sealed class ServerDeletionService
         _registry = registry;
         _store = store;
         _orchestrator = orchestrator;
+        _backups = backups;
         _local = local;
         _tail = tail;
         _scheduler = scheduler;
@@ -112,7 +115,7 @@ public sealed class ServerDeletionService
             if (!BackupLocationIsSafe(deleteRoot, out var backupError))
                 return Fail("unsafe_backup_path", backupError!);
 
-            var backup = await _orchestrator.BackupAsync(id, ct);
+            var backup = await _backups.CreatePreUpdateAsync(id, ct);
             if (!backup.Success)
                 return Fail("backup_failed", "Final backup failed, so deletion was cancelled: " + backup.Message);
             backupCreated = true;
@@ -270,7 +273,7 @@ public sealed class ServerDeletionService
                 ? @"C:\GameServerControl\Backups"
                 : "/var/lib/gameservercontrol/backups");
             var fullBackupRoot = TrimEndingSeparator(Path.GetFullPath(backupRoot));
-            if (IsSameOrChild(fullBackupRoot, deleteRoot))
+            if (IsSameOrChild(fullBackupRoot, deleteRoot) || IsSameOrChild(deleteRoot, fullBackupRoot))
             {
                 error = "BackupRoot is inside the server folder. A final backup would be deleted with the server; move BackupRoot outside the server folder first.";
                 return false;

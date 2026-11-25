@@ -54,7 +54,7 @@ public sealed class ServerStore
         return normalized;
     }
 
-    public ServerDef Update(string id, ServerDef def)
+    public ServerDef Update(string id, ServerDef def, bool preserveNotifications = false)
     {
         // This is the general server-definition editor. Dedicated settings are
         // intentionally changed through narrow endpoints and must not be reset
@@ -70,9 +70,11 @@ public sealed class ServerStore
                 Id = id,
                 BackupRetention = current.BackupRetention,
                 AutoUpdateOnStart = current.AutoUpdateOnStart,
-                AutoUpdateOnRestart = current.AutoUpdateOnRestart
+                AutoUpdateOnRestart = current.AutoUpdateOnRestart,
+                DiscordWebhookUrl = preserveNotifications ? current.DiscordWebhookUrl : def.DiscordWebhookUrl,
+                DiscordAlertsOnly = preserveNotifications ? current.DiscordAlertsOnly : def.DiscordAlertsOnly
             });
-            Validate(normalized);
+            Validate(preserveNotifications ? normalized with { DiscordWebhookUrl = null } : normalized);
             ValidatePortConflicts(normalized, list, id);
             list[idx] = normalized;
             SaveAll(list);

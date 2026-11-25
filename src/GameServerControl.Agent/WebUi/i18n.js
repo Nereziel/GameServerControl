@@ -2,6 +2,8 @@
 (() => {
   'use strict';
   const cs = Object.freeze({
+  "Manage Discord notifications in server settings.": "Oznámení Discord spravujte v nastavení serveru.",
+  "Complete file deletion is disabled for this server. It requires BareMetal hosting and an explicitly configured Agent deletion root.": "Úplné odstranění souborů je pro tento server zakázáno. Vyžaduje místní hosting BareMetal a výslovně nastavený kořen pro mazání na Agentovi.",
   "Registering": "Registrace",
   "Interrupted by Agent restart": "Přerušeno restartem Agenta",
   "Unavailable": "Nedostupné",
