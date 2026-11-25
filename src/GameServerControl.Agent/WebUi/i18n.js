@@ -573,8 +573,21 @@
   "SERVERS / DIAGNOSTICS": "SERVERY / DIAGNOSTIKA"
 });
   const key = 'gsc.ui.language.v1';
-  let locale = 'en';
-  try { if (localStorage.getItem(key) === 'cs') locale = 'cs'; } catch {}
+  function detectLocale() {
+    const browser = globalThis.navigator;
+    const preferences = [...(browser?.languages || []), browser?.language];
+    for (const preference of preferences) {
+      if (typeof preference !== 'string') continue;
+      const language = preference.toLowerCase().split('-')[0];
+      if (language === 'cs' || language === 'en') return language;
+    }
+    return 'en';
+  }
+  let locale = detectLocale();
+  try {
+    const saved = localStorage.getItem(key);
+    if (saved === 'cs' || saved === 'en') locale = saved;
+  } catch {}
   const attrs = ['title','placeholder','aria-label'];
   const selector = '[data-gsc-i18n],[data-gsc-i18n-title],[data-gsc-i18n-placeholder],[data-gsc-i18n-aria-label]';
   const known = value => Object.hasOwn(cs,value);
@@ -608,17 +621,17 @@
     else el.removeAttribute('data-gsc-i18n-'+attr);
     if (el.getAttribute(attr) !== t(source)) el.setAttribute(attr,t(source));
   }
-  function setLocale(value) {
+  function setLocale(value, persist = true) {
     locale = value === 'cs' ? 'cs' : 'en';
     document.documentElement.lang = locale;
     document.title = t('GameServerControl · Server operations');
     document.querySelectorAll('[data-gsc-locale]').forEach(select => { if (select.value !== locale) select.value = locale; });
     scan(document);
-    try { localStorage.setItem(key,locale); } catch {}
+    if (persist) try { localStorage.setItem(key,locale); } catch {}
   }
   globalThis.GSC_I18N = Object.freeze({ t, set, attribute, setLocale, get locale(){return locale;} });
   function init() {
-    setLocale(locale);
+    setLocale(locale,false);
     document.addEventListener('change',event => {
       if (event.target?.matches('[data-gsc-locale]')) setLocale(event.target.value);
     });

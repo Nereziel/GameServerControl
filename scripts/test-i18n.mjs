@@ -20,7 +20,7 @@ class Element {
   matches(s){return s.split(',').some(x=>this.attrs.has(x.slice(1,-1)))}
   querySelectorAll(s){return this.children.flatMap(x=>[...(x.matches(s)?[x]:[]),...x.querySelectorAll(s)])}
 }
-function fixture(initial) {
+function fixture(initial, languages=[], language=undefined, blockedStorage=false) {
   const login=new Element('Sign in',{'data-gsc-i18n':'Sign in'});
   const placeholder=new Element('',{'placeholder':'Search servers or games…','data-gsc-i18n-placeholder':'Search servers or games…'},'my server name');
   const username=new Element('Start');
@@ -33,7 +33,9 @@ function fixture(initial) {
   const doc={readyState:'complete',nodeType:9,body,documentElement:{},title:'',
     querySelectorAll:s=>body.querySelectorAll(s),addEventListener:(name,fn)=>{if(name==='change')change=fn}};
   const storage=new Map(initial?[['gsc.ui.language.v1',initial]]:[]);
-  const ctx={document:doc,localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
+  const ctx={document:doc,navigator:{languages,language},localStorage:{
+    getItem:k=>{if(blockedStorage)throw new Error('Storage disabled');return storage.get(k)},
+    setItem:(k,v)=>{if(blockedStorage)throw new Error('Storage disabled');storage.set(k,v)}},
     MutationObserver:class{constructor(cb){observe=cb}observe(){}}};
   vm.createContext(ctx);vm.runInContext(source,ctx);
   return {api:ctx.GSC_I18N,doc,login,placeholder,username,reused,selected,en,sidebar,storage,change,observe};
@@ -41,6 +43,18 @@ function fixture(initial) {
 const f=fixture();
 assert.equal(f.doc.documentElement.lang,'en');
 assert.equal(f.login.textContent,'Sign in');
+assert.equal(f.storage.size,0,'automatic default must not become a manual preference');
+assert.equal(fixture(undefined,['cs-CZ','en-US']).login.textContent,'Přihlásit se');
+assert.equal(fixture(undefined,['CS']).doc.documentElement.lang,'cs');
+assert.equal(fixture(undefined,['en-GB','cs-CZ']).doc.documentElement.lang,'en');
+assert.equal(fixture(undefined,['de-DE','cs-CZ']).doc.documentElement.lang,'cs');
+assert.equal(fixture(undefined,['de-DE','fr-FR']).doc.documentElement.lang,'en');
+assert.equal(fixture(undefined,[],'cs-CZ').doc.documentElement.lang,'cs');
+assert.equal(fixture('en',['cs-CZ']).doc.documentElement.lang,'en');
+assert.equal(fixture('cs',['en-US']).doc.documentElement.lang,'cs');
+assert.equal(fixture('invalid',['cs-CZ']).doc.documentElement.lang,'cs');
+assert.equal(fixture(undefined,['cs-CZ'],undefined,true).doc.documentElement.lang,'cs');
+assert.equal(fixture(undefined,['cs-CZ']).storage.size,0);
 f.en.value='cs';f.change({target:f.en});
 assert.equal(f.doc.documentElement.lang,'cs');
 assert.equal(f.login.textContent,'Přihlásit se');
