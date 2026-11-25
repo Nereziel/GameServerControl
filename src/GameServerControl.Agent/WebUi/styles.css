@@ -579,3 +579,6 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
   .sw-page-intro h2{font-size:15px}
   .sw-update-terminal{min-height:180px;max-height:42vh}
 }
+
+/* Shared browser language preference; no changes to game or Agent configuration. */
+.gsc-locale-control{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px;font-weight:650;margin:0 0 16px}.gsc-locale-control select{width:auto;min-width:65px;padding:5px 8px;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:7px}.login-panel>.gsc-locale-control{align-self:flex-end;margin-bottom:22px}.app-sidebar>.gsc-locale-control{margin:8px 6px 12px}.gsc-locale-control select:focus-visible{outline-offset:2px}

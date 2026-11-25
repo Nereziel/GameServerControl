@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0b111b" />
 <meta name="color-scheme" content="dark" />
-<title>GameServerControl · Server operations</title>
+<title data-gsc-i18n="GameServerControl · Server operations">GameServerControl · Server operations</title>
 <link rel="stylesheet" href="/webui/styles.css?v=__GSC_ASSET_VERSION__" />
 </head>
 <body>
@@ -14,122 +14,123 @@
     <section class="login-intro" aria-label="GameServerControl">
       <div class="login-brand"><span class="brand-mark" aria-hidden="true">G</span><span>GameServer<span class="brand-accent">Control</span></span></div>
       <div class="login-intro-copy">
-        <div class="login-eyebrow">SELF-HOSTED / SERVER OPERATIONS</div>
-        <h2>Your servers.<br />One control panel.</h2>
-        <p>Manage game servers, installations, backups and live status from a single workspace.</p>
+        <div class="login-eyebrow" data-gsc-i18n="SELF-HOSTED / SERVER OPERATIONS">SELF-HOSTED / SERVER OPERATIONS</div>
+        <h2><span data-gsc-i18n="Your servers.">Your servers.</span><br /><span data-gsc-i18n="One control panel.">One control panel.</span></h2>
+        <p data-gsc-i18n="Manage game servers, installations, backups and live status from a single workspace.">Manage game servers, installations, backups and live status from a single workspace.</p>
       </div>
       <div class="login-system-mark" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
-      <div class="login-intro-footer">Private by design. Hosted on your infrastructure.</div>
+      <div class="login-intro-footer" data-gsc-i18n="Private by design. Hosted on your infrastructure.">Private by design. Hosted on your infrastructure.</div>
     </section>
     <section class="login-panel">
-      <div class="login-eyebrow">AGENT ACCESS</div>
-      <h1 id="loginHeading">Sign in</h1>
-      <p id="loginDescription" class="login-description">Use your Agent API token to open the dashboard.</p>
-      <div id="loginLoading" class="login-loading" role="status"><span class="spinner" aria-hidden="true"></span> Checking your session…</div>
+      <div class="login-eyebrow" data-gsc-i18n="AGENT ACCESS">AGENT ACCESS</div>
+      <h1 id="loginHeading" data-gsc-i18n="Sign in">Sign in</h1>
+      <p id="loginDescription" class="login-description" data-gsc-i18n="Use your Agent API token to open the dashboard.">Use your Agent API token to open the dashboard.</p>
+      <div id="loginLoading" class="login-loading" role="status"><span class="spinner" aria-hidden="true"></span> <span data-gsc-i18n="Checking your session…">Checking your session…</span></div>
       <form id="loginForm" class="hidden" method="post" novalidate aria-busy="false">
-        <div class="login-target"><span class="login-target-icon" aria-hidden="true">▣</span><div><span>Connecting to</span><strong id="loginTarget">This Agent</strong></div></div>
+        <div class="login-target"><span class="login-target-icon" aria-hidden="true">▣</span><div><span data-gsc-i18n="Connecting to">Connecting to</span><strong id="loginTarget" data-gsc-i18n="This Agent">This Agent</strong></div></div>
         <div class="field login-token-field">
-          <label for="loginToken">API token</label>
-          <input id="loginToken" type="password" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Enter your API token" aria-describedby="loginTokenHelp loginError" />
-          <div id="loginTokenHelp" class="help">Use an Admin or ReadOnly token issued by the Agent.</div>
+          <label for="loginToken" data-gsc-i18n="API token">API token</label>
+          <input id="loginToken" type="password" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Enter your API token" aria-describedby="loginTokenHelp loginError" data-gsc-i18n-placeholder="Enter your API token" />
+          <div id="loginTokenHelp" class="help" data-gsc-i18n="Use an Admin or ReadOnly token issued by the Agent.">Use an Admin or ReadOnly token issued by the Agent.</div>
         </div>
         <details id="loginAdvanced" class="login-advanced">
-          <summary>Connect to another Agent</summary>
-          <div class="field"><label for="loginUrl">Agent URL</label><input id="loginUrl" type="url" autocomplete="off" spellcheck="false" placeholder="https://your-agent-host" /></div>
-          <p id="loginTransportWarning" class="login-warning hidden">This address uses HTTP. Use HTTPS or a trusted private network; the token is sent to the selected Agent.</p>
+          <summary data-gsc-i18n="Connect to another Agent">Connect to another Agent</summary>
+          <div class="field"><label for="loginUrl" data-gsc-i18n="Agent URL">Agent URL</label><input id="loginUrl" type="url" autocomplete="off" spellcheck="false" placeholder="https://your-agent-host" /></div>
+          <p id="loginTransportWarning" class="login-warning hidden" data-gsc-i18n="This address uses HTTP. Use HTTPS or a trusted private network; the token is sent to the selected Agent.">This address uses HTTP. Use HTTPS or a trusted private network; the token is sent to the selected Agent.</p>
         </details>
-        <label id="rememberBrowserField" class="login-remember hidden" for="loginRememberBrowser"><input id="loginRememberBrowser" type="checkbox" /><span><strong>Remember this browser</strong><small>On this Windows PC for 30 days. Use only on a private device.</small></span></label>
+        <label id="rememberBrowserField" class="login-remember hidden" for="loginRememberBrowser"><input id="loginRememberBrowser" type="checkbox" /><span><strong data-gsc-i18n="Remember this browser">Remember this browser</strong><small data-gsc-i18n="On this Windows PC for 30 days. Use only on a private device.">On this Windows PC for 30 days. Use only on a private device.</small></span></label>
         <div id="loginError" class="login-error hidden" role="alert"></div>
-        <button id="loginConnectBtn" class="btn primary login-submit" type="submit">Sign in</button>
+        <button id="loginConnectBtn" class="btn primary login-submit" type="submit" data-gsc-i18n="Sign in">Sign in</button>
       </form>
       <div id="cloudLoginState" class="hidden">
-        <p id="cloudLoginError" class="login-error" role="alert">Cloudflare Access session could not be restored. Check your connection and try again.</p>
-        <button id="cloudRetryBtn" class="btn primary login-submit" type="button">Try again</button>
+        <p id="cloudLoginError" class="login-error" role="alert" data-gsc-i18n="Cloudflare Access session could not be restored. Check your connection and try again.">Cloudflare Access session could not be restored. Check your connection and try again.</p>
+        <button id="cloudRetryBtn" class="btn primary login-submit" type="button" data-gsc-i18n="Try again">Try again</button>
       </div>
-      <div id="loginFootnote" class="login-footnote">The API token stays in this browser session.</div>
+      <div id="loginFootnote" class="login-footnote" data-gsc-i18n="The API token stays in this browser session.">The API token stays in this browser session.</div>
     </section>
   </div>
 </main>
 
 <div id="app" class="app-frame hidden">
-  <aside id="appSidebar" class="app-sidebar" aria-label="Primary navigation">
+  <aside id="appSidebar" class="app-sidebar" aria-label="Primary navigation" data-gsc-i18n-aria-label="Primary navigation">
     <div class="sidebar-brand">
       <span class="brand-mark" aria-hidden="true">G</span>
-      <div><div class="brand">GameServer<span>Control</span></div><div class="brand-caption">SERVER OPERATIONS</div></div>
+      <div><div class="brand">GameServer<span>Control</span></div><div class="brand-caption" data-gsc-i18n="SERVER OPERATIONS">SERVER OPERATIONS</div></div>
     </div>
-    <div class="sidebar-section-label">COMPUTERS</div>
+    <div class="sidebar-section-label" data-gsc-i18n="COMPUTERS">COMPUTERS</div>
     <div class="sidebar-host-picker">
-      <label for="hostSwitch">ACTIVE HOST</label>
-      <select id="hostSwitch" aria-label="Select a physical computer"><option value="all">All computers</option><option value="local">This computer</option></select>
+      <label for="hostSwitch" data-gsc-i18n="ACTIVE HOST">ACTIVE HOST</label>
+      <select id="hostSwitch" aria-label="Select a physical computer" data-gsc-i18n-aria-label="Select a physical computer"><option value="all" data-gsc-i18n="All computers">All computers</option><option value="local" data-gsc-i18n="This computer">This computer</option></select>
     </div>
-    <div class="sidebar-section-label">WORKSPACE</div>
-    <nav class="tabs sidebar-nav" aria-label="Main navigation">
-      <button id="tabServers" class="tab active" type="button"><span class="nav-icon" aria-hidden="true">▦</span><span>Servers</span></button>
-      <button id="tabInstalls" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⇣</span><span>Installations</span><span id="installBadge" class="badge hidden">0</span></button>
+    <div class="sidebar-section-label" data-gsc-i18n="WORKSPACE">WORKSPACE</div>
+    <nav class="tabs sidebar-nav" aria-label="Main navigation" data-gsc-i18n-aria-label="Main navigation">
+      <button id="tabServers" class="tab active" type="button"><span class="nav-icon" aria-hidden="true">▦</span><span data-gsc-i18n="Servers">Servers</span></button>
+      <button id="tabInstalls" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⇣</span><span data-gsc-i18n="Installations">Installations</span><span id="installBadge" class="badge hidden">0</span></button>
     </nav>
-    <div class="sidebar-section-label">SYSTEM</div>
-    <nav class="tabs sidebar-nav" aria-label="System navigation">
-      <button id="tabSystem" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></button>
+    <div class="sidebar-section-label" data-gsc-i18n="SYSTEM">SYSTEM</div>
+    <nav class="tabs sidebar-nav" aria-label="System navigation" data-gsc-i18n-aria-label="System navigation">
+      <button id="tabSystem" class="tab" type="button"><span class="nav-icon" aria-hidden="true">⚙</span><span data-gsc-i18n="Settings">Settings</span></button>
     </nav>
     <div class="sidebar-spacer"></div>
+    <label class="gsc-locale-control"><span data-gsc-i18n="Language">Language</span><select id="sidebarLanguage" data-gsc-locale aria-label="Select language" data-gsc-i18n-aria-label="Select language"><option value="en">EN</option><option value="cs">CZ</option></select></label>
     <div class="sidebar-connection">
-      <div class="connection-heading"><span class="connection-dot" aria-hidden="true"></span>AGENT CONNECTED</div>
+      <div class="connection-heading"><span class="connection-dot" aria-hidden="true"></span><span data-gsc-i18n="AGENT CONNECTED">AGENT CONNECTED</span></div>
       <div id="agentLabel" class="connection-address"></div>
     </div>
-    <button id="logoutBtn" type="button" class="sidebar-signout"><span aria-hidden="true">↪</span> Sign out</button>
+    <button id="logoutBtn" type="button" class="sidebar-signout"><span aria-hidden="true">↪</span> <span data-gsc-i18n="Sign out">Sign out</span></button>
   </aside>
   <div id="navScrim" class="nav-scrim hidden"></div>
   <div class="app-main">
     <header class="top">
       <div class="top-leading">
-        <button id="mobileNavToggle" class="btn menu-toggle" type="button" aria-label="Open navigation" aria-controls="appSidebar" aria-expanded="false">☰</button>
-        <div class="page-heading"><div id="pageEyebrow" class="eyebrow">CONTROL PANEL / OVERVIEW</div><h1 id="pageHeading">Servers</h1></div>
+        <button id="mobileNavToggle" class="btn menu-toggle" type="button" aria-label="Open navigation" aria-controls="appSidebar" aria-expanded="false" data-gsc-i18n-aria-label="Open navigation">☰</button>
+        <div class="page-heading"><div id="pageEyebrow" class="eyebrow" data-gsc-i18n="CONTROL PANEL / OVERVIEW">CONTROL PANEL / OVERVIEW</div><h1 id="pageHeading" data-gsc-i18n="Servers">Servers</h1></div>
       </div>
       <div class="top-actions">
-        <button id="refreshBtn" class="btn btn-icon" type="button" title="Refresh data" aria-label="Refresh data">↻</button>
-        <button id="createServerBtn" class="btn primary" type="button"><span aria-hidden="true">+</span> Add server</button>
+        <button id="refreshBtn" class="btn btn-icon" type="button" title="Refresh data" aria-label="Refresh data" data-gsc-i18n-aria-label="Refresh data" data-gsc-i18n-title="Refresh data">↻</button>
+        <button id="createServerBtn" class="btn primary" type="button"><span aria-hidden="true">+</span> <span data-gsc-i18n="Add server">Add server</span></button>
       </div>
     </header>
     <main class="shell" id="mainContent">
-      <div id="noticeBar" class="noticebar hidden" role="status" aria-live="polite"><strong id="noticeTitle">Status</strong><span id="noticeText" class="grow"></span><button id="noticeCloseBtn" class="btn notice-close" type="button" aria-label="Dismiss message">×</button></div>
-      <section id="serversView" aria-label="Server dashboard">
+      <div id="noticeBar" class="noticebar hidden" role="status" aria-live="polite"><strong id="noticeTitle" data-gsc-i18n="Status">Status</strong><span id="noticeText" class="grow"></span><button id="noticeCloseBtn" class="btn notice-close" type="button" aria-label="Dismiss message" data-gsc-i18n-aria-label="Dismiss message">×</button></div>
+      <section id="serversView" aria-label="Server dashboard" data-gsc-i18n-aria-label="Server dashboard">
         <div id="serverListTools" class="server-list-tools">
-          <div class="server-search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input id="serverSearchInput" type="search" placeholder="Search servers or games…" aria-label="Search servers" autocomplete="off" /></div>
-          <div class="server-filters" role="group" aria-label="Filter servers by status">
-            <button class="server-filter active" type="button" data-server-filter="all" aria-pressed="true">All</button>
-            <button class="server-filter" type="button" data-server-filter="running" aria-pressed="false">Running</button>
-            <button class="server-filter" type="button" data-server-filter="stopped" aria-pressed="false">Stopped</button>
+          <div class="server-search-wrap"><span class="search-icon" aria-hidden="true">⌕</span><input id="serverSearchInput" type="search" placeholder="Search servers or games…" aria-label="Search servers" autocomplete="off" data-gsc-i18n-placeholder="Search servers or games…" data-gsc-i18n-aria-label="Search servers" /></div>
+          <div class="server-filters" role="group" aria-label="Filter servers by status" data-gsc-i18n-aria-label="Filter servers by status">
+            <button class="server-filter active" type="button" data-server-filter="all" aria-pressed="true" data-gsc-i18n="All">All</button>
+            <button class="server-filter" type="button" data-server-filter="running" aria-pressed="false" data-gsc-i18n="Running">Running</button>
+            <button class="server-filter" type="button" data-server-filter="stopped" aria-pressed="false" data-gsc-i18n="Stopped">Stopped</button>
           </div>
         </div>
         <div id="servers"></div>
       </section>
-      <section id="installsView" class="hidden" aria-label="Installations">
-        <div class="summarybar install-actions"><div><b>Installation activity</b><div class="muted tiny">Jobs continue on the Agent even when you close this page.</div></div><div class="spacer"></div><button id="discoverBtn" class="btn" type="button">Discover installs</button><button id="addExistingBtn" class="btn" type="button">Add existing</button><button id="clearFinishedJobsBtn" class="btn" type="button">Clear finished</button></div>
+      <section id="installsView" class="hidden" aria-label="Installations" data-gsc-i18n-aria-label="Installations">
+        <div class="summarybar install-actions"><div><b data-gsc-i18n="Installation activity">Installation activity</b><div class="muted tiny" data-gsc-i18n="Jobs continue on the Agent even when you close this page.">Jobs continue on the Agent even when you close this page.</div></div><div class="spacer"></div><button id="discoverBtn" class="btn" type="button" data-gsc-i18n="Discover installs">Discover installs</button><button id="addExistingBtn" class="btn" type="button" data-gsc-i18n="Add existing">Add existing</button><button id="clearFinishedJobsBtn" class="btn" type="button" data-gsc-i18n="Clear finished">Clear finished</button></div>
         <div id="jobs"></div>
       </section>
-      <section id="systemView" class="hidden" aria-label="System administration">
-        <div class="dashboard-section-head"><div><h2>Settings</h2><p>Manage connected computers, Agent access, updates and the public Relay. Individual game settings remain under each server.</p></div></div>
+      <section id="systemView" class="hidden" aria-label="System administration" data-gsc-i18n-aria-label="System administration">
+        <div class="dashboard-section-head"><div><h2 data-gsc-i18n="Settings">Settings</h2><p data-gsc-i18n="Manage connected computers, Agent access, updates and the public Relay. Individual game settings remain under each server.">Manage connected computers, Agent access, updates and the public Relay. Individual game settings remain under each server.</p></div></div>
         <div class="system-grid">
           <article class="system-card">
             <div class="system-card-icon" aria-hidden="true">▣</div>
-            <h2>Connected computers</h2>
-            <p>Register or remove Agent hosts, then select a computer in the sidebar to manage its game servers.</p>
-            <div id="systemHostSummary" class="system-card-info">Loading computers…</div>
-            <button id="manageHostsBtn" class="btn" type="button">Manage computers</button>
+            <h2 data-gsc-i18n="Connected computers">Connected computers</h2>
+            <p data-gsc-i18n="Register or remove Agent hosts, then select a computer in the sidebar to manage its game servers.">Register or remove Agent hosts, then select a computer in the sidebar to manage its game servers.</p>
+            <div id="systemHostSummary" class="system-card-info" data-gsc-i18n="Loading computers…">Loading computers…</div>
+            <button id="manageHostsBtn" class="btn" type="button" data-gsc-i18n="Manage computers">Manage computers</button>
           </article>
           <article class="system-card">
             <div class="system-card-icon" aria-hidden="true">◇</div>
-            <h2>API access</h2>
-            <p>Create and revoke access tokens for the selected Agent. Game/RCON passwords remain in the server's Settings.</p>
-            <div class="system-card-info">Admin and ReadOnly roles are enforced by the Agent.</div>
-            <button id="tokensBtn" class="btn" type="button">Manage API tokens</button>
+            <h2 data-gsc-i18n="API access">API access</h2>
+            <p data-gsc-i18n="Create and revoke access tokens for the selected Agent. Game/RCON passwords remain in the server&#39;s Settings.">Create and revoke access tokens for the selected Agent. Game/RCON passwords remain in the server's Settings.</p>
+            <div class="system-card-info" data-gsc-i18n="Admin and ReadOnly roles are enforced by the Agent.">Admin and ReadOnly roles are enforced by the Agent.</div>
+            <button id="tokensBtn" class="btn" type="button" data-gsc-i18n="Manage API tokens">Manage API tokens</button>
           </article>
           <article class="system-card">
             <div class="system-card-icon" aria-hidden="true">↻</div>
-            <h2>GameServerControl updates</h2>
-            <p>Check the Agent software version and review updates without opening a game's settings.</p>
-            <div id="systemVersionSummary" class="system-card-info">Version information not loaded yet.</div>
-            <div class="system-card-actions"><button id="checkUpdateBtn" class="btn" type="button">Check for updates</button><button id="updateBtn" class="btn primary hidden" type="button">Update available</button></div>
+            <h2 data-gsc-i18n="GameServerControl updates">GameServerControl updates</h2>
+            <p data-gsc-i18n="Check the Agent software version and review updates without opening a game&#39;s settings.">Check the Agent software version and review updates without opening a game's settings.</p>
+            <div id="systemVersionSummary" class="system-card-info" data-gsc-i18n="Version information not loaded yet.">Version information not loaded yet.</div>
+            <div class="system-card-actions"><button id="checkUpdateBtn" class="btn" type="button" data-gsc-i18n="Check for updates">Check for updates</button><button id="updateBtn" class="btn primary hidden" type="button" data-gsc-i18n="Update available">Update available</button></div>
           </article>
         </div>
         <div id="settingsRoot" class="system-relay-settings"></div>
@@ -140,7 +141,7 @@
 
 <div id="overlay" class="overlay hidden">
   <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-    <div class="modalhead"><h2 id="modalTitle">Dialog</h2><div class="spacer"></div><button id="modalCloseBtn" class="btn" type="button">Close</button></div>
+    <div class="modalhead"><h2 id="modalTitle" data-gsc-i18n="Dialog">Dialog</h2><div class="spacer"></div><button id="modalCloseBtn" class="btn" type="button" data-gsc-i18n="Close">Close</button></div>
     <div id="modalBody" class="modalbody"></div>
     <div id="modalFoot" class="modalfoot"></div>
   </div>
@@ -148,6 +149,7 @@
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <!-- External scripts only; same-origin assets are content-fingerprinted by the Agent. -->
+<script src="/webui/i18n.js?v=__GSC_ASSET_VERSION__"></script>
 <script src="/webui/core.js?v=__GSC_ASSET_VERSION__"></script>
 <script src="/webui/server-admin.js?v=__GSC_ASSET_VERSION__"></script>
 <script src="/webui/jobs-mods.js?v=__GSC_ASSET_VERSION__"></script>
