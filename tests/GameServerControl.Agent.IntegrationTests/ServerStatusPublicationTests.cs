@@ -190,7 +190,7 @@ public sealed class ServerStatusPublicationTests
     private sealed class Fixture : IDisposable
     {
         public AgentTestFactory Base { get; } = new();
-        private readonly WebApplicationFactory<global::Program> _factory;
+        private readonly WebApplicationFactory<global::GameServerControl.Agent.AgentEntryPoint> _factory;
         private readonly HttpClient _client;
 
         public Fixture()

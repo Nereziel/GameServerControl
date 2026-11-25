@@ -77,10 +77,10 @@ jobs:
           node scripts/version.mjs check
           node scripts/version.mjs validate-tag "$RELEASE_TAG"
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Validate PowerShell installers
         shell: pwsh
@@ -177,10 +177,10 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.ref }}
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Restore
         run: dotnet restore
@@ -256,10 +256,10 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.ref }}
 
-      - name: Setup .NET 8
+      - name: Setup .NET 10
         uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
 
       - name: Validate Linux installers
         run: |
@@ -387,7 +387,7 @@ jobs:
             SHA256SUMS
           body: |
             GameServerControl uses a privileged Windows Agent for host control and per-server low-privilege Runner services for Windows BareMetal game processes. The optional Linux Relay exposes game ports from a public VPS through Tailscale to the game host. Optional Cloudflare remote management exposes the same Web UI through Cloudflare Access and Tunnel without opening the Agent port to the Internet.
-            Releases are self-contained; no preinstalled .NET runtime is required on target hosts.
+            Releases bundle .NET 10 LTS; no preinstalled .NET runtime is required on supported target hosts.
 
             Install commands:
 
@@ -396,11 +396,13 @@ jobs:
                 # verify the installer SHA-256, then execute the verified local file:
                 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\GameServerControl-Install-Windows.ps1
 
-                # Linux Agent
-                curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/linux/install-from-release.sh | sudo bash
-
-                # Public Linux VPS Relay
-                curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/deploy/relay/install-from-release.sh | sudo bash
+                # Linux Agent / Public Linux VPS Relay
+                # Download the matching GameServerControl-Install-Linux.sh or
+                # GameServerControl-Install-Relay.sh and SHA256SUMS from this release.
+                # Verify the installer before running it; pin GSC_VERSION to the release tag.
+                # See the README installation commands for a complete verified download.
+                sudo env GSC_VERSION=${{ needs.prepare.outputs.tag }} bash ./GameServerControl-Install-Linux.sh
+                sudo env GSC_VERSION=${{ needs.prepare.outputs.tag }} bash ./GameServerControl-Install-Relay.sh
 
             The Cloudflare Tunnel Windows bootstrap is included as GameServerControl-Install-Cloudflare-Tunnel-Windows.ps1. It requires a remotely-managed Cloudflare Tunnel token and keeps the Agent origin on loopback.
 

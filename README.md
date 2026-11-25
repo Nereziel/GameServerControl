@@ -40,15 +40,16 @@ The built-in web dashboard is served by the Agent itself. For remote/public acce
 - Windows Server / Windows 10/11: full Agent feature set, including Hyper-V integration where configured, plus the optional tray helper.
 - Linux: Agent, API and Web UI; Hyper-V and Windows tray features are unavailable.
 - Linux VPS: optional `GameServerControl.Relay` for exposing game ports from a public VPS through Tailscale to a GameServerControl Agent host.
-- Release artifacts are self-contained and do not require a preinstalled .NET runtime.
+- Release artifacts bundle .NET 10 LTS (Agent, Runner, Relay and Tray); no preinstalled .NET runtime or PowerShell 7 is required. The Agent embeds PowerShell 7.6 LTS. Windows installation continues to use Windows PowerShell 5.1.
+- Hosts must meet the [.NET 10 supported OS and native dependency requirements](https://github.com/dotnet/core/blob/main/release-notes/10.0/supported-os.md); release binaries target x64. Older unsupported operating systems are not guaranteed to work.
 
 ## Windows install / update
 
-Open **PowerShell as Administrator**. Download `GameServerControl-Install-Windows.ps1` and `SHA256SUMS` from the **same versioned GitHub Release**, then verify the downloaded installer's SHA-256 before execution. Do not pipe mutable `main` branch script text directly into `iex`.
+Open **PowerShell as Administrator**. Download `GameServerControl-Install-Windows.ps1` and `SHA256SUMS` from the **same versioned [GitHub Release](https://github.com/Nereziel/GameServerControl/releases/latest)**, then verify the downloaded installer's SHA-256 before execution. Do not pipe mutable `main` branch script text directly into `iex`.
 
 The version-pinned bootstrap is also published as `GameServerControl-Bootstrap-Windows.ps1` in releases and included in the checksum manifest. If you use it, verify its SHA-256 in the same way before executing it with `powershell.exe -File`. The installer preserves existing Agent configuration.
 
-Run the following in the directory containing the release installer and checksum manifest:
+Run the following in the directory containing the release installer and checksum manifest. Replace the example tag with the tag of the release you downloaded:
 
 ```powershell
 $line = Get-Content .\SHA256SUMS | Where-Object { $_ -match 'GameServerControl-Install-Windows\.ps1$' } | Select-Object -First 1
@@ -56,6 +57,7 @@ if (-not $line) { throw 'Installer hash is missing from SHA256SUMS.' }
 $expected = ($line -split '\s+')[0].ToLowerInvariant()
 $actual = (Get-FileHash .\GameServerControl-Install-Windows.ps1 -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actual -ne $expected) { throw 'Installer SHA-256 mismatch.' }
+$env:GSC_VERSION = 'v1.2.3' # Replace with the downloaded release tag.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\GameServerControl-Install-Windows.ps1
 ```
 
@@ -119,14 +121,22 @@ C:\GameServerControl\Agent\appsettings.json
 
 ## Linux install
 
-The Agent and Relay Linux installers verify each downloaded release archive against the
-published SHA-256 manifest **before** stopping a service or extracting anything. This
-protects archives in transit but does not independently authenticate the mutable
-installer script itself. For higher assurance, download and verify the script from a
-versioned GitHub Release rather than executing the `main` branch directly.
+On a supported x64 Linux host with systemd, Bash, curl and sha256sum, use the following commands. They resolve the latest stable release, download the versioned installer and checksum manifest, verify the installer before executing it, and pin the archive download to the same release. The installer also verifies the release archive before stopping services or extracting it. Trust the GitHub release itself; the manifest provides integrity checking, not an independent signature.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/linux/install-from-release.sh | sudo bash
+(
+  set -euo pipefail
+  release=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/Nereziel/GameServerControl/releases/latest)
+  tag=${release##*/}  # Or set a specific release tag, e.g. v1.2.3.
+  base="https://github.com/Nereziel/GameServerControl/releases/download/$tag"
+  work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT
+  cd "$work"
+  curl -fsSLO "$base/SHA256SUMS"
+  curl -fsSLO "$base/GameServerControl-Install-Linux.sh"
+  grep -E '[[:space:]]\*?GameServerControl-Install-Linux\.sh$' SHA256SUMS | sha256sum --check --strict
+  sudo env GSC_VERSION="$tag" bash ./GameServerControl-Install-Linux.sh
+)
 ```
 
 Then open the Agent's configured HTTP address in a browser.
@@ -136,7 +146,19 @@ Then open the Agent's configured HTTP address in a browser.
 Use this on a public Linux VPS that is connected to the same Tailscale network as the GameServerControl Agent host:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Nereziel/GameServerControl/main/deploy/relay/install-from-release.sh | sudo bash
+(
+  set -euo pipefail
+  release=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/Nereziel/GameServerControl/releases/latest)
+  tag=${release##*/}  # Or set a specific release tag, e.g. v1.2.3.
+  base="https://github.com/Nereziel/GameServerControl/releases/download/$tag"
+  work=$(mktemp -d)
+  trap 'rm -rf "$work"' EXIT
+  cd "$work"
+  curl -fsSLO "$base/SHA256SUMS"
+  curl -fsSLO "$base/GameServerControl-Install-Relay.sh"
+  grep -E '[[:space:]]\*?GameServerControl-Install-Relay\.sh$' SHA256SUMS | sha256sum --check --strict
+  sudo env GSC_VERSION="$tag" bash ./GameServerControl-Install-Relay.sh
+)
 ```
 
 The Relay installer:
@@ -420,13 +442,16 @@ The Windows tray helper can also check GitHub Releases and launch the same updat
 
 A manual fallback updater shortcut is also created by the Windows installer.
 
-The Linux Relay can be updated by running the same one-line Relay install command again. Its existing API token is preserved unless explicitly overridden.
+The Linux Relay can be updated by running the same verified Relay installation commands again. Its existing API token is preserved unless explicitly overridden.
 
 ## Development
 
 Requirements:
 
-- .NET 8 SDK
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) (for building from source only; not required for release installs)
+  - Ubuntu 24.04: `sudo apt update && sudo apt install -y dotnet-sdk-10.0`
+  - Other Linux distributions: [official .NET installation instructions](https://learn.microsoft.com/dotnet/core/install/linux)
+  - Windows: [download .NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Node.js only for Web UI JavaScript syntax validation in CI
 
 Build:
