@@ -93,7 +93,7 @@ assert.ok(html.includes('id="tabSystem"')&&html.includes('id="systemView"')&&htm
   'all global Agent settings must share one sidebar destination');
 assert.ok(!html.includes('id="tabSettings"')&&!html.includes('id="settingsView"'),
   'duplicate global Settings destination must be removed');
-assert.match(html, /id="tabSystem"[^\n]*<span>Settings<\/span>/, 'global navigation should be named Settings');
+assert.match(html, /id="tabSystem"[^\n]*<span(?:\s[^>]*)?>Settings<\/span>/, 'global navigation should be named Settings');
 const top=html.match(/<div class="top-actions">([\s\S]*?)<\/div>/);
 assert.ok(top,'header actions');
 assert.ok(!/id="(?:tokensBtn|updateBtn|discoverBtn|addExistingBtn|manageHostsBtn)"/.test(top[1]),

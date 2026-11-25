@@ -360,8 +360,13 @@ api.MapPost("/servers/install", (InstallServerRequest req, ServerInstaller insta
         return Results.BadRequest(new { error = "ServerDef is required." });
     if (registry.Get(req.ServerDef.Id) is not null)
         return Results.Conflict(new { error = $"Server with id '{req.ServerDef.Id}' already exists." });
-    var jobId = installer.StartJob(req);
-    return Results.Ok(new InstallJobAck(jobId, "Install job queued"));
+    try
+    {
+        var jobId = installer.StartJob(req);
+        return Results.Ok(new InstallJobAck(jobId, "Install job queued"));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
 api.MapPost("/servers/minecraft/install", (MinecraftInstallRequest request,
     ServerInstaller installer, ServerRegistry registry) =>
@@ -376,6 +381,7 @@ api.MapPost("/servers/minecraft/install", (MinecraftInstallRequest request,
         return Results.Ok(new InstallJobAck(jobId, "Minecraft installation queued"));
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
 api.MapPost("/servers/minecraft/recover", (MinecraftRecoveryRequest request, ServerStore store,
     ServerRegistry registry) =>

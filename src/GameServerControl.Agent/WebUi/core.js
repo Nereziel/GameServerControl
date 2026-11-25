@@ -108,8 +108,12 @@ async function selectHost(id){
     return;
   }
   stopStatusStream();
+  closeModal();
   ACTIVE_HOST_ID=id;
-  HOST_SWITCH_EPOCH++;
+  const epoch=++HOST_SWITCH_EPOCH;
+  const current=()=>epoch===HOST_SWITCH_EPOCH;
+  HOST_CAPABILITIES={schemaVersion:0,features:[]};
+  PROFILES=[];GAMES=[];UPDATE_STATUS=null;
   LAST_HOST_OVERVIEW=0;
   sessionStorage.setItem(HOST_KEY,id);
   if(typeof serverWorkspaceCleanupConsole==='function')serverWorkspaceCleanupConsole();
@@ -122,12 +126,15 @@ async function selectHost(id){
   try{
     if(id!=='all'){
       await loadCapabilities();
-      try{await loadProfiles()}catch(e){setNotice('Profile refresh failed: '+e.message,'err',false)}
+      if(!current())return;
+      try{await loadProfiles()}catch(e){if(current())setNotice('Profile refresh failed: '+e.message,'err',false)}
     }else HOST_CAPABILITIES={schemaVersion:0,features:[]};
+    if(!current())return;
     await loadServers(false);
+    if(!current())return;
     await refreshJobs(false);
-    startStatusStream();
-  }catch(e){setNotice('Computer connection failed: '+e.message,'err',false)}
+    if(current())startStatusStream();
+  }catch(e){if(current())setNotice('Computer connection failed: '+e.message,'err',false)}
 }
 async function selectHostAndOpen(hostId,serverId){
   await selectHost(hostId);
@@ -287,7 +294,7 @@ function profileToGame(p){
 
 async function loadCapabilities(){
   if(ACTIVE_HOST_ID==='all'){HOST_CAPABILITIES={schemaVersion:0,features:[]};return}
-  const selectedHost=ACTIVE_HOST_ID;
+  const selectedHost=ACTIVE_HOST_ID,epoch=HOST_SWITCH_EPOCH;
   let capabilities={schemaVersion:0,features:[]};
   try{
     const payload=await api('/api/capabilities');
@@ -298,14 +305,16 @@ async function loadCapabilities(){
   }catch{
     // Older Agents do not implement capabilities; do not offer new-only actions.
   }
-  if(selectedHost===ACTIVE_HOST_ID)HOST_CAPABILITIES=capabilities;
+  if(selectedHost===ACTIVE_HOST_ID&&epoch===HOST_SWITCH_EPOCH)HOST_CAPABILITIES=capabilities;
 }
 function supportsAgentFeature(name){
   return HOST_CAPABILITIES.schemaVersion>=1&&HOST_CAPABILITIES.features.includes(name);
 }
 
 async function loadProfiles(){
+  const epoch=HOST_SWITCH_EPOCH;
   const profiles=await api('/api/game-profiles');
+  if(epoch!==HOST_SWITCH_EPOCH)return;
   PROFILES=(profiles||[]).map(profileToGame);
   GAMES=PROFILES.filter(g=>g.installable);
   if(!GAMES.length)throw new Error('Agent returned no installable game profiles.');
