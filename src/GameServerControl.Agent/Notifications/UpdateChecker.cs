@@ -20,8 +20,10 @@ public sealed class UpdateChecker : IHostedService, IDisposable
     private readonly ILogger<UpdateChecker> _logger;
     private readonly string _repo;
     private readonly string _runningVersion;
+    private readonly object _lifecycleGate = new();
     private CancellationTokenSource? _cts;
     private Task? _loop;
+    private bool _disposed;
 
     public string CurrentVersion => _runningVersion;
     public UpdateStatus Latest { get; private set; }
@@ -46,15 +48,29 @@ public sealed class UpdateChecker : IHostedService, IDisposable
 
     public Task StartAsync(CancellationToken ct)
     {
-        _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _loop = Task.Run(() => PollLoop(_cts.Token));
-        return Task.CompletedTask;
+        lock (_lifecycleGate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_cts is not null) return Task.CompletedTask;
+            _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            // Capture before scheduling; Dispose may run before the loop starts.
+            var token = _cts.Token;
+            _loop = Task.Run(() => PollLoop(token));
+            return Task.CompletedTask;
+        }
     }
 
     public async Task StopAsync(CancellationToken ct)
     {
-        _cts?.Cancel();
-        if (_loop is not null) try { await _loop.WaitAsync(ct); } catch { /* swallow */ }
+        Task? loop;
+        lock (_lifecycleGate)
+        {
+            // The instance is registered as both a singleton and a hosted
+            // service. Shutdown and disposal must be safe in either order.
+            _cts?.Cancel();
+            loop = _loop;
+        }
+        if (loop is not null) try { await loop.WaitAsync(ct); } catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
     }
 
     private async Task PollLoop(CancellationToken ct)
@@ -122,7 +138,19 @@ public sealed class UpdateChecker : IHostedService, IDisposable
         return 0;
     }
 
-    public void Dispose() { _cts?.Dispose(); }
+    public void Dispose()
+    {
+        lock (_lifecycleGate)
+        {
+            if (_disposed) return;
+            _disposed = true;
+            var source = _cts;
+            _cts = null;
+            if (source is null) return;
+            try { source.Cancel(); }
+            finally { source.Dispose(); }
+        }
+    }
 
     private sealed class GitHubRelease
     {

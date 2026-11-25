@@ -406,7 +406,8 @@ public sealed class ServerOrchestrator
     public Task<ActionResult> StopAsync(string id, bool stopVm, bool force, CancellationToken ct = default)
         => WithLifecycleLockAsync(id, () => StopCoreAsync(id, stopVm, force, ct), ct);
 
-    private async Task<ActionResult> StopCoreAsync(string id, bool stopVm, bool force, CancellationToken ct)
+    // Only callers holding ServerLifecycleGate may bypass StopAsync.
+    internal async Task<ActionResult> StopCoreAsync(string id, bool stopVm, bool force, CancellationToken ct)
     {
         var corr = Guid.NewGuid().ToString("n");
         var def = _registry.Get(id);

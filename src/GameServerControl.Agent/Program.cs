@@ -110,6 +110,7 @@ builder.Services.AddSingleton<ServerDiagnostics>(sp =>
 builder.Services.AddSingleton<ServerAlertPolicy>();
 builder.Services.AddSingleton<ServerLifecycleGate>();
 builder.Services.AddSingleton<ServerOrchestrator>();
+builder.Services.AddSingleton<ServerDeletionService>();
 builder.Services.AddSingleton<BackupService>();
 builder.Services.AddSingleton<MaintenanceScheduler>();
 builder.Services.AddSingleton<SteamCmdManager>();
@@ -314,7 +315,7 @@ api.MapGet("/version", (UpdateChecker checker) => Results.Ok(checker.Latest));
 api.MapPost("/version/check", async (UpdateChecker checker, CancellationToken ct) =>
     Results.Ok(await checker.CheckAsync(ct)));
 api.MapGet("/game-profiles", () => Results.Ok(GameProfiles.All));
-api.MapGet("/capabilities", () => Results.Ok(new
+api.MapGet("/capabilities", (IConfiguration cfg) => Results.Ok(new
 {
     schemaVersion = 1,
     features = new[]
@@ -326,7 +327,8 @@ api.MapGet("/capabilities", () => Results.Ok(new
         "install.history",
         "install.restart-recovery",
         "backup.retention.safe"
-    }
+    }.Concat(string.IsNullOrWhiteSpace(cfg["Agent:PermanentDeleteRoot"])
+        ? Array.Empty<string>() : new[] { "server.delete.permanent" }).ToArray()
 }));
 api.MapPost("/update", (AgentUpdateService updater) =>
 {
@@ -360,8 +362,13 @@ api.MapPost("/servers/install", (InstallServerRequest req, ServerInstaller insta
         return Results.BadRequest(new { error = "ServerDef is required." });
     if (registry.Get(req.ServerDef.Id) is not null)
         return Results.Conflict(new { error = $"Server with id '{req.ServerDef.Id}' already exists." });
-    var jobId = installer.StartJob(req);
-    return Results.Ok(new InstallJobAck(jobId, "Install job queued"));
+    try
+    {
+        var jobId = installer.StartJob(req);
+        return Results.Ok(new InstallJobAck(jobId, "Install job queued"));
+    }
+    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
 api.MapPost("/servers/minecraft/install", (MinecraftInstallRequest request,
     ServerInstaller installer, ServerRegistry registry) =>
@@ -376,6 +383,7 @@ api.MapPost("/servers/minecraft/install", (MinecraftInstallRequest request,
         return Results.Ok(new InstallJobAck(jobId, "Minecraft installation queued"));
     }
     catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+    catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
 });
 api.MapPost("/servers/minecraft/recover", (MinecraftRecoveryRequest request, ServerStore store,
     ServerRegistry registry) =>
@@ -461,39 +469,49 @@ api.MapGet("/servers/{id}/update/console", (string id, long? since, ServerRegist
     registry.Get(id) is null ? Results.NotFound() : Results.Ok(updates.Snapshot(id, since)))
     .RequireAuthorization("admin");
 
-api.MapPut("/servers/{id}", (string id, ServerDef def, ServerStore store) =>
-{
-    try { return Results.Ok(store.Update(id, def)); }
-    catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-    catch (KeyNotFoundException) { return Results.NotFound(); }
-});
+api.MapPut("/servers/{id}", async (string id, ServerDef def, ServerStore store, ServerLifecycleGate lifecycle, CancellationToken ct) =>
+    await lifecycle.RunExclusiveAsync<IResult>(id, () =>
+    {
+        try { return Task.FromResult<IResult>(Results.Ok(store.Update(id, def, preserveNotifications: true))); }
+        catch (ArgumentException ex) { return Task.FromResult<IResult>(Results.BadRequest(new { error = ex.Message })); }
+        catch (KeyNotFoundException) { return Task.FromResult<IResult>(Results.NotFound()); }
+    }, () => Results.Conflict(new { error = "Another lifecycle operation is running." }), ct));
 api.MapDelete("/servers/{id}", async (
-    string id,
-    ServerRegistry reg,
-    ServerStore store,
-    IWindowsRunnerServiceManager runners,
-    PublicRelayManager relay,
-    CancellationToken ct) =>
+    string id, ServerRegistry reg, ServerStore store, IWindowsRunnerServiceManager runners,
+    PublicRelayManager relay, ServerLifecycleGate lifecycle, CancellationToken ct) =>
+    await lifecycle.RunExclusiveAsync<IResult>(id, async () =>
+    {
+        var def = reg.Get(id);
+        if (def is null) return Results.NotFound();
+        var deprovisioned = false;
+        try
+        {
+            if (runners.Supports(def))
+            {
+                var cleanup = await runners.DeprovisionAsync(def, ct);
+                if (!cleanup.Ok)
+                    return Results.Json(new { error = cleanup.Error }, statusCode: StatusCodes.Status502BadGateway);
+                deprovisioned = true;
+            }
+            if (!store.Delete(id)) return Results.NotFound();
+            await relay.RemoveServerAsync(id, CancellationToken.None);
+            return Results.NoContent();
+        }
+        finally { if (deprovisioned) runners.CompleteDeprovision(id); }
+    }, () => Results.Conflict(new { error = "Another lifecycle operation is running." }), ct)).RequireAuthorization("admin");
+
+api.MapPost("/servers/{id}/delete-completely", async (string id, DeleteServerRequest request,
+    ServerDeletionService deletion, CancellationToken ct) =>
 {
-    var def = reg.Get(id);
-    if (def is null) return Results.NotFound();
-
-    if (runners.Supports(def))
+    var result = await deletion.DeleteCompletelyAsync(id, request, ct);
+    if (result.Success) return Results.Ok(result);
+    return result.Code switch
     {
-        var cleanup = await runners.DeprovisionAsync(def, ct);
-        if (!cleanup.Ok)
-            return Results.Json(new { error = cleanup.Error }, statusCode: StatusCodes.Status502BadGateway);
-    }
-
-    if (!store.Delete(id))
-    {
-        runners.CompleteDeprovision(id);
-        return Results.NotFound();
-    }
-    runners.CompleteDeprovision(id);
-    await relay.RemoveServerAsync(id, ct);
-    return Results.NoContent();
-});
+        "not_found" => Results.NotFound(result),
+        "busy" => Results.Conflict(result),
+        _ => Results.BadRequest(result)
+    };
+}).RequireAuthorization("admin");
 
 api.MapGet("/servers/{id}/relay", async (string id, PublicRelayManager relay, CancellationToken ct) =>
 {

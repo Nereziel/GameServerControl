@@ -494,3 +494,7 @@ The former WPF desktop client remains retired; browser control is the supported 
 ## License
 
 MIT. See `LICENSE`.
+
+### Permanent server deletion (optional)
+
+Removing a server registration keeps game files. To explicitly enable permanent file deletion, set `Agent:PermanentDeleteRoot` to a dedicated absolute parent directory containing game-server folders (for example `/srv/gameservers` on Linux). Restart the Agent after changing the setting. The server directory must be a strict child of this root; overlapping server folders, protected paths and symbolic links are rejected. Only Admin access is permitted. Keep independent backups and do not point this setting at a general system or data directory.

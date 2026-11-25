@@ -124,6 +124,7 @@ public sealed class ServerInstaller
     {
         PruneCompletedJobs(force: true);
         var req = NormalizeForHost(request);
+        ValidateSteamRequest(req);
         var jobId = Guid.NewGuid().ToString("N")[..12];
         var now = DateTimeOffset.UtcNow;
         var initial = new InstallProgress(
@@ -141,6 +142,7 @@ public sealed class ServerInstaller
     {
         var invalid = MinecraftServerPackages.Validate(request);
         if (invalid is not null) throw new ArgumentException(invalid);
+        ValidateMinecraftRegistration(request);
         PruneCompletedJobs(force: true);
         var jobId = Guid.NewGuid().ToString("N")[..12];
         var now = DateTimeOffset.UtcNow;
@@ -162,6 +164,9 @@ public sealed class ServerInstaller
         {
             await _installGate.WaitAsync(ct);
             gateHeld = true;
+            var invalid = MinecraftServerPackages.Validate(request);
+            if (invalid is not null) throw new ArgumentException(invalid);
+            ValidateMinecraftRegistration(request);
             await PublishAsync(jobId, "download", "Preparing Minecraft server files…", 5, false, false);
             var result = await _minecraft.InstallAsync(request,
                 message => _ = PublishAsync(jobId, "download", message, 40, false, false), ct);
@@ -195,6 +200,29 @@ public sealed class ServerInstaller
         {
             if (gateHeld) _installGate.Release();
         }
+    }
+
+    private void ValidateSteamRequest(InstallServerRequest req)
+    {
+        if (!string.Equals(req.SteamAppId, req.ServerDef.SteamAppId, StringComparison.Ordinal))
+            throw new ArgumentException("Steam App ID does not match the server definition.");
+        _store.ValidateNewInstallation(req.ServerDef, req.InstallPath);
+        if (!Path.IsPathFullyQualified(req.ServerDef.GuestExePath) ||
+            !PathContainment.IsWithinRoot(req.InstallPath, req.ServerDef.GuestExePath))
+            throw new ArgumentException("Server executable must be inside the installation folder.");
+    }
+
+    private void ValidateMinecraftRegistration(MinecraftInstallRequest req)
+    {
+        var profile = GameProfiles.FindByKey(req.ProfileKey)!;
+        var root = Path.GetFullPath(req.InstallPath);
+        var port = req.Port == 0 ? profile.DefaultPorts![0].Port : req.Port;
+        var provisional = new ServerDef(req.ServerId, req.Name, "", GameType.Minecraft,
+            Path.Combine(root, "server.jar"), root, [], [], null, null, null,
+            HostingMode: HostingMode.BareMetal,
+            NetworkPorts: [new NetworkPort("Game", profile.Key == "minecraft-bedrock" ? NetworkProtocol.Udp : NetworkProtocol.Tcp, port)],
+            GameProfileKey: profile.Key);
+        _store.ValidateNewInstallation(provisional, root);
     }
 
     private static InstallServerRequest NormalizeForHost(InstallServerRequest req)
@@ -284,6 +312,7 @@ public sealed class ServerInstaller
             await PublishAsync(jobId, "queued", "Waiting for the install worker…", 0, false, false);
             await _installGate.WaitAsync(ct);
             gateHeld = true;
+            ValidateSteamRequest(req);
 
             await PublishAsync(jobId, "steamcmd", "Resolving SteamCMD…", 1, false, false);
             var (steamOk, exitCode) = await _steamCmd.RunAppUpdateAsync(

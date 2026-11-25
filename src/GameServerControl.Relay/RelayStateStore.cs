@@ -8,6 +8,8 @@ public sealed class RelayStateStore
 {
     private readonly string _path;
     private readonly object _gate = new();
+    // Snapshot, firewall application and state replacement are one logical operation.
+    public SemaphoreSlim MutationGate { get; } = new(1, 1);
     private RelayRouteDefinition[] _routes;
 
     private static readonly JsonSerializerOptions JsonOptions = new()

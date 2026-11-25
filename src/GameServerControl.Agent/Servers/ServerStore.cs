@@ -54,7 +54,7 @@ public sealed class ServerStore
         return normalized;
     }
 
-    public ServerDef Update(string id, ServerDef def)
+    public ServerDef Update(string id, ServerDef def, bool preserveNotifications = false)
     {
         // This is the general server-definition editor. Dedicated settings are
         // intentionally changed through narrow endpoints and must not be reset
@@ -70,9 +70,11 @@ public sealed class ServerStore
                 Id = id,
                 BackupRetention = current.BackupRetention,
                 AutoUpdateOnStart = current.AutoUpdateOnStart,
-                AutoUpdateOnRestart = current.AutoUpdateOnRestart
+                AutoUpdateOnRestart = current.AutoUpdateOnRestart,
+                DiscordWebhookUrl = preserveNotifications ? current.DiscordWebhookUrl : def.DiscordWebhookUrl,
+                DiscordAlertsOnly = preserveNotifications ? current.DiscordAlertsOnly : def.DiscordAlertsOnly
             });
-            Validate(normalized);
+            Validate(preserveNotifications ? normalized with { DiscordWebhookUrl = null } : normalized);
             ValidatePortConflicts(normalized, list, id);
             list[idx] = normalized;
             SaveAll(list);
@@ -119,6 +121,55 @@ public sealed class ServerStore
             SaveAll(list);
             _registry.Reload();
             return updated;
+        }
+    }
+
+    public ServerDef SetNotifications(string id, string? webhook, bool? alertsOnly, bool disable)
+    {
+        lock (_lock)
+        {
+            var list = LoadAll();
+            var index = list.FindIndex(s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
+            if (index < 0) throw new KeyNotFoundException(id);
+            var current = list[index];
+            var url = disable ? null : string.IsNullOrWhiteSpace(webhook) ? current.DiscordWebhookUrl : webhook.Trim();
+            if (!string.IsNullOrWhiteSpace(url) && !DiscordNotifier.IsValidWebhookUrl(url))
+                throw new ArgumentException("Only valid Discord HTTPS webhook URLs are allowed.");
+            var updated = current with { DiscordWebhookUrl = url, DiscordAlertsOnly = alertsOnly ?? current.DiscordAlertsOnly };
+            list[index] = updated;
+            SaveAll(list);
+            _registry.Reload();
+            return updated;
+        }
+    }
+
+    public void ValidateNewInstallation(ServerDef def, string installPath)
+    {
+        var normalized = Normalize(def);
+        Validate(normalized);
+        if (normalized.HostingMode != HostingMode.BareMetal ||
+            !Path.IsPathFullyQualified(installPath) ||
+            !Path.IsPathFullyQualified(normalized.GuestWorkingDir))
+            throw new ArgumentException("Installations require an absolute local server folder.");
+        var root = Path.GetFullPath(installPath);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!string.Equals(Path.TrimEndingDirectorySeparator(root), Path.TrimEndingDirectorySeparator(Path.GetFullPath(normalized.GuestWorkingDir)), comparison) ||
+            string.Equals(root, Path.GetPathRoot(root), comparison))
+            throw new ArgumentException("Installation path must match the server working directory and cannot be a filesystem root.");
+        lock (_lock)
+        {
+            var list = LoadAll();
+            if (list.Any(other => string.Equals(other.Id, normalized.Id, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("A server with this ID is already registered.");
+            ValidatePortConflicts(normalized, list, null);
+            foreach (var other in list.Where(other => other.HostingMode == HostingMode.BareMetal))
+            {
+                if (!Path.IsPathFullyQualified(other.GuestWorkingDir)) continue;
+                var otherRoot = Path.GetFullPath(other.GuestWorkingDir);
+                if (string.Equals(Path.TrimEndingDirectorySeparator(root), Path.TrimEndingDirectorySeparator(otherRoot), comparison) ||
+                    PathContainment.IsWithinRoot(root, otherRoot) || PathContainment.IsWithinRoot(otherRoot, root))
+                    throw new InvalidOperationException("Installation folder overlaps another registered server.");
+            }
         }
     }
 

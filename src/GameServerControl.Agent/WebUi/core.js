@@ -91,7 +91,7 @@ async function refreshManagedHosts(){
     ACTIVE_HOST_ID=window.GSC_CLOUD_MODE?'all':'local';
   const select=$('#hostSwitch');
   if(select){
-    select.innerHTML='<option value="all">All computers</option>'+HOST_DIRECTORY.map(h=>
+    select.innerHTML='<option value="all" data-gsc-i18n="All computers">All computers</option>'+HOST_DIRECTORY.map(h=>
       `<option value="${esc(h.id)}">${esc(h.isLocal?'This computer · '+h.name:h.name)}</option>`).join('');
     select.value=ACTIVE_HOST_ID;
   }
@@ -107,9 +107,13 @@ async function selectHost(id){
     if(select)select.value=ACTIVE_HOST_ID;
     return;
   }
+  closeModal();
   stopStatusStream();
   ACTIVE_HOST_ID=id;
-  HOST_SWITCH_EPOCH++;
+  const epoch=++HOST_SWITCH_EPOCH;
+  const current=()=>epoch===HOST_SWITCH_EPOCH;
+  HOST_CAPABILITIES={schemaVersion:0,features:[]};
+  PROFILES=[];GAMES=[];UPDATE_STATUS=null;
   LAST_HOST_OVERVIEW=0;
   sessionStorage.setItem(HOST_KEY,id);
   if(typeof serverWorkspaceCleanupConsole==='function')serverWorkspaceCleanupConsole();
@@ -122,12 +126,15 @@ async function selectHost(id){
   try{
     if(id!=='all'){
       await loadCapabilities();
-      try{await loadProfiles()}catch(e){setNotice('Profile refresh failed: '+e.message,'err',false)}
+      if(!current())return;
+      try{await loadProfiles()}catch(e){if(current())setNotice('Profile refresh failed: '+e.message,'err',false)}
     }else HOST_CAPABILITIES={schemaVersion:0,features:[]};
+    if(!current())return;
     await loadServers(false);
+    if(!current())return;
     await refreshJobs(false);
-    startStatusStream();
-  }catch(e){setNotice('Computer connection failed: '+e.message,'err',false)}
+    if(current())startStatusStream();
+  }catch(e){if(current())setNotice('Computer connection failed: '+e.message,'err',false)}
 }
 async function selectHostAndOpen(hostId,serverId){
   await selectHost(hostId);
@@ -139,24 +146,24 @@ async function selectHostAndOpen(hostId,serverId){
 async function openManagedHosts(){
   try{await refreshManagedHosts()}catch(e){return toast(e.message,'err')}
   const rows=HOST_DIRECTORY.filter(h=>!h.isLocal).map(h=>
-    `<div class="host-managed-row"><span><b>${esc(h.name)}</b><small class="mono">${esc(h.id)}</small></span><button class="btn danger" ${uiAction('removeManagedHost',[h.id])}>Remove</button></div>`).join('')||
-    '<div class="tiny muted">No additional computers registered yet.</div>';
+    `<div class="host-managed-row"><span><b>${esc(h.name)}</b><small class="mono">${esc(h.id)}</small></span><button class="btn danger" ${uiAction('removeManagedHost',[h.id])} data-gsc-i18n="Remove">Remove</button></div>`).join('')||
+    '<div class="tiny muted" data-gsc-i18n="No additional computers registered yet.">No additional computers registered yet.</div>';
   const cloud=!!window.GSC_CLOUD_MODE;
   const form=`<div class="host-security-note">${cloud?
     'Install Agent on each PC, give it a Tailscale listener and configure its route in the VPS Caddy proxy. The route must match the Computer ID below. Tokens are encrypted in Cloudflare D1; one offline PC does not affect any other.':
     'Install GameServerControl Agent on the second PC first. Create one Admin and one ReadOnly token there. Connect via Tailscale or a TLS-protected private Agent URL. Tokens stay encrypted on this coordinating Agent, never in your browser after saving.'}</div>
-    <div class="host-form"><div class="formgrid"><div class="field"><label>Computer ID</label><input id="hostNewId" placeholder="gaming-pc-2" maxlength="40" autocomplete="off"></div>
-    <div class="field"><label>Display name</label><input id="hostNewName" placeholder="Gaming PC 2" maxlength="80" autocomplete="off"></div></div>
-    ${cloud?'':`<div class="field"><label>Agent address</label><input id="hostNewOrigin" type="url" placeholder="https://pc2.example.ts.net:5100 or http://100.100.1.2:5099" autocomplete="off"></div>`}
-    <div class="formgrid"><div class="field"><label>Agent Admin token</label><input id="hostNewAdmin" type="password" autocomplete="new-password" spellcheck="false"></div>
-    <div class="field"><label>Agent ReadOnly token</label><input id="hostNewReadonly" type="password" autocomplete="new-password" spellcheck="false"></div></div>
+    <div class="host-form"><div class="formgrid"><div class="field"><label data-gsc-i18n="Computer ID">Computer ID</label><input id="hostNewId" placeholder="gaming-pc-2" maxlength="40" autocomplete="off"></div>
+    <div class="field"><label data-gsc-i18n="Display name">Display name</label><input id="hostNewName" placeholder="Gaming PC 2" maxlength="80" autocomplete="off"></div></div>
+    ${cloud?'':`<div class="field"><label data-gsc-i18n="Agent address">Agent address</label><input id="hostNewOrigin" type="url" placeholder="https://pc2.example.ts.net:5100 or http://100.100.1.2:5099" autocomplete="off"></div>`}
+    <div class="formgrid"><div class="field"><label data-gsc-i18n="Agent Admin token">Agent Admin token</label><input id="hostNewAdmin" type="password" autocomplete="new-password" spellcheck="false"></div>
+    <div class="field"><label data-gsc-i18n="Agent ReadOnly token">Agent ReadOnly token</label><input id="hostNewReadonly" type="password" autocomplete="new-password" spellcheck="false"></div></div>
     <div class="help">Credentials are verified against the remote Agent before saving. ${cloud?
       'Cloudflare always contacts the preconfigured HTTPS VPS gateway, never a browser-supplied origin.':
       'No unauthenticated or unencrypted public HTTP connection is allowed.'}</div>
-    <button class="btn primary" ${uiAction('saveManagedHost')}>Connect computer</button></div>`;
+    <button class="btn primary" ${uiAction('saveManagedHost')} data-gsc-i18n="Connect computer">Connect computer</button></div>`;
   openModal('Manage computers',
-    '<div class="sw-section"><h3>Connected computers</h3>'+rows+'</div><div class="sw-section"><h3>Add a physical computer</h3>'+form+'</div>',
-    `<button class="btn" ${uiAction('closeModal')}>Close</button>`,true);
+    '<div class="sw-section"><h3 data-gsc-i18n="Connected computers">Connected computers</h3>'+rows+'</div><div class="sw-section"><h3 data-gsc-i18n="Add a physical computer">Add a physical computer</h3>'+form+'</div>',
+    `<button class="btn" ${uiAction('closeModal')} data-gsc-i18n="Close">Close</button>`,true);
 }
 async function saveManagedHost(){
   const id=$('#hostNewId')?.value.trim()||'';
@@ -264,11 +271,11 @@ function openAddServerMenu(){
     return toast('Select a computer before adding a game server.','err');
   openModal('Add a server',
     `<div class="system-action-grid">
-      <button type="button" class="system-choice" ${uiAction('openCreate')}><b>Install a new game</b><span>Choose a supported game and start an installation.</span></button>
-      <button type="button" class="system-choice" ${uiAction('openAddExisting')}><b>Add an existing server</b><span>Register an installation without touching its game files.</span></button>
-      <button type="button" class="system-choice" ${uiAction('openDiscover')}><b>Discover installations</b><span>Scan known libraries and server directories.</span></button>
+      <button type="button" class="system-choice" ${uiAction('openCreate')}><b data-gsc-i18n="Install a new game">Install a new game</b><span data-gsc-i18n="Choose a supported game and start an installation.">Choose a supported game and start an installation.</span></button>
+      <button type="button" class="system-choice" ${uiAction('openAddExisting')}><b data-gsc-i18n="Add an existing server">Add an existing server</b><span data-gsc-i18n="Register an installation without touching its game files.">Register an installation without touching its game files.</span></button>
+      <button type="button" class="system-choice" ${uiAction('openDiscover')}><b data-gsc-i18n="Discover installations">Discover installations</b><span data-gsc-i18n="Scan known libraries and server directories.">Scan known libraries and server directories.</span></button>
     </div>`,
-    `<button class="btn" ${uiAction('closeModal')}>Cancel</button>`,true);
+    `<button class="btn" ${uiAction('closeModal')} data-gsc-i18n="Cancel">Cancel</button>`,true);
 }
 
 function profileToGame(p){
@@ -287,7 +294,7 @@ function profileToGame(p){
 
 async function loadCapabilities(){
   if(ACTIVE_HOST_ID==='all'){HOST_CAPABILITIES={schemaVersion:0,features:[]};return}
-  const selectedHost=ACTIVE_HOST_ID;
+  const selectedHost=ACTIVE_HOST_ID,epoch=HOST_SWITCH_EPOCH;
   let capabilities={schemaVersion:0,features:[]};
   try{
     const payload=await api('/api/capabilities');
@@ -298,14 +305,16 @@ async function loadCapabilities(){
   }catch{
     // Older Agents do not implement capabilities; do not offer new-only actions.
   }
-  if(selectedHost===ACTIVE_HOST_ID)HOST_CAPABILITIES=capabilities;
+  if(selectedHost===ACTIVE_HOST_ID&&epoch===HOST_SWITCH_EPOCH)HOST_CAPABILITIES=capabilities;
 }
 function supportsAgentFeature(name){
   return HOST_CAPABILITIES.schemaVersion>=1&&HOST_CAPABILITIES.features.includes(name);
 }
 
 async function loadProfiles(){
+  const epoch=HOST_SWITCH_EPOCH;
   const profiles=await api('/api/game-profiles');
+  if(epoch!==HOST_SWITCH_EPOCH)return;
   PROFILES=(profiles||[]).map(profileToGame);
   GAMES=PROFILES.filter(g=>g.installable);
   if(!GAMES.length)throw new Error('Agent returned no installable game profiles.');
@@ -318,9 +327,11 @@ function openLocalBrowserKeyDb(){
   return new Promise((resolve,reject)=>{
     if(!window.indexedDB||!crypto?.subtle)return reject(new Error('Secure browser storage unavailable.'));
     const req=indexedDB.open('gsc-local-browser-v1',1);
+    const timer=setTimeout(()=>reject(new Error('Browser key storage timed out.')),3000);
+    req.onblocked=()=>{clearTimeout(timer);reject(new Error('Browser key storage is blocked.'))};
     req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('keys'))req.result.createObjectStore('keys')};
-    req.onsuccess=()=>resolve(req.result);
-    req.onerror=()=>reject(req.error||new Error('Could not access browser key storage.'));
+    req.onsuccess=()=>{clearTimeout(timer);resolve(req.result)};
+    req.onerror=()=>{clearTimeout(timer);reject(req.error||new Error('Could not access browser key storage.'))};
   });
 }
 async function localBrowserKeyRead(){
@@ -352,42 +363,122 @@ async function localBrowserKeyDelete(){
   })}finally{db.close()}
 }
 const localBrowserBase64=buffer=>btoa(String.fromCharCode(...new Uint8Array(buffer)));
-async function rememberLocalBrowser(){
+async function rememberLocalBrowser(signal){
   const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},false,['sign','verify']);
   const publicKey=localBrowserBase64(await crypto.subtle.exportKey('spki',pair.publicKey));
-  const registered=await api('/api/auth/browser-key',{method:'POST',body:JSON.stringify({publicKey})});
+  const registered=await api('/api/auth/browser-key',{method:'POST',body:JSON.stringify({publicKey}),signal});
   if(!registered?.id)throw new Error('Agent did not accept the browser signing key.');
   await localBrowserKeyWrite({id:registered.id,privateKey:pair.privateKey});
 }
 
 let LOGIN_PENDING=false;
-async function login(){
-  if(LOGIN_PENDING)return;
-  const url=$('#loginUrl').value.trim().replace(/\/+$/,'');const token=$('#loginToken').value.trim();
-  if(!url||!token)return toast('Agent URL and token are required.','err');
-  const button=$('#loginConnectBtn');
-  LOGIN_PENDING=true;
-  if(button){button.disabled=true;button.textContent='Connecting…'}
-  CFG={url,token};
+function normalizeLoginUrl(value){
+  let url;
+  try{url=new URL(value.trim()||location.origin)}catch{throw new Error('Enter a valid HTTP or HTTPS Agent URL.')}
+  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)
+    throw new Error('Enter a valid HTTP or HTTPS Agent URL without credentials, query or fragment.');
+  if(location.protocol==='https:'&&url.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname))
+    throw new Error('An HTTPS dashboard cannot connect to an insecure HTTP Agent. Use HTTPS instead.');
+  return url.href.replace(/\/+$/,'');
+}
+function updateLoginTarget(){
+  const input=$('#loginUrl'),target=$('#loginTarget'),remember=$('#rememberBrowserField');
+  let local=false,httpWarning=false;
+  try{
+    const address=normalizeLoginUrl(input.value);
+    const url=new URL(address);
+    target.removeAttribute?.('data-gsc-i18n');
+    target.textContent=address;
+    local=address===location.origin&&isLocalBrowserOrigin()&&!window.GSC_CLOUD_MODE;
+    httpWarning=url.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname);
+  }catch{target.textContent='Enter a valid Agent URL';globalThis.GSC_I18N?.set(target,'Enter a valid Agent URL');}
+  remember.classList.toggle('hidden',!local);
+  if(!local)$('#loginRememberBrowser').checked=false;
+  $('#loginTransportWarning').classList.toggle('hidden',!httpWarning);
+}
+function showLoginError(message=''){
+  const error=$('#loginError');error.textContent=message;
+  globalThis.GSC_I18N?.set(error,message);
+  error.classList.toggle('hidden',!message);
+}
+function showLoginForm(message=''){
+  $('#loginLoading').classList.add('hidden');
+  $('#loginForm').classList.remove('hidden');
+  updateLoginTarget();
+  showLoginError(message);
+}
+function setLoginPending(pending){
+  LOGIN_PENDING=pending;
+  const form=$('#loginForm'),button=$('#loginConnectBtn');
+  form.setAttribute('aria-busy',String(pending));
+  for(const input of form.querySelectorAll('input,button'))input.disabled=pending;
+  button.textContent=pending?'Signing in…':'Sign in';
+  globalThis.GSC_I18N?.set(button,pending?'Signing in…':'Sign in');
+}
+async function verifyLoginIdentity(connection,signal){
+  // No redirect may forward a bearer to a different endpoint. Authenticate once,
+  // rather than fetching health followed by a second identity request.
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),12000);
+  const cancel=()=>controller.abort();
+  if(signal?.aborted)cancel();
+  else signal?.addEventListener('abort',cancel,{once:true});
   try{
-    await api('/api/health',{signal:controller.signal});
-    clearTimeout(timeout);
-    if(isLocalBrowserOrigin()&&$('#loginRememberBrowser')?.checked){
-      try{await rememberLocalBrowser()}
-      catch(e){toast('Could not remember this browser: '+e.message,'err')}
-    }
-    sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
-    await boot();
+    const response=await fetch(connection.url+'/api/auth/me',{
+      headers:{Authorization:'Bearer '+connection.token},cache:'no-store',redirect:'error',signal:controller.signal
+    });
+    if(response.status===401||response.status===403)throw new Error('The API token was rejected. Check the token and Agent address.');
+    if(response.status===429)throw new Error('Too many attempts. Wait a moment before trying again.');
+    if(!response.ok)throw new Error('The Agent could not sign you in. Check the service status and try again.');
+    let identity;
+    try{identity=await response.json()}catch{throw new Error('This address did not return a valid Agent identity.')}
+    if(!identity||!['admin','readonly'].includes(String(identity.role).toLowerCase()))
+      throw new Error('This address did not return a valid Agent identity.');
+    return identity;
+  }catch(e){
+    if(e.name==='AbortError')throw new Error('Connection timed out. Check the Agent address and service status.');
+    if(e instanceof TypeError)throw new Error('Cannot reach the Agent. Check the address, network and HTTPS settings.');
+    throw e;
+  }finally{
+    clearTimeout(timeout);signal?.removeEventListener('abort',cancel);
+  }
+}
+function persistLoginConnection(connection){
+  CFG=connection;
+  try{sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG))}catch{}
+}
+function clearLoginConnection(){
+  CFG={url:'',token:''};
+  try{sessionStorage.removeItem(CFG_KEY)}catch{}
+}
+async function login(){
+  if(LOGIN_PENDING)return;
+  const token=$('#loginToken').value.trim();
+  let url;
+  showLoginError();
+  try{url=normalizeLoginUrl($('#loginUrl').value)}catch(e){$('#loginAdvanced').open=true;showLoginError(e.message);$('#loginUrl').focus();return}
+  if(!token){showLoginError('Enter your API token.');$('#loginToken').focus();return}
+  const remember=url===location.origin&&isLocalBrowserOrigin()&&$('#loginRememberBrowser').checked;
+  setLoginPending(true);
+  let rememberWarning=false;
+  try{
+    const connection={url,token};
+    const identity=await verifyLoginIdentity(connection);
+    persistLoginConnection(connection);
+    if(remember&&String(identity.role).toLowerCase()==='admin'){
+      const rememberController=new AbortController();
+      const rememberTimeout=setTimeout(()=>rememberController.abort(),5000);
+      try{await rememberLocalBrowser(rememberController.signal)}catch{rememberWarning=true}
+      finally{clearTimeout(rememberTimeout)}
+    }else if(remember){rememberWarning=true}
+    const tokenInput=$('#loginToken');tokenInput.type='password';tokenInput.value='';
+    await boot(identity);
+    if(rememberWarning)toast('Signed in, but this browser could not be remembered. Local Admin access is required.','err');
     if(new URLSearchParams(location.search).has("manageTokens"))openTokens();
   }catch(e){
-    toast(e.name==='AbortError'?'Connection timed out. Check the Agent URL and service status.':'Connection failed: '+e.message,'err');
-  }finally{
-    clearTimeout(timeout);
-    LOGIN_PENDING=false;
-    if(button){button.disabled=false;button.textContent='Connect'}
-  }
+    clearLoginConnection();
+    showLoginError(e.message||'Sign-in failed. Try again.');
+  }finally{setLoginPending(false)}
 }
 async function logout(){
   if(isLocalBrowserOrigin()){
@@ -398,7 +489,7 @@ async function logout(){
     }catch{}
     try{await localBrowserKeyDelete()}catch{}
   }
-  sessionStorage.removeItem(CFG_KEY);
+  clearLoginConnection();
   location.reload();
 }
 
@@ -421,12 +512,14 @@ function isLocalBrowserOrigin(){
 
 async function restoreBrowserLogin(){
   if(!isLocalBrowserOrigin()||window.GSC_CLOUD_MODE)return false;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),12000);
   try{
     const stored=await localBrowserKeyRead();
     if(!stored?.id||!stored.privateKey)return false;
     const headers={'Content-Type':'application/json'};
     const challengeResponse=await fetch('/auth/browser-key/challenge',{method:'POST',
-      cache:'no-store',headers,body:JSON.stringify({id:stored.id})});
+      cache:'no-store',headers,signal:controller.signal,body:JSON.stringify({id:stored.id})});
     if(challengeResponse.status===204){await localBrowserKeyDelete();return false}
     if(!challengeResponse.ok)return false;
     const {challenge}=await challengeResponse.json();
@@ -435,30 +528,65 @@ async function restoreBrowserLogin(){
     const signature=localBrowserBase64(await crypto.subtle.sign(
       {name:'ECDSA',hash:'SHA-256'},stored.privateKey,payload));
     const exchange=await fetch('/auth/browser-key/redeem',{method:'POST',cache:'no-store',
-      headers,body:JSON.stringify({id:stored.id,challenge,signature})});
+      headers,signal:controller.signal,body:JSON.stringify({id:stored.id,challenge,signature})});
     if(!exchange.ok)return false;
     const result=await exchange.json();
     if(typeof result.token!=='string'||!result.token)return false;
-    CFG={url:location.origin,token:result.token};
-    sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
-    await api('/api/health');
-    await boot();
+    const connection={url:location.origin,token:result.token};
+    const identity=await verifyLoginIdentity(connection,controller.signal);
+    persistLoginConnection(connection);
+    await boot(identity);
     return true;
-  }catch{return false}
+  }catch{clearLoginConnection();return false}
+  finally{clearTimeout(timeout)}
 }
 
 async function init(){
   try{localStorage.removeItem(CFG_KEY)}catch{}
-  const rememberField=$('#rememberBrowserField');
-  if(rememberField)rememberField.classList.toggle('hidden',!isLocalBrowserOrigin()||!!window.GSC_CLOUD_MODE);
   const params=new URLSearchParams(location.search);
   const token=params.get('token'),url=params.get('url');
-  if(token){CFG={url:(url||location.origin).replace(/\/+$/,''),token};sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));history.replaceState({},'',location.pathname+location.hash)}
-  else{try{CFG=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')||{url:'',token:''}}catch{CFG={url:'',token:''}}}
-  if(CFG.url&&CFG.token){try{await api('/api/health');await boot();if(params.has("manageTokens"))openTokens();return}catch{sessionStorage.removeItem(CFG_KEY)}}
+  // Scrub legacy deep-link credentials before any request or persistence.
+  if(token)history.replaceState({},'',location.pathname+location.hash);
+  if(window.GSC_CLOUD_MODE){
+    $('#loginHeading').textContent='Cloudflare Access';
+    $('#loginDescription').textContent='Opening your protected remote workspace.';
+    globalThis.GSC_I18N?.set($('#loginDescription'),'Opening your protected remote workspace.');
+    $('#loginFootnote').textContent='Authentication is managed by Cloudflare Access.';
+    globalThis.GSC_I18N?.set($('#loginFootnote'),'Authentication is managed by Cloudflare Access.');
+    try{
+      const connection={url:location.origin,token:'cloud-gateway'};
+      const identity=await verifyLoginIdentity(connection);
+      persistLoginConnection(connection);
+      await boot(identity);
+      return;
+    }catch{
+      clearLoginConnection();
+      $('#loginLoading').classList.add('hidden');
+      $('#cloudLoginState').classList.remove('hidden');
+      return;
+    }
+  }
+  let previous=null;
+  if(token){
+    // Legacy links can authenticate only to the page's own Agent, never a
+    // different destination supplied by a query parameter.
+    try{if(normalizeLoginUrl(url||location.origin)===location.origin)previous={url:location.origin,token}}catch{}
+  }
+  else{try{previous=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')}catch{}}
+  let message='';
+  if(previous?.url&&previous?.token){
+    try{
+      const connection={url:normalizeLoginUrl(previous.url),token:previous.token};
+      const identity=await verifyLoginIdentity(connection);
+      persistLoginConnection(connection);
+      await boot(identity);
+      if(params.has("manageTokens"))openTokens();
+      return;
+    }catch(e){message=e.message;clearLoginConnection()}
+  }
   if(await restoreBrowserLogin()){if(params.has("manageTokens"))openTokens();return}
-  $('#login').classList.remove('hidden');
   $('#loginUrl').value=location.origin;
+  showLoginForm(message);
 }
 window.addEventListener('DOMContentLoaded',init);
 
@@ -469,38 +597,41 @@ function serverMeta(d){const g=profileFor(d);return g?{icon:g.icon,label:g.label
 
 function renderServers(){
   const root=$('#servers');
-  if(!SERVERS.length){root.innerHTML=`<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')}>Create your first server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')}>Add existing server</button></div>`;return}
+  if(!SERVERS.length){root.innerHTML=`<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')} data-gsc-i18n="Create your first server">Create your first server</button> <button class="btn" ${uiAction('openDiscover')} data-gsc-i18n="Discover installed servers">Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')} data-gsc-i18n="Add existing server">Add existing server</button></div>`;return}
   root.innerHTML='<div class="grid">'+SERVERS.map(d=>{
     const s=STATUS[d.id]||{},m=serverMeta(d),up=s.processState==='Running',busy=['Starting','Stopping'].includes(s.processState),caps=m.profile.caps||{};
-    return `<div class="card"><div class="cardhead"><div class="icon">${m.icon}</div><div class="grow"><div class="title">${esc(d.name)}</div><div class="sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V':'This machine'} · ${esc(d.guestWorkingDir||'')}</div></div><div class="state ${up?'up':busy?'warn':'down'}">${esc(s.processState||'Unknown')}</div></div><div class="metrics"><span>PID <b>${s.pidInGuest??'—'}</b></span><span>CPU <b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></span><span>RAM <b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></span>${caps.rcon&&d.rconPort?`<span>RCON <b>${esc(d.rconHost||'auto')}:${d.rconPort}</b></span>`:''}</div>${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="actions"><button class="btn" ${up||busy?'disabled':''} ${uiAction('action',[d.id,'start'])}>Start</button><button class="btn danger" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'stop'])}>Stop</button><button class="btn" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'restart'])}>Restart</button><button class="btn primary" ${uiAction('openManage',[d.id])}>Manage</button></div></div>`
+    return `<div class="card"><div class="cardhead"><div class="icon">${m.icon}</div><div class="grow"><div class="title">${esc(d.name)}</div><div class="sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V':'This machine'} · ${esc(d.guestWorkingDir||'')}</div></div><div class="state ${up?'up':busy?'warn':'down'}">${esc(s.processState||'Unknown')}</div></div><div class="metrics"><span>PID <b>${s.pidInGuest??'—'}</b></span><span>CPU <b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></span><span>RAM <b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></span>${caps.rcon&&d.rconPort?`<span>RCON <b>${esc(d.rconHost||'auto')}:${d.rconPort}</b></span>`:''}</div>${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="actions"><button class="btn" ${up||busy?'disabled':''} ${uiAction('action',[d.id,'start'])} data-gsc-i18n="Start">Start</button><button class="btn danger" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'stop'])} data-gsc-i18n="Stop">Stop</button><button class="btn" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'restart'])} data-gsc-i18n="Restart">Restart</button><button class="btn primary" ${uiAction('openManage',[d.id])} data-gsc-i18n="Manage">Manage</button></div></div>`
   }).join('')+'</div>';
 }
 
 async function action(id,a){toast(`${id}: ${a}…`);try{const r=await api(`/api/servers/${encodeURIComponent(id)}/${a}`,{method:'POST'});toast(r.success?r.message:('Failed: '+r.message),r.success?'ok':'err');setTimeout(loadServers,800)}catch(e){toast(`${a} failed: ${e.message}`,'err')}}
 
 async function checkForUpdate(force=false){
-  if(!CFG.token)return null;
+  if(!CFG.token||ACTIVE_HOST_ID==='all')return null;
+  const epoch=HOST_SWITCH_EPOCH;
   try{
-    UPDATE_STATUS=await api(force?'/api/version/check':'/api/version',force?{method:'POST'}:{});
+    const result=await api(force?'/api/version/check':'/api/version',force?{method:'POST'}:{});
+    if(epoch!==HOST_SWITCH_EPOCH)return null;
+    UPDATE_STATUS=result;
     const btn=$('#updateBtn');
     if(btn){btn.classList.toggle('hidden',!UPDATE_STATUS?.updateAvailable);btn.textContent=UPDATE_STATUS?.updateAvailable?`Update · ${UPDATE_STATUS.latestVersion}`:'Update'}
     if(CURRENT_VIEW==='system')renderSystemView();
     return UPDATE_STATUS;
-  }catch{return UPDATE_STATUS}
+  }catch{return epoch===HOST_SWITCH_EPOCH?UPDATE_STATUS:null}
 }
 
 async function openUpdate(){
   const s=await checkForUpdate(true);
   if(!s)return toast('Could not check for updates.','err');
   const available=!!s.updateAvailable;
-  const body=`<div class="kv"><div>Running</div><div class="mono">${esc(s.currentVersion||'unknown')}</div><div>Latest</div><div class="mono">${esc(s.latestVersion||'unknown')}</div><div>Checked</div><div>${s.checkedAt?new Date(s.checkedAt).toLocaleString():'—'}</div></div>${available?'<div class="callout info">The Agent will restart briefly. Server processes are not stopped.</div>':'<div class="callout info">This Agent is up to date.</div>'}`;
-  const foot=`<button class="btn" ${uiAction('closeModal')}>Close</button>${available?`<button class="btn primary" ${uiAction('startSelfUpdate')}>Install update</button>`:''}`;
+  const body=`<div class="kv"><div data-gsc-i18n="Running">Running</div><div class="mono">${esc(s.currentVersion||'unknown')}</div><div data-gsc-i18n="Latest">Latest</div><div class="mono">${esc(s.latestVersion||'unknown')}</div><div data-gsc-i18n="Checked">Checked</div><div>${s.checkedAt?new Date(s.checkedAt).toLocaleString():'—'}</div></div>${available?'<div class="callout info" data-gsc-i18n="The Agent will restart briefly. Server processes are not stopped.">The Agent will restart briefly. Server processes are not stopped.</div>':'<div class="callout info" data-gsc-i18n="This Agent is up to date.">This Agent is up to date.</div>'}`;
+  const foot=`<button class="btn" ${uiAction('closeModal')} data-gsc-i18n="Close">Close</button>${available?`<button class="btn primary" ${uiAction('startSelfUpdate')} data-gsc-i18n="Install update">Install update</button>`:''}`;
   openModal('GameServerControl update',body,foot);
 }
 
 async function startSelfUpdate(){
   if(!confirm('Update GameServerControl now? The control panel will be unavailable briefly while the Agent restarts. Game servers keep running.'))return;
-  $('#modalBody').innerHTML='<div class="empty"><b>Starting updater…</b><br><br>The page will reconnect automatically after the Agent restarts.</div>';$('#modalFoot').innerHTML='';
+  $('#modalBody').innerHTML='<div class="empty"><b data-gsc-i18n="Starting updater…">Starting updater…</b><br><br>The page will reconnect automatically after the Agent restarts.</div>';$('#modalFoot').innerHTML='';
   try{await api('/api/update',{method:'POST'});await waitForAgentRestart()}catch(e){toast('Update failed to start: '+e.message,'err');closeModal()}
 }
 
@@ -517,8 +648,8 @@ async function waitForAgentRestart(){
       }
     }catch{sawOffline=true}
   }
-  $('#modalBody').innerHTML='<div class="callout">The Agent did not return within three minutes. Check the service and installer log.</div>';
-  $('#modalFoot').innerHTML=`<button class="btn" ${uiAction('reloadPage')}>Reload</button>`;
+  $('#modalBody').innerHTML='<div class="callout" data-gsc-i18n="The Agent did not return within three minutes. Check the service and installer log.">The Agent did not return within three minutes. Check the service and installer log.</div>';
+  $('#modalFoot').innerHTML=`<button class="btn" ${uiAction('reloadPage')} data-gsc-i18n="Reload">Reload</button>`;
 }
 
 function reloadPage(){location.reload()}
@@ -565,19 +696,19 @@ function profileOwnsNetwork(g){return g?.key==='valheim'||g?.key==='dragonwilds'
 function openNetwork(id){
   const d=SERVERS.find(x=>x.id===id);if(!d)return;const g=profileFor(d),ports=effectiveNetworkPorts(d),isVm=d.hostingMode==='Vm',isExe=/\.exe$/i.test(d.guestExePath||''),looksWindows=/^[A-Za-z]:[\\/]/.test(d.guestExePath||''),managed=profileOwnsNetwork(g);
   const fw=isVm
-    ? '<div class="callout info">Hyper-V has its own guest network stack. GameServerControl does not change the guest Windows Firewall from the host.</div>'
+    ? '<div class="callout info" data-gsc-i18n="Hyper-V has its own guest network stack. GameServerControl does not change the guest Windows Firewall from the host.">Hyper-V has its own guest network stack. GameServerControl does not change the guest Windows Firewall from the host.</div>'
     : !looksWindows
-      ? '<div class="callout info">Automatic program firewall rules apply to Windows BareMetal servers only.</div>'
+      ? '<div class="callout info" data-gsc-i18n="Automatic program firewall rules apply to Windows BareMetal servers only.">Automatic program firewall rules apply to Windows BareMetal servers only.</div>'
       : isExe
-        ? `<div class="callout info"><b>Windows Firewall:</b> GameServerControl manages persistent inbound and outbound Allow rules for <span class="mono">${esc(d.guestExePath)}</span>. The ports below are currently used for collision detection, not firewall filtering.</div>`
-        : '<div class="callout info">This server launches through a script/JAR rather than an .exe, so a reliable Windows program rule cannot be created yet. Port reservations still prevent accidental conflicts.</div>';
+        ? `<div class="callout info"><b data-gsc-i18n="Windows Firewall:">Windows Firewall:</b> GameServerControl manages persistent inbound and outbound Allow rules for <span class="mono">${esc(d.guestExePath)}</span>. The ports below are currently used for collision detection, not firewall filtering.</div>`
+        : '<div class="callout info" data-gsc-i18n="This server launches through a script/JAR rather than an .exe, so a reliable Windows program rule cannot be created yet. Port reservations still prevent accidental conflicts.">This server launches through a script/JAR rather than an .exe, so a reliable Windows program rule cannot be created yet. Port reservations still prevent accidental conflicts.</div>';
   const managedHint=managed?`<div class="callout info"><b>${esc(g.label)} ports are profile-managed.</b> Change them in Configuration. GameServerControl will update the game launch arguments and these reservations together.</div>`:'';
   const defaults=!managed&&(g?.ports||[]).length?`<button class="btn" ${uiAction('resetNetworkDefaults',[id])}>Reset to ${esc(g.label)} defaults</button>`:'';
   const readOnly=managed?' readonly':'';
   const footer=managed
-    ? `<button class="btn" ${uiAction('closeModal')}>Close</button><button class="btn primary" ${uiActions([['closeModal',[]],['openConfig',[id]]])}>Edit Configuration</button>`
-    : `<button class="btn" ${uiAction('closeModal')}>Cancel</button><button class="btn primary" ${uiAction('saveNetwork',[id])}>Save network settings</button>`;
-  openModal('Network — '+d.name,`${fw}${managedHint}<div class="section">Reserved/listening ports</div><div class="field"><label>One port or range per line</label><textarea id="networkPorts" class="mono" style="min-height:180px"${readOnly}>${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: <span class="mono">UDP 2456-2457 Game</span> or <span class="mono">TCP 7777 Game/API</span>. BareMetal servers on this Agent may not reserve overlapping ports of the same protocol.</div></div>${defaults}<div class="section">Profile defaults</div><div class="tiny muted">${(g?.ports||[]).length?(g.ports.map(formatNetworkPort).map(esc).join('<br>')):'No curated port defaults are defined for this game yet.'}</div>`,footer,true)
+    ? `<button class="btn" ${uiAction('closeModal')} data-gsc-i18n="Close">Close</button><button class="btn primary" ${uiActions([['closeModal',[]],['openConfig',[id]]])} data-gsc-i18n="Edit Configuration">Edit Configuration</button>`
+    : `<button class="btn" ${uiAction('closeModal')} data-gsc-i18n="Cancel">Cancel</button><button class="btn primary" ${uiAction('saveNetwork',[id])} data-gsc-i18n="Save network settings">Save network settings</button>`;
+  openModal('Network — '+d.name,`${fw}${managedHint}<div class="section" data-gsc-i18n="Reserved/listening ports">Reserved/listening ports</div><div class="field"><label data-gsc-i18n="One port or range per line">One port or range per line</label><textarea id="networkPorts" class="mono" style="min-height:180px"${readOnly}>${esc(ports.map(formatNetworkPort).join('\n'))}</textarea><div class="help">Format: <span class="mono">UDP 2456-2457 Game</span> or <span class="mono">TCP 7777 Game/API</span>. BareMetal servers on this Agent may not reserve overlapping ports of the same protocol.</div></div>${defaults}<div class="section" data-gsc-i18n="Profile defaults">Profile defaults</div><div class="tiny muted">${(g?.ports||[]).length?(g.ports.map(formatNetworkPort).map(esc).join('<br>')):'No curated port defaults are defined for this game yet.'}</div>`,footer,true)
 }
 async function saveNetwork(id){
   const d=SERVERS.find(x=>x.id===id);if(!d)return;
@@ -631,14 +762,14 @@ function installNetworkUiHooks(){
         const isBedrock=g.key==='minecraft-bedrock';
         const box=document.createElement('div');
         box.className='formgrid';
-        box.innerHTML=`<div class="field"><label>Minecraft version</label><input id="cMinecraftVersion" placeholder="${isBedrock?'latest official stable':'latest stable (or e.g. 1.21.11)'}" maxlength="32" ${isBedrock?'disabled':''}><div class="help">Leave empty for the latest release; Paper requires a stable build.</div></div><div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65535" value="${isBedrock?'19132':'25565'}"></div>${isBedrock?'':`<div class="field"><label>Maximum RAM (MB)</label><input id="cMinecraftMemory" type="number" min="512" max="65536" step="256" value="4096"><div class="help">Compatible Java must be installed on the computer running the Agent.</div></div>`}<div class="field" style="grid-column:1/-1"><label><input id="cMinecraftLicense" type="checkbox"> I accept the ${isBedrock?'Minecraft Bedrock Dedicated Server license':'Minecraft Java EULA'} for this installation.</label><div class="help">Installation is disabled until you explicitly accept the official license terms.</div></div>`;
+        box.innerHTML=`<div class="field"><label data-gsc-i18n="Minecraft version">Minecraft version</label><input id="cMinecraftVersion" placeholder="${isBedrock?'latest official stable':'latest stable (or e.g. 1.21.11)'}" maxlength="32" ${isBedrock?'disabled':''}><div class="help" data-gsc-i18n="Leave empty for the latest release; Paper requires a stable build.">Leave empty for the latest release; Paper requires a stable build.</div></div><div class="field"><label data-gsc-i18n="Game port">Game port</label><input id="cGamePort" type="number" min="1024" max="65535" value="${isBedrock?'19132':'25565'}"></div>${isBedrock?'':`<div class="field"><label data-gsc-i18n="Maximum RAM (MB)">Maximum RAM (MB)</label><input id="cMinecraftMemory" type="number" min="512" max="65536" step="256" value="4096"><div class="help" data-gsc-i18n="Compatible Java must be installed on the computer running the Agent.">Compatible Java must be installed on the computer running the Agent.</div></div>`}<div class="field" style="grid-column:1/-1"><label><input id="cMinecraftLicense" type="checkbox"> I accept the ${isBedrock?'Minecraft Bedrock Dedicated Server license':'Minecraft Java EULA'} for this installation.</label><div class="help" data-gsc-i18n="Installation is disabled until you explicitly accept the official license terms.">Installation is disabled until you explicitly accept the official license terms.</div></div>`;
         body.appendChild(box);
       }else if(g?.key==='valheim'){
-        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65534" value="2456"><div class="help">Valheim reserves this UDP port and the next one (port+1).</div></div>';body.appendChild(box);
+        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label data-gsc-i18n="Game port">Game port</label><input id="cGamePort" type="number" min="1024" max="65534" value="2456"><div class="help" data-gsc-i18n="Valheim reserves this UDP port and the next one (port+1).">Valheim reserves this UDP port and the next one (port+1).</div></div>';body.appendChild(box);
       }else if(g?.key==='dragonwilds'){
-        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label>Game port</label><input id="cGamePort" type="number" min="1024" max="65535" value="7777"></div><div class="field"><label>Beacon port</label><input id="cBeaconPort" type="number" min="1024" max="65535" value="8888"></div>';body.appendChild(box);
+        const box=document.createElement('div');box.className='formgrid';box.innerHTML='<div class="field"><label data-gsc-i18n="Game port">Game port</label><input id="cGamePort" type="number" min="1024" max="65535" value="7777"></div><div class="field"><label data-gsc-i18n="Beacon port">Beacon port</label><input id="cBeaconPort" type="number" min="1024" max="65535" value="8888"></div>';body.appendChild(box);
       }else if(g?.ports?.length){
-        const box=document.createElement('div');box.className='callout info';box.innerHTML='<b>Default network ports:</b><br>'+g.ports.map(formatNetworkPort).map(esc).join('<br>')+'<br><span class="tiny muted">GameServerControl checks these against other BareMetal servers before registration.</span>';body.appendChild(box)
+        const box=document.createElement('div');box.className='callout info';box.innerHTML='<b data-gsc-i18n="Default network ports:">Default network ports:</b><br>'+g.ports.map(formatNetworkPort).map(esc).join('<br>')+'<br><span class="tiny muted" data-gsc-i18n="GameServerControl checks these against other BareMetal servers before registration.">GameServerControl checks these against other BareMetal servers before registration.</span>';body.appendChild(box)
       }
     };
     wrappedCreate.__networkWrapped=true;window.openCreateSettings=wrappedCreate;
@@ -649,7 +780,7 @@ function installNetworkUiHooks(){
       originalEdit(id);
       const d=SERVERS.find(x=>x.id===id),g=d?profileFor(d):null,sel=$('#eHosting');
       if(g?.caps?.hyperV===false&&sel){
-        sel.innerHTML='<option value="BareMetal">This machine (BareMetal)</option>';sel.value='BareMetal';syncEditVisibility();
+        sel.innerHTML='<option value="BareMetal" data-gsc-i18n="This machine (BareMetal)">This machine (BareMetal)</option>';sel.value='BareMetal';syncEditVisibility();
         if(d?.hostingMode==='Vm'){
           const body=$('#modalBody'),warn=document.createElement('div');warn.className='callout';warn.textContent=`${g.label} no longer supports Hyper-V. Move/reinstall this server on the Agent host and correct its paths before saving.`;body?.prepend(warn)
         }
@@ -697,6 +828,7 @@ function clearNotice(){const n=$('#noticeBar');if(n)n.classList.add('hidden');if
 function setNotice(msg,kind='info',persistent=false,title=null){
   const n=$('#noticeBar'),text=$('#noticeText'),head=$('#noticeTitle');if(!n||!text||!head)return;
   clearNotice();n.className='noticebar '+(kind||'info');text.textContent=msg||'';head.textContent=title||(kind==='err'?'Error':kind==='ok'?'Done':'Status');n.classList.remove('hidden');
+  globalThis.GSC_I18N?.set(head,title||(kind==='err'?'Error':kind==='ok'?'Done':'Status'));
   if(!persistent)GSCUX.noticeTimer=setTimeout(clearNotice,kind==='err'?9000:5000);
 }
 // The notice bar lives inside #app, so it is hidden while the login form is open.
@@ -713,7 +845,7 @@ boot=async function(){
   try{ACTIVE_HOST_ID=sessionStorage.getItem(HOST_KEY)||(window.GSC_CLOUD_MODE?'all':'local');await refreshManagedHosts()}catch(e){ACTIVE_HOST_ID=window.GSC_CLOUD_MODE?'all':'local';setNotice('Host list unavailable: '+e.message,'err',true)}
   if(ACTIVE_HOST_ID!=='all')try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
   await Promise.allSettled([loadServers(),refreshJobs(false)]);
-  if(ACTIVE_HOST_ID!=='all')await checkForUpdate(false);
+  if(ACTIVE_HOST_ID!=='all')void checkForUpdate(false);
   // The later boot override is the active entry point; preserve legacy Settings links.
   if(location.hash==='#settings')history.replaceState(null,'','#system');
   if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
@@ -806,7 +938,7 @@ function quickTile(icon,title,desc,actionName,args=[]){return `<button class="ma
 
 renderServers=function(){
   const root=$('#servers');if(!root)return;
-  if(!SERVERS.length){root.innerHTML=`<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')}>Create your first server</button> <button class="btn" ${uiAction('openDiscover')}>Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')}>Add existing server</button></div>`;return}
+  if(!SERVERS.length){root.innerHTML=`<div class="empty">No servers registered yet.<br><br><button class="btn primary" ${uiAction('openCreate')} data-gsc-i18n="Create your first server">Create your first server</button> <button class="btn" ${uiAction('openDiscover')} data-gsc-i18n="Discover installed servers">Discover installed servers</button> <button class="btn" ${uiAction('openAddExisting')} data-gsc-i18n="Add existing server">Add existing server</button></div>`;return}
   if(!GSCUX.selected||!SERVERS.some(x=>x.id===GSCUX.selected))GSCUX.selected=SERVERS[0].id;
   const rows=SERVERS.map(d=>{const s=STATUS[d.id]||{},m=serverMeta(d),state=actionVisual(d.id,s.processState),selected=d.id===GSCUX.selected;return `<button class="server-row ${selected?'selected':''}" ${uiAction('selectServer',[d.id])}><span class="server-row-icon">${m.icon}</span><span class="server-row-main"><span class="server-row-name">${esc(d.name)}</span><span class="server-row-meta">${esc(m.label)} · ${s.pidInGuest?'PID '+s.pidInGuest:(d.hostingMode==='Vm'?'Hyper-V':'This machine')}</span></span><span class="server-row-state ${stateClass(state)}">${esc(state)}</span></button>`}).join('');
   root.innerHTML=`<div class="server-control-layout"><aside class="server-list">${rows}</aside><div id="serverControlPanel"></div></div>`;
@@ -821,7 +953,7 @@ window.renderServerControlPanel=function(){
   const configTile=caps.config?quickTile('⚙','Configuration','Game-specific settings','openConfig',[d.id]):'';
   const modsTile=caps.mods?quickTile('◇','Mods','Browse, install and update','openMods',[d.id]):'';
   const network=(typeof effectiveNetworkPorts==='function'?effectiveNetworkPorts(d):d.networkPorts||[]).map(formatNetworkPort).join(', ');
-  host.innerHTML=`<div class="server-detail-panel"><div class="server-detail-head"><div class="server-detail-icon">${m.icon}</div><div class="grow"><div class="server-detail-title">${esc(d.name)}</div><div class="server-detail-sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V virtual machine':'This machine'}</div></div><div class="server-state-large ${stateClass(display)}">${esc(display)}</div></div><div class="server-detail-body">${op}${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="control-buttons"><button class="btn primary control-btn" ${up||busy?'disabled':''} ${uiAction('action',[d.id,'start'])}>Start</button><button class="btn danger control-btn stop" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'stop'])}>Stop</button><button class="btn control-btn restart" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'restart'])}>Restart</button><button class="btn control-btn" ${up||busy||!d.steamAppId?'disabled':''} title="${up?'Stop the server before updating':!d.steamAppId?'No Steam App ID configured':'Update and validate game files'}" ${uiAction('action',[d.id,'update'])}>Update</button></div><div class="detail-metrics"><div class="metric-box"><span>PID</span><b>${s.pidInGuest??'—'}</b></div><div class="metric-box"><span>CPU</span><b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></div><div class="metric-box"><span>RAM</span><b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></div><div class="metric-box"><span>Last backup</span><b>${s.lastBackupAt?new Date(s.lastBackupAt).toLocaleString():'—'}</b></div></div><div class="quick-panel">${consoleTile}${configTile}${modsTile}${quickTile('▣','Backups','Create and restore saves','openBackups',[d.id])}${quickTile('◎','Network','Ports and Windows Firewall','openNetwork',[d.id])}${quickTile('⋯','More settings','Schedule, update, edit, delete…','openManage',[d.id])}</div><div class="server-path"><div><b>Folder:</b> <span class="mono">${esc(d.guestWorkingDir||'')}</span></div>${network?`<div style="margin-top:4px"><b>Ports:</b> ${esc(network)}</div>`:''}</div></div></div>`;
+  host.innerHTML=`<div class="server-detail-panel"><div class="server-detail-head"><div class="server-detail-icon">${m.icon}</div><div class="grow"><div class="server-detail-title">${esc(d.name)}</div><div class="server-detail-sub">${esc(m.label)} · ${d.hostingMode==='Vm'?'Hyper-V virtual machine':'This machine'}</div></div><div class="server-state-large ${stateClass(display)}">${esc(display)}</div></div><div class="server-detail-body">${op}${s.lastError?`<div class="callout">${esc(s.lastError)}</div>`:''}<div class="control-buttons"><button class="btn primary control-btn" ${up||busy?'disabled':''} ${uiAction('action',[d.id,'start'])} data-gsc-i18n="Start">Start</button><button class="btn danger control-btn stop" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'stop'])} data-gsc-i18n="Stop">Stop</button><button class="btn control-btn restart" ${!up||busy?'disabled':''} ${uiAction('action',[d.id,'restart'])} data-gsc-i18n="Restart">Restart</button><button class="btn control-btn" ${up||busy||!d.steamAppId?'disabled':''} title="${up?'Stop the server before updating':!d.steamAppId?'No Steam App ID configured':'Update and validate game files'}" ${uiAction('action',[d.id,'update'])} data-gsc-i18n="Update">Update</button></div><div class="detail-metrics"><div class="metric-box"><span>PID</span><b>${s.pidInGuest??'—'}</b></div><div class="metric-box"><span>CPU</span><b>${s.cpuPercent!=null?Number(s.cpuPercent).toFixed(1)+'%':'—'}</b></div><div class="metric-box"><span>RAM</span><b>${s.memoryMB!=null?s.memoryMB+' MB':'—'}</b></div><div class="metric-box"><span data-gsc-i18n="Last backup">Last backup</span><b>${s.lastBackupAt?new Date(s.lastBackupAt).toLocaleString():'—'}</b></div></div><div class="quick-panel">${consoleTile}${configTile}${modsTile}${quickTile('▣','Backups','Create and restore saves','openBackups',[d.id])}${quickTile('◎','Network','Ports and Windows Firewall','openNetwork',[d.id])}${quickTile('⋯','More settings','Schedule, update, edit, delete…','openManage',[d.id])}</div><div class="server-path"><div><b data-gsc-i18n="Folder:">Folder:</b> <span class="mono">${esc(d.guestWorkingDir||'')}</span></div>${network?`<div style="margin-top:4px"><b data-gsc-i18n="Ports:">Ports:</b> ${esc(network)}</div>`:''}</div></div></div>`;
 };
 
 action=async function(id,a){
@@ -837,10 +969,13 @@ action=async function(id,a){
   }catch(e){GSCUX.actions[id]={kind:a,label:`${a} failed`,state:STATUS[id]?.processState||'Unknown',error:true,detail:e.message};renderServers();setNotice(`${a} failed: ${e.message}`,'err',false);setTimeout(()=>{delete GSCUX.actions[id];renderServers()},5000)}
 };
 
-function setWorkspaceHeading(title, context='CONTROL PANEL / OVERVIEW'){
+function setWorkspaceHeading(title, context='CONTROL PANEL / OVERVIEW',translateTitle=true){
   const heading=$('#pageHeading'), eyebrow=$('#pageEyebrow');
-  if(heading&&heading.textContent!==title)heading.textContent=title;
-  if(eyebrow&&eyebrow.textContent!==context)eyebrow.textContent=context;
+  const i18n=globalThis.GSC_I18N;
+  if(i18n&&translateTitle)i18n.set(heading,title);
+  else if(heading){heading.removeAttribute?.('data-gsc-i18n');if(heading.textContent!==title)heading.textContent=title}
+  if(i18n)i18n.set(eyebrow,context);
+  else if(eyebrow&&eyebrow.textContent!==context)eyebrow.textContent=context;
 }
 function closeMobileNavigation(){
   $('#app')?.classList.remove('nav-open');
@@ -866,7 +1001,10 @@ function bindStaticUi(){
   });
   bind('#hostSwitch','change',()=>selectHost($('#hostSwitch')?.value||'local'));
   bind('#manageHostsBtn','click',openManagedHosts);
-  bind('#loginConnectBtn','click',()=>login());
+  bind('#loginForm','submit',event=>{event.preventDefault();void login()});
+  bind('#loginUrl','input',updateLoginTarget);
+  bind('#loginToken','input',()=>showLoginError());
+  bind('#cloudRetryBtn','click',()=>location.reload());
   bind('#updateBtn','click',()=>openUpdate());
   bind('#checkUpdateBtn','click',()=>openUpdate());
   bind('#createServerBtn','click',()=>openAddServerMenu());

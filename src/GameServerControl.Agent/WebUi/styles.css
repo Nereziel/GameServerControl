@@ -416,19 +416,48 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 }
 
 
-/* Connection screen */
-.login{width:min(460px,calc(100% - 28px));margin:clamp(52px,10vh,132px) auto;padding:27px 29px 25px;border:1px solid #354862;background:linear-gradient(155deg,#1a2739,#111b2a 72%);border-radius:17px;box-shadow:0 22px 75px rgba(0,0,0,.38)}
-.login-brand{display:flex;align-items:center;gap:11px;margin:0 0 27px;font-size:16px;font-weight:790;letter-spacing:-.4px}
-.login-eyebrow{font-size:10px;font-weight:800;letter-spacing:1.6px;color:#97accc;margin:0 0 7px}
-.login h1{font-size:24px;line-height:1.2;letter-spacing:-.55px;margin:0 0 7px}
-.login p{margin:0 0 22px;font-size:12px;line-height:1.6}
-.login .field{margin:13px 0}
-.login .field label{margin-bottom:6px}
-.login .field input{width:100%;height:41px}
-.login-submit{width:100%;min-height:42px;margin-top:14px;font-size:13px}
-.login-footnote{text-align:center;color:#788ea9;font-size:10px;margin-top:17px}
-@media(max-width:600px){.login{padding:21px 19px;margin-top:8vh}.login h1{font-size:22px}}
-
+/* Connection screen: scoped to the login shell, no external assets. */
+.login{width:100%;min-height:100vh;min-height:100dvh;margin:0;padding:clamp(18px,5vw,64px);display:grid;place-items:center;border:0;border-radius:0;background:radial-gradient(ellipse at 24% 22%,#1b2b49 0,transparent 50%),var(--bg);box-shadow:none}
+.login-shell{width:min(900px,100%);display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.12fr);border:1px solid #34465e;border-radius:22px;overflow:hidden;background:#111b2a;box-shadow:0 28px 85px #0006}
+.login-intro{position:relative;display:flex;flex-direction:column;justify-content:space-between;min-width:0;min-height:540px;padding:36px;background:linear-gradient(145deg,#1c2d4c,#142338 60%,#111b2a);overflow:hidden;border-right:1px solid #30425d}
+.login-brand{display:flex;align-items:center;gap:11px;font-size:16px;font-weight:790;letter-spacing:-.4px;position:relative;z-index:1}
+.login-intro-copy{position:relative;z-index:1;margin:38px 0 20px}
+.login-eyebrow{font-size:10px;font-weight:800;letter-spacing:1.5px;color:#a4b8d6;margin:0 0 12px}
+.login-intro h2{font-size:clamp(27px,3vw,38px);line-height:1.14;letter-spacing:-1.5px;margin:0 0 16px;font-weight:750}
+.login-intro p{max-width:28ch;color:#aabbd2;font-size:14px;margin:0;line-height:1.7}
+.login-system-mark{position:relative;width:100%;max-width:235px;margin:0 auto 28px;display:grid;gap:9px;transform:rotate(-7deg);opacity:.8}
+.login-system-mark span{height:30px;border:1px solid #536c99;border-radius:7px;background:linear-gradient(90deg,#7796ff30,#7796ff08);box-shadow:0 7px 20px #09132570;position:relative}
+.login-system-mark span::before{content:"";position:absolute;left:13px;top:10px;width:7px;height:7px;border-radius:50%;background:#9bb0ff}
+.login-system-mark span::after{content:"";position:absolute;right:14px;top:12px;width:35%;height:3px;border-radius:3px;background:#7796ff45}
+.login-system-mark i{position:absolute;right:-12px;bottom:9px;width:2px;height:86px;background:#7796ff30}
+.login-intro-footer{font-size:11px;color:#9badc7}
+.login-panel{padding:clamp(28px,4vw,46px);display:flex;flex-direction:column;justify-content:center;min-width:0}
+.login h1{font-size:32px;line-height:1.18;letter-spacing:-1px;margin:0 0 9px}
+.login-description{color:#adbed5;font-size:14px;line-height:1.6;margin:0 0 25px}
+.login-loading{display:flex;align-items:center;gap:10px;color:#b7c8df;min-height:60px}
+.login-target{display:flex;align-items:center;gap:12px;background:#18263a;border:1px solid #314762;border-radius:11px;padding:12px 14px;margin:0 0 21px}
+.login-target-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:#7796ff20;color:#a9bdff;font-size:18px;flex:none}
+.login-target>div{min-width:0;display:grid;gap:2px}
+.login-target>div>span{color:#a1b2cc;font-size:11px}
+.login-target strong{font-size:13px;overflow-wrap:anywhere}
+.login .field{margin:0 0 16px}
+.login .field label{font-size:12px;text-transform:none;letter-spacing:0;color:#dce6f5;margin-bottom:7px}
+.login .field input{width:100%;height:46px;background:#0c1522;border-color:#3d506b;border-radius:9px;font-size:14px}
+.login .field .help{color:#9eafc9;font-size:11px;margin-top:7px}
+.login-advanced{margin:0 0 16px;border-bottom:1px solid #2a3b52;padding:0 0 12px}
+.login-advanced summary{cursor:pointer;color:#a9bdff;font-size:12px;font-weight:650;padding:3px 0}
+.login-advanced .field{margin:12px 0 0}
+.login-warning{font-size:12px;color:#f3bc63;line-height:1.5;margin:9px 0 0}
+.login-remember{display:flex;align-items:flex-start;gap:10px;margin:0 0 16px;cursor:pointer;color:#e1eaf8}
+.login-remember input{width:17px;height:17px;flex:0 0 17px;margin:3px 0 0;accent-color:var(--accent)}
+.login-remember strong,.login-remember small{display:block}
+.login-remember small{font-size:11px;color:#a2b4ce;line-height:1.5;margin-top:2px}
+.login-error{color:#ffd4d9;background:#452431;border:1px solid #8c485b;border-radius:9px;padding:10px 12px;font-size:12px;line-height:1.5;margin:0 0 13px;overflow-wrap:anywhere}
+.login-submit{width:100%;min-height:46px;font-size:14px;font-weight:750;border-radius:9px;margin:0}
+.login-footnote{text-align:center;color:#9aacC6;font-size:11px;margin-top:18px}
+.login .password-eye{right:7px;min-width:34px}
+@media(max-width:700px){.login{padding:18px}.login-shell{grid-template-columns:1fr;max-width:460px;border-radius:16px}.login-intro{min-height:0;padding:20px 24px;border-right:0;border-bottom:1px solid #30425d}.login-intro-copy,.login-system-mark,.login-intro-footer{display:none}.login-panel{padding:26px 24px}.login h1{font-size:28px}}
+@media(max-width:380px){.login{padding:10px}.login-intro,.login-panel{padding:20px}}
 
 /* Multi-Agent physical host selector and grouped dashboard */
 .sidebar-host-picker{padding:0 6px 4px;display:grid;gap:7px}
@@ -550,3 +579,6 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
   .sw-page-intro h2{font-size:15px}
   .sw-update-terminal{min-height:180px;max-height:42vh}
 }
+
+/* Shared browser language preference; no changes to game or Agent configuration. */
+.gsc-locale-control{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:11px;font-weight:650;margin:0 0 16px}.gsc-locale-control select{width:auto;min-width:65px;padding:5px 8px;color:var(--text);background:var(--surface);border:1px solid var(--line);border-radius:7px}.login-panel>.gsc-locale-control{align-self:flex-end;margin-bottom:22px}.app-sidebar>.gsc-locale-control{margin:8px 6px 12px}.gsc-locale-control select:focus-visible{outline-offset:2px}

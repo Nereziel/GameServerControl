@@ -101,18 +101,14 @@ public static class OperationalEndpoints
         api.MapPut("/servers/{id}/notifications", (string id, DiscordNotificationUpdate input,
             ServerRegistry reg, ServerStore store) =>
         {
-            var def = reg.Get(id);
-            if (def is null) return Results.NotFound();
-            var url = input.Disable ? null : string.IsNullOrWhiteSpace(input.WebhookUrl)
-                ? def.DiscordWebhookUrl : input.WebhookUrl.Trim();
-            if (!string.IsNullOrWhiteSpace(url) && !DiscordNotifier.IsValidWebhookUrl(url))
-                return Results.BadRequest(new { error = "Only valid Discord HTTPS webhook URLs are allowed." });
-            var updated = store.Update(id, def with {
-                DiscordWebhookUrl = url,
-                DiscordAlertsOnly = input.AlertsOnly ?? def.DiscordAlertsOnly
-            });
-            return Results.Ok(new { configured = !string.IsNullOrWhiteSpace(updated.DiscordWebhookUrl),
-                alertsOnly = updated.DiscordAlertsOnly });
+            try
+            {
+                var updated = store.SetNotifications(id, input.WebhookUrl, input.AlertsOnly, input.Disable);
+                return Results.Ok(new { configured = !string.IsNullOrWhiteSpace(updated.DiscordWebhookUrl),
+                    alertsOnly = updated.DiscordAlertsOnly });
+            }
+            catch (KeyNotFoundException) { return Results.NotFound(); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         }).RequireAuthorization("admin");
 
         api.MapPost("/servers/{id}/notifications/test", async (string id,
