@@ -260,8 +260,9 @@ for (const required of [
   'const showLoginToast=toast;',
   "if(!$('#login')?.classList.contains('hidden'))return showLoginToast(msg,kind);",
   'const timeout=setTimeout(()=>controller.abort(),12000);',
-  "button.textContent='Connecting…'",
-  "button.textContent='Connect'"
+  "button.textContent=pending?'Signing in…':'Sign in'",
+  "bind('#loginForm','submit'",
+  "showLoginError(e.message"
 ]) {
   if (!coreSource.includes(required)) {
     throw new Error(`Web UI login feedback regression: missing ${required}`);
@@ -306,6 +307,7 @@ try {
     }
   }
 
+  runNode(path.resolve('scripts/test-login-flow.mjs'), 'Login form, identity and session regression');
   runNode(path.resolve('scripts/test-game-picker-focus.mjs'), 'Create server game picker focus regression');
   runNode(path.resolve('scripts/test-install-job-resume-ui.mjs'), 'Install history and cancellation UI');
   runNode(path.resolve('scripts/test-valheim-world-rules-ui.mjs'), 'Valheim world rules choice reload regression');

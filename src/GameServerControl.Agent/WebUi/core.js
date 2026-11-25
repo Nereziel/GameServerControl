@@ -318,9 +318,11 @@ function openLocalBrowserKeyDb(){
   return new Promise((resolve,reject)=>{
     if(!window.indexedDB||!crypto?.subtle)return reject(new Error('Secure browser storage unavailable.'));
     const req=indexedDB.open('gsc-local-browser-v1',1);
+    const timer=setTimeout(()=>reject(new Error('Browser key storage timed out.')),3000);
+    req.onblocked=()=>{clearTimeout(timer);reject(new Error('Browser key storage is blocked.'))};
     req.onupgradeneeded=()=>{if(!req.result.objectStoreNames.contains('keys'))req.result.createObjectStore('keys')};
-    req.onsuccess=()=>resolve(req.result);
-    req.onerror=()=>reject(req.error||new Error('Could not access browser key storage.'));
+    req.onsuccess=()=>{clearTimeout(timer);resolve(req.result)};
+    req.onerror=()=>{clearTimeout(timer);reject(req.error||new Error('Could not access browser key storage.'))};
   });
 }
 async function localBrowserKeyRead(){
@@ -361,33 +363,106 @@ async function rememberLocalBrowser(){
 }
 
 let LOGIN_PENDING=false;
-async function login(){
-  if(LOGIN_PENDING)return;
-  const url=$('#loginUrl').value.trim().replace(/\/+$/,'');const token=$('#loginToken').value.trim();
-  if(!url||!token)return toast('Agent URL and token are required.','err');
-  const button=$('#loginConnectBtn');
-  LOGIN_PENDING=true;
-  if(button){button.disabled=true;button.textContent='Connecting…'}
-  CFG={url,token};
+function normalizeLoginUrl(value){
+  const url=new URL(value.trim()||location.origin);
+  if(!['http:','https:'].includes(url.protocol)||url.username||url.password||url.search||url.hash)
+    throw new Error('Enter a valid HTTP or HTTPS Agent URL without credentials, query or fragment.');
+  if(location.protocol==='https:'&&url.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname))
+    throw new Error('An HTTPS dashboard cannot connect to an insecure HTTP Agent. Use HTTPS instead.');
+  return url.href.replace(/\/+$/,'');
+}
+function updateLoginTarget(){
+  const input=$('#loginUrl'),target=$('#loginTarget'),remember=$('#rememberBrowserField');
+  let local=false,httpWarning=false;
+  try{
+    const address=normalizeLoginUrl(input.value);
+    const url=new URL(address);
+    target.textContent=address;
+    local=address===location.origin&&isLocalBrowserOrigin()&&!window.GSC_CLOUD_MODE;
+    httpWarning=url.protocol==='http:'&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname);
+  }catch{target.textContent='Enter a valid Agent URL';}
+  remember.classList.toggle('hidden',!local);
+  if(!local)$('#loginRememberBrowser').checked=false;
+  $('#loginTransportWarning').classList.toggle('hidden',!httpWarning);
+}
+function showLoginError(message=''){
+  const error=$('#loginError');error.textContent=message;
+  error.classList.toggle('hidden',!message);
+}
+function showLoginForm(message=''){
+  $('#loginLoading').classList.add('hidden');
+  $('#loginForm').classList.remove('hidden');
+  updateLoginTarget();
+  showLoginError(message);
+}
+function setLoginPending(pending){
+  LOGIN_PENDING=pending;
+  const form=$('#loginForm'),button=$('#loginConnectBtn');
+  form.setAttribute('aria-busy',String(pending));
+  for(const input of form.querySelectorAll('input,button'))input.disabled=pending;
+  button.textContent=pending?'Signing in…':'Sign in';
+}
+async function verifyLoginIdentity(connection,signal){
+  // No redirect may forward a bearer to a different endpoint. Authenticate once,
+  // rather than fetching health followed by a second identity request.
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),12000);
+  const cancel=()=>controller.abort();
+  if(signal?.aborted)cancel();
+  else signal?.addEventListener('abort',cancel,{once:true});
   try{
-    await api('/api/health',{signal:controller.signal});
-    clearTimeout(timeout);
-    if(isLocalBrowserOrigin()&&$('#loginRememberBrowser')?.checked){
-      try{await rememberLocalBrowser()}
-      catch(e){toast('Could not remember this browser: '+e.message,'err')}
-    }
-    sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
-    await boot();
+    const response=await fetch(connection.url+'/api/auth/me',{
+      headers:{Authorization:'Bearer '+connection.token},cache:'no-store',redirect:'error',signal:controller.signal
+    });
+    if(response.status===401||response.status===403)throw new Error('The API token was rejected. Check the token and Agent address.');
+    if(response.status===429)throw new Error('Too many attempts. Wait a moment before trying again.');
+    if(!response.ok)throw new Error('The Agent could not sign you in. Check the service status and try again.');
+    let identity;
+    try{identity=await response.json()}catch{throw new Error('This address did not return a valid Agent identity.')}
+    if(!identity||!['admin','readonly'].includes(String(identity.role).toLowerCase()))
+      throw new Error('This address did not return a valid Agent identity.');
+    return identity;
+  }catch(e){
+    if(e.name==='AbortError')throw new Error('Connection timed out. Check the Agent address and service status.');
+    if(e instanceof TypeError)throw new Error('Cannot reach the Agent. Check the address, network and HTTPS settings.');
+    throw e;
+  }finally{
+    clearTimeout(timeout);signal?.removeEventListener('abort',cancel);
+  }
+}
+function persistLoginConnection(connection){
+  CFG=connection;
+  try{sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG))}catch{}
+}
+function clearLoginConnection(){
+  CFG={url:'',token:''};
+  try{sessionStorage.removeItem(CFG_KEY)}catch{}
+}
+async function login(){
+  if(LOGIN_PENDING)return;
+  const token=$('#loginToken').value.trim();
+  let url;
+  showLoginError();
+  try{url=normalizeLoginUrl($('#loginUrl').value)}catch(e){$('#loginAdvanced').open=true;showLoginError(e.message);$('#loginUrl').focus();return}
+  if(!token){showLoginError('Enter your API token.');$('#loginToken').focus();return}
+  const remember=url===location.origin&&isLocalBrowserOrigin()&&$('#loginRememberBrowser').checked;
+  setLoginPending(true);
+  let rememberWarning=false;
+  try{
+    const connection={url,token};
+    const identity=await verifyLoginIdentity(connection);
+    persistLoginConnection(connection);
+    if(remember&&String(identity.role).toLowerCase()==='admin'){
+      try{await rememberLocalBrowser()}catch{rememberWarning=true}
+    }else if(remember){rememberWarning=true}
+    const tokenInput=$('#loginToken');tokenInput.type='password';tokenInput.value='';
+    await boot(identity);
+    if(rememberWarning)toast('Signed in, but this browser could not be remembered. Local Admin access is required.','err');
     if(new URLSearchParams(location.search).has("manageTokens"))openTokens();
   }catch(e){
-    toast(e.name==='AbortError'?'Connection timed out. Check the Agent URL and service status.':'Connection failed: '+e.message,'err');
-  }finally{
-    clearTimeout(timeout);
-    LOGIN_PENDING=false;
-    if(button){button.disabled=false;button.textContent='Connect'}
-  }
+    clearLoginConnection();
+    showLoginError(e.message||'Sign-in failed. Try again.');
+  }finally{setLoginPending(false)}
 }
 async function logout(){
   if(isLocalBrowserOrigin()){
@@ -398,7 +473,7 @@ async function logout(){
     }catch{}
     try{await localBrowserKeyDelete()}catch{}
   }
-  sessionStorage.removeItem(CFG_KEY);
+  clearLoginConnection();
   location.reload();
 }
 
@@ -421,12 +496,14 @@ function isLocalBrowserOrigin(){
 
 async function restoreBrowserLogin(){
   if(!isLocalBrowserOrigin()||window.GSC_CLOUD_MODE)return false;
+  const controller=new AbortController();
+  const timeout=setTimeout(()=>controller.abort(),12000);
   try{
     const stored=await localBrowserKeyRead();
     if(!stored?.id||!stored.privateKey)return false;
     const headers={'Content-Type':'application/json'};
     const challengeResponse=await fetch('/auth/browser-key/challenge',{method:'POST',
-      cache:'no-store',headers,body:JSON.stringify({id:stored.id})});
+      cache:'no-store',headers,signal:controller.signal,body:JSON.stringify({id:stored.id})});
     if(challengeResponse.status===204){await localBrowserKeyDelete();return false}
     if(!challengeResponse.ok)return false;
     const {challenge}=await challengeResponse.json();
@@ -435,30 +512,59 @@ async function restoreBrowserLogin(){
     const signature=localBrowserBase64(await crypto.subtle.sign(
       {name:'ECDSA',hash:'SHA-256'},stored.privateKey,payload));
     const exchange=await fetch('/auth/browser-key/redeem',{method:'POST',cache:'no-store',
-      headers,body:JSON.stringify({id:stored.id,challenge,signature})});
+      headers,signal:controller.signal,body:JSON.stringify({id:stored.id,challenge,signature})});
     if(!exchange.ok)return false;
     const result=await exchange.json();
     if(typeof result.token!=='string'||!result.token)return false;
-    CFG={url:location.origin,token:result.token};
-    sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));
-    await api('/api/health');
-    await boot();
+    const connection={url:location.origin,token:result.token};
+    const identity=await verifyLoginIdentity(connection,controller.signal);
+    persistLoginConnection(connection);
+    await boot(identity);
     return true;
-  }catch{return false}
+  }catch{clearLoginConnection();return false}
+  finally{clearTimeout(timeout)}
 }
 
 async function init(){
   try{localStorage.removeItem(CFG_KEY)}catch{}
-  const rememberField=$('#rememberBrowserField');
-  if(rememberField)rememberField.classList.toggle('hidden',!isLocalBrowserOrigin()||!!window.GSC_CLOUD_MODE);
   const params=new URLSearchParams(location.search);
   const token=params.get('token'),url=params.get('url');
-  if(token){CFG={url:(url||location.origin).replace(/\/+$/,''),token};sessionStorage.setItem(CFG_KEY,JSON.stringify(CFG));history.replaceState({},'',location.pathname+location.hash)}
-  else{try{CFG=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')||{url:'',token:''}}catch{CFG={url:'',token:''}}}
-  if(CFG.url&&CFG.token){try{await api('/api/health');await boot();if(params.has("manageTokens"))openTokens();return}catch{sessionStorage.removeItem(CFG_KEY)}}
+  // Scrub legacy deep-link credentials before any request or persistence.
+  if(token)history.replaceState({},'',location.pathname+location.hash);
+  if(window.GSC_CLOUD_MODE){
+    $('#loginHeading').textContent='Cloudflare Access';
+    $('#loginDescription').textContent='Opening your protected remote workspace.';
+    $('#loginFootnote').textContent='Authentication is managed by Cloudflare Access.';
+    try{
+      const connection={url:location.origin,token:'cloud-gateway'};
+      const identity=await verifyLoginIdentity(connection);
+      persistLoginConnection(connection);
+      await boot(identity);
+      return;
+    }catch{
+      clearLoginConnection();
+      $('#loginLoading').classList.add('hidden');
+      $('#cloudLoginState').classList.remove('hidden');
+      return;
+    }
+  }
+  let previous=null;
+  if(token){previous={url:url||location.origin,token}}
+  else{try{previous=JSON.parse(sessionStorage.getItem(CFG_KEY)||'null')}catch{}}
+  let message='';
+  if(previous?.url&&previous?.token){
+    try{
+      const connection={url:normalizeLoginUrl(previous.url),token:previous.token};
+      const identity=await verifyLoginIdentity(connection);
+      persistLoginConnection(connection);
+      await boot(identity);
+      if(params.has("manageTokens"))openTokens();
+      return;
+    }catch(e){message=e.message;clearLoginConnection()}
+  }
   if(await restoreBrowserLogin()){if(params.has("manageTokens"))openTokens();return}
-  $('#login').classList.remove('hidden');
   $('#loginUrl').value=location.origin;
+  showLoginForm(message);
 }
 window.addEventListener('DOMContentLoaded',init);
 
@@ -713,7 +819,7 @@ boot=async function(){
   try{ACTIVE_HOST_ID=sessionStorage.getItem(HOST_KEY)||(window.GSC_CLOUD_MODE?'all':'local');await refreshManagedHosts()}catch(e){ACTIVE_HOST_ID=window.GSC_CLOUD_MODE?'all':'local';setNotice('Host list unavailable: '+e.message,'err',true)}
   if(ACTIVE_HOST_ID!=='all')try{await loadProfiles()}catch(e){setNotice('Game profiles failed: '+e.message,'err',true)}
   await Promise.allSettled([loadServers(),refreshJobs(false)]);
-  if(ACTIVE_HOST_ID!=='all')await checkForUpdate(false);
+  if(ACTIVE_HOST_ID!=='all')void checkForUpdate(false);
   // The later boot override is the active entry point; preserve legacy Settings links.
   if(location.hash==='#settings')history.replaceState(null,'','#system');
   if(location.hash==='#system'||location.hash==='#installs')showView(location.hash.slice(1));
@@ -866,7 +972,10 @@ function bindStaticUi(){
   });
   bind('#hostSwitch','change',()=>selectHost($('#hostSwitch')?.value||'local'));
   bind('#manageHostsBtn','click',openManagedHosts);
-  bind('#loginConnectBtn','click',()=>login());
+  bind('#loginForm','submit',event=>{event.preventDefault();void login()});
+  bind('#loginUrl','input',updateLoginTarget);
+  bind('#loginToken','input',()=>showLoginError());
+  bind('#cloudRetryBtn','click',()=>location.reload());
   bind('#updateBtn','click',()=>openUpdate());
   bind('#checkUpdateBtn','click',()=>openUpdate());
   bind('#createServerBtn','click',()=>openAddServerMenu());

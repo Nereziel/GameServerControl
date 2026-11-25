@@ -15,9 +15,9 @@
 
   if (typeof boot === 'function') {
     const localBoot = boot;
-    boot = async function () {
+    boot = async function (identity) {
       CFG = cloudCfg;
-      await localBoot();
+      await localBoot(identity);
       const label = document.querySelector('#agentLabel');
       if (label) label.textContent = '· Cloudflare remote';
     };
@@ -30,24 +30,5 @@
     };
   }
 
-  if (typeof login === 'function') {
-    login = function () {
-      location.reload();
-    };
-  }
-
-  window.addEventListener('DOMContentLoaded', () => {
-    setTimeout(() => {
-      const loginBox = document.querySelector('#login');
-      const app = document.querySelector('#app');
-      if (!loginBox || loginBox.classList.contains('hidden') || (app && !app.classList.contains('hidden'))) return;
-
-      loginBox.innerHTML = `
-        <h1>GameServerControl</h1>
-        <div class="muted">Cloud gateway could not reach the Agent.</div>
-        <div class="callout" style="margin-top:16px">Check Cloudflare Access, the VPS HTTPS gateway and the host registry configuration.</div>
-        <button id="cloudRetryBtn" class="btn primary" style="width:100%;margin-top:12px">Retry</button>`;
-      document.querySelector('#cloudRetryBtn')?.addEventListener('click', () => location.reload());
-    }, 1200);
-  });
+  // The shared init handles Access authentication and the retry state directly.
 })();

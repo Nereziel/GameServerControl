@@ -9,17 +9,47 @@
 <link rel="stylesheet" href="/webui/styles.css?v=__GSC_ASSET_VERSION__" />
 </head>
 <body>
-<div id="login" class="login hidden">
-  <div class="login-brand"><span class="brand-mark" aria-hidden="true">G</span><span>GameServer<span class="brand-accent">Control</span></span></div>
-  <div class="login-eyebrow">PRIVATE CONTROL PANEL</div>
-  <h1>Connect to your Agent</h1>
-  <p class="muted">Securely manage your game servers from one workspace.</p>
-  <div class="field"><label for="loginUrl">Agent URL</label><input id="loginUrl" type="url" placeholder="https://your-agent-host" autocomplete="url" /></div>
-  <div class="field"><label for="loginToken">API token</label><input id="loginToken" type="password" autocomplete="off" placeholder="Paste your API token" /></div>
-  <label id="rememberBrowserField" class="field hidden" for="loginRememberBrowser"><input id="loginRememberBrowser" type="checkbox" /> Remember this browser on this Windows PC for 30 days</label>
-  <button id="loginConnectBtn" class="btn primary login-submit">Connect to Agent</button>
-  <div class="login-footnote">Your token stays in this browser session.</div>
-</div>
+<main id="login" class="login" aria-labelledby="loginHeading">
+  <div class="login-shell">
+    <section class="login-intro" aria-label="GameServerControl">
+      <div class="login-brand"><span class="brand-mark" aria-hidden="true">G</span><span>GameServer<span class="brand-accent">Control</span></span></div>
+      <div class="login-intro-copy">
+        <div class="login-eyebrow">SELF-HOSTED / SERVER OPERATIONS</div>
+        <h2>Your servers.<br />One control panel.</h2>
+        <p>Manage game servers, installations, backups and live status from a single workspace.</p>
+      </div>
+      <div class="login-system-mark" aria-hidden="true"><span></span><span></span><span></span><i></i></div>
+      <div class="login-intro-footer">Private by design. Hosted on your infrastructure.</div>
+    </section>
+    <section class="login-panel">
+      <div class="login-eyebrow">AGENT ACCESS</div>
+      <h1 id="loginHeading">Sign in</h1>
+      <p id="loginDescription" class="login-description">Use your Agent API token to open the dashboard.</p>
+      <div id="loginLoading" class="login-loading" role="status"><span class="spinner" aria-hidden="true"></span> Checking your session…</div>
+      <form id="loginForm" class="hidden" method="post" aria-busy="false">
+        <div class="login-target"><span class="login-target-icon" aria-hidden="true">▣</span><div><span>Connecting to</span><strong id="loginTarget">This Agent</strong></div></div>
+        <div class="field login-token-field">
+          <label for="loginToken">API token</label>
+          <input id="loginToken" type="password" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Enter your API token" aria-describedby="loginTokenHelp loginError" />
+          <div id="loginTokenHelp" class="help">Use an Admin or ReadOnly token issued by the Agent.</div>
+        </div>
+        <details id="loginAdvanced" class="login-advanced">
+          <summary>Connect to another Agent</summary>
+          <div class="field"><label for="loginUrl">Agent URL</label><input id="loginUrl" type="url" autocomplete="off" spellcheck="false" placeholder="https://your-agent-host" /></div>
+          <p id="loginTransportWarning" class="login-warning hidden">This address uses HTTP. Use HTTPS or a trusted private network; the token is sent to the selected Agent.</p>
+        </details>
+        <label id="rememberBrowserField" class="login-remember hidden" for="loginRememberBrowser"><input id="loginRememberBrowser" type="checkbox" /><span><strong>Remember this browser</strong><small>On this Windows PC for 30 days. Use only on a private device.</small></span></label>
+        <div id="loginError" class="login-error hidden" role="alert"></div>
+        <button id="loginConnectBtn" class="btn primary login-submit" type="submit">Sign in</button>
+      </form>
+      <div id="cloudLoginState" class="hidden">
+        <p id="cloudLoginError" class="login-error" role="alert">Cloudflare Access session could not be restored. Check your connection and try again.</p>
+        <button id="cloudRetryBtn" class="btn primary login-submit" type="button">Try again</button>
+      </div>
+      <div id="loginFootnote" class="login-footnote">The API token stays in this browser session.</div>
+    </section>
+  </div>
+</main>
 
 <div id="app" class="app-frame hidden">
   <aside id="appSidebar" class="app-sidebar" aria-label="Primary navigation">

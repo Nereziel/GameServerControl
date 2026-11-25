@@ -144,8 +144,8 @@ function applyFilesEditorBindings(){
 }
 
 const AUTH_BASE_BOOT=boot;
-boot=async function(){
-  await loadAuthIdentity();
+boot=async function(identity){
+  if(identity){AUTH=identity;window.GSC_AUTH=AUTH}else await loadAuthIdentity();
   await AUTH_BASE_BOOT();
   applyAuthUi();
   applyFilesEditorBindings();
