@@ -117,7 +117,7 @@ public sealed class LegacyBackupEntryPointTests
     private sealed class Fixture : IDisposable
     {
         private readonly AgentTestFactory _parent;
-        private readonly WebApplicationFactory<global::Program> _app;
+        private readonly WebApplicationFactory<global::GameServerControl.Agent.AgentEntryPoint> _app;
 
         public Fixture()
         {

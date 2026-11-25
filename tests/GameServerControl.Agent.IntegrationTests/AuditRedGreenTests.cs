@@ -182,7 +182,7 @@ public sealed class AuditRedGreenOffsiteTests
     private sealed class BackupFixture : IDisposable
     {
         private readonly AgentTestFactory _baseFactory;
-        private readonly WebApplicationFactory<global::Program> _factory;
+        private readonly WebApplicationFactory<global::GameServerControl.Agent.AgentEntryPoint> _factory;
 
         public BackupFixture(int normalRetention)
         {

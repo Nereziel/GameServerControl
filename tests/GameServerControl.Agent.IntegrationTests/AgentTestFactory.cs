@@ -15,7 +15,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace GameServerControl.Agent.IntegrationTests;
 
-public sealed class AgentTestFactory : WebApplicationFactory<global::Program>
+public sealed class AgentTestFactory : WebApplicationFactory<global::GameServerControl.Agent.AgentEntryPoint>
 {
     public const string AdminToken = "integration-admin-token-0123456789abcdef";
     private readonly HttpMessageHandler? _managedHostHandler;

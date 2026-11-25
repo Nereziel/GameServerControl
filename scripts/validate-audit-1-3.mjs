@@ -51,7 +51,11 @@ rejectToken(worker, 'env.AGENT_API_TOKEN', 'Worker must not fall back to a legac
 rejectToken(worker, 'env.AGENT_ADMIN_TOKEN', 'Worker must not use a coordinator-wide Admin token');
 rejectToken(deploy, 'GSC_CF_AGENT_API_TOKEN', 'Legacy single-token deploy mapping must be removed');
 
-requireToken(agentProject, '<PackageReference Include="System.Management.Automation" Version="7.4.21" />', 'Embedded PowerShell must be on the audited security patch level');
+// Keep the audited stable 7.6 LTS line on .NET 10, without blocking later security patches.
+const powerShellReferences = [...agentProject.matchAll(/<PackageReference\s+Include="System\.Management\.Automation"\s+Version="7\.6\.(0|[1-9]\d*)"\s*\/>/g)];
+if (powerShellReferences.length !== 1 || Number(powerShellReferences[0][1]) < 10) {
+  throw new Error('Embedded PowerShell must use a stable 7.6.x release at or above 7.6.10.');
+}
 
 
 for (const token of [
