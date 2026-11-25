@@ -427,7 +427,11 @@ function updateServerWorkspaceHeader(def) {
   if (pid) pid.textContent = status.pidInGuest ?? '—';
   const backup = $('#swOverviewBackup'), stateText = $('#swOverviewState'), error = $('#swOverviewError');
   if (backup) backup.textContent = status.lastBackupAt ? new Date(status.lastBackupAt).toLocaleString() : 'No backups yet';
-  if (stateText) {stateText.textContent = status.processState || 'Unknown';globalThis.GSC_I18N?.set(stateText,status.processState||'Unknown');}
+  if (stateText) {
+    const label=status.processState || 'Unknown';
+    if(globalThis.GSC_I18N)globalThis.GSC_I18N.set(stateText,label);
+    else if(stateText.textContent!==label)stateText.textContent=label;
+  }
   if (error) error.textContent = status.lastError || 'No active errors reported';
 }
 

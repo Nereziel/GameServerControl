@@ -481,7 +481,7 @@
   "Disable": "Vypnout",
   "Discord webhooks only send alerts. Remote commands require a separate secured Discord bot.": "Discord webhooky pouze odesílají upozornění. Vzdálené příkazy vyžadují samostatného zabezpečeného Discord bota.",
   "No live console integration is available for this game.": "Pro tuto hru není dostupná živá konzole.",
-  "Firewall:": "Firewall:",
+  "Firewall:": "Brána firewall:",
   "Linux firewall:": "Firewall Linuxu:",
   "This profile has no curated network ports yet.": "Tento profil zatím nemá připravené síťové porty.",
   "Game profile ports, collision reservations and firewall behavior.": "Porty herního profilu, rezervace proti kolizím a chování firewallu.",
